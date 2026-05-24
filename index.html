@@ -3,6 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#f0a500">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="logo.png">
 <title>ეზო</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
@@ -325,7 +330,7 @@ const SUPA_URL='https://miqenmsgwkkmtxwwbxzo.supabase.co';
 const SUPA_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1pcWVubXNnd2trbXR4d3dieHpvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzMDc0NzYsImV4cCI6MjA5NDg4MzQ3Nn0.VfJgVoPC-ZbjlcuwMriYrNXb-3E2OgC92nOR9hOPgKI';
 const TYPE_LABELS={info:'ინფო',warning:'გაფრთხილება',danger:'საფრთხე',emergency:'განგაში',done:'მზადაა',project:'პროექტი'};
 let _notifs=[],_curNotif=null;
-async function loadNotifs(){try{const r=await fetch(SUPA_URL+'/rest/v1/notifications?order=created_at.desc&limit=20',{headers:{'apikey':SUPA_KEY,'Authorization':'Bearer '+SUPA_KEY}});if(!r.ok)return;_notifs=await r.json();renderNotifBar();}catch(e){}}
+async function loadNotifs(){try{const r=await fetch(SUPA_URL+'/rest/v1/notifications?order=created_at.desc&limit=20',{headers:{'apikey':SUPA_KEY,'Authorization':'Bearer '+SUPA_KEY}});if(!r.ok)return;_notifs=await r.json();renderNotifBar();if(navigator.setAppBadge&&_notifs.length){navigator.setAppBadge(_notifs.length);}else if(navigator.clearAppBadge){navigator.clearAppBadge();}}catch(e){}}
 function renderNotifBar(){const bar=document.getElementById('notifBar');if(!bar)return;bar.innerHTML='';if(!_notifs.length)return;const MAX=4;const visible=_notifs.slice(0,MAX);visible.forEach(n=>{const c=document.createElement('div');c.className='ncard'+(n.type==='emergency'?' pulse':'');c.dataset.type=n.type||'info';c.title=n.text||'';c.textContent=n.symbol||'💬';c.onclick=()=>openNotifPopup(n);bar.appendChild(c);});if(_notifs.length>MAX){const hidden=_notifs.length-MAX;const more=document.createElement('div');more.style.cssText='width:44px;height:44px;border-radius:10px;background:rgba(13,17,23,0.65);backdrop-filter:blur(8px);border:1px solid #30363d;color:#8b949e;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0.82;';more.textContent='+'+hidden;more.onclick=()=>openNotifList();bar.appendChild(more);}}
 function openNotifList(){closeNotifPopup();const p=document.getElementById('notifPopup');p.style.setProperty('--nc','#58a6ff');document.getElementById('npType').textContent='ყველა შეტყობინება';document.getElementById('npSender').textContent='';const body=document.getElementById('npText');body.innerHTML='';_notifs.forEach(n=>{const row=document.createElement('div');row.style.cssText='display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(48,54,61,0.4);cursor:pointer;';row.innerHTML='<span style="font-size:16px;">'+(n.symbol||'💬')+'</span><span style="font-size:12px;color:#e6edf3;flex:1;">'+(n.text||'')+'</span>';row.onclick=()=>openNotifPopup(n);body.appendChild(row);});document.getElementById('npDetail').textContent='';document.getElementById('npDetail').style.display='none';document.getElementById('npArea').style.display='none';const pw=Math.min(window.innerWidth*0.9,360);p.style.cssText='display:block;left:'+((window.innerWidth-pw)/2)+'px;bottom:72px;max-width:'+pw+'px;';p.classList.add('show');}
 function closeNotifPopup(){const p=document.getElementById('notifPopup');p.classList.remove('show');p.style.display='none';}
