@@ -80,12 +80,11 @@
 
   // ── Print to console ──────────────────────────────────────────────────────
   // Priority: window.consolePrint(html) → DOM #consoleLog → silent
-  function _print(html) {
+  function _print(html, type) {
     if (typeof global.consolePrint === 'function') {
-      global.consolePrint(html);
+      global.consolePrint(html, type || 'sys');
       return;
     }
-    // Direct fallback — works with Mdelo terminal even without consolePrint wrapper
     var log = document.getElementById('tmOut')
            || document.getElementById('consoleLog')
            || document.getElementById('console-log')
@@ -101,12 +100,13 @@
   function _sys(msg) {
     _print(
       '<span style="color:#666">[' + _ts() + ']</span>' +
-      ' <span style="color:#999">* ' + msg + '</span>'
+      ' <span style="color:#999">* ' + msg + '</span>',
+      'sys'
     );
   }
 
   function _err(msg) {
-    _print('<span style="color:#ff4444">⚠ ' + _esc(msg) + '</span>');
+    _print('<span style="color:#ff4444">⚠ ' + _esc(msg) + '</span>', 'sys');
   }
 
   function _printMsg(nick, color, text, isAction) {
@@ -115,11 +115,9 @@
     var tx = '<span style="color:#ddd">' + _esc(text) + '</span>';
 
     if (isAction) {
-      // * Nick does something
-      _print(t + '<span style="color:#bbb">* ' + n + ' ' + tx + '</span>');
+      _print(t + '<span style="color:#bbb">* ' + n + ' ' + tx + '</span>', 'chat');
     } else {
-      // <Nick> message
-      _print(t + '&lt;' + n + '&gt; ' + tx);
+      _print(t + '&lt;' + n + '&gt; ' + tx, 'chat');
     }
   }
 
