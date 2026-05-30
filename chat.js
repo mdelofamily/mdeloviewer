@@ -12,9 +12,11 @@
   //   window.SUPABASE_ANON_KEY = "eyJ..."
   //   window.MDELO_ROOM_ID     = "map_<slug>"   (per-map room)
 
-  // Populated lazily inside _initSupabase() — window.SUPABASE_*
-  // vars are set by the viewer body <script> after chat.js loads.
-  var CFG = { url: '', key: '', roomId: 'mdelo-global' };
+  var CFG = {
+    url    : global.SUPABASE_URL      || '',
+    key    : global.SUPABASE_ANON_KEY || '',
+    roomId : global.MDELO_ROOM_ID     || 'mdelo-global',
+  };
 
   // ── Nick colour palette (mIRC-inspired) ───────────────────────────────────
   var PALETTE = [
@@ -289,12 +291,6 @@
 
   // ── Supabase init ─────────────────────────────────────────────────────────
   function _initSupabase() {
-    // Read window vars now — they're set by the viewer body <script>
-    // which runs before the load event that calls chatInit().
-    CFG.url    = global.SUPABASE_URL      || CFG.url    || '';
-    CFG.key    = global.SUPABASE_ANON_KEY || CFG.key    || '';
-    CFG.roomId = global.MDELO_ROOM_ID     || CFG.roomId || 'mdelo-global';
-
     if (!CFG.url || !CFG.key) {
       _sys('⚠ Supabase config არ არის. ჩატი გამორთულია.');
       return;
