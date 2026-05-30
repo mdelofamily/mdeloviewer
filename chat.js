@@ -11,7 +11,7 @@
   //   window.SUPABASE_URL      = "https://xxx.supabase.co"
   //   window.SUPABASE_ANON_KEY = "eyJ..."
   //   window.MDELO_ROOM_ID     = "map_<slug>"   (per-map room)
-
+8
   var CFG = {
     url    : global.SUPABASE_URL      || '',
     key    : global.SUPABASE_ANON_KEY || '',
@@ -392,5 +392,8 @@
   global.chatGetNick     = function () { return _nick.name;  };
   global.chatGetColor    = function () { return _nick.color; };
   global.chatIsReady     = function () { return _ready;      };
+
+ // 🔥 ავტომატური ინიციალიზაცია ჩატვირთვისთანავე
+  chatInit();
 
 }(window));
