@@ -209,6 +209,15 @@
         case 'color': _cmdColor(args); return true;
         case 'me':    _cmdMe(args);    return true;
         case 'who':   _cmdWho();       return true;
+        case 'debug':
+          _sys('=== chat debug ===');
+          _sys('url: ' + (CFG.url ? CFG.url.slice(0,30)+'...' : 'EMPTY'));
+          _sys('key: ' + (CFG.key ? CFG.key.slice(0,12)+'...' : 'EMPTY'));
+          _sys('room: ' + CFG.roomId);
+          _sys('ready: ' + _ready);
+          _sys('sdk: ' + (typeof global.supabase));
+          _sys('channel: ' + (_channel ? _channel.state || 'exists' : 'null'));
+          return true;
         case 'clear': _cmdClear();     return true;
         case 'help':  _cmdHelp();      return true;
         default: return false;   // pass to console
@@ -298,27 +307,33 @@
       return;
     }
 
-    // CDN exposes window.supabase = { createClient }
+    // Prefer existing client from viewer (_sbNotif) to avoid duplicate connections
     var sb = global.supabase;
     if (!sb || typeof sb.createClient !== 'function') {
-      _err('Supabase SDK ვერ ჩაიტვირთა (CDN script გამოტოვდა?)');
+      _err('Supabase SDK ვერ ჩაიტვირთა.');
       return;
     }
 
-    _sbClient = sb.createClient(CFG.url, CFG.key);
+    // Reuse viewer's client if it exists, otherwise create new
+    _sbClient = global._sbNotif || sb.createClient(CFG.url, CFG.key, {
+      realtime: { params: { eventsPerSecond: 10 } }
+    });
+
+    _sys('Supabase: კლიენტი შეიქმნა, ვუკავშირდებით...');
 
     _channel = _sbClient
       .channel(CFG.roomId, {
         config: {
-          broadcast : { self: false },   // server filters own messages
-          presence  : { key: '' },       // auto-key per client
+          broadcast : { self: false },
+          presence  : { key: '' },
         },
       })
       .on('broadcast', { event: 'chat' }, _onBroadcast)
       .on('presence',  { event: 'sync'  }, _onPresenceSync)
       .on('presence',  { event: 'join'  }, _onPresenceJoin)
       .on('presence',  { event: 'leave' }, _onPresenceLeave)
-      .subscribe(function (status) {
+      .subscribe(function (status, err) {
+        _sys('Realtime status: ' + status + (err ? ' | ' + err.message : ''));
         if (status === 'SUBSCRIBED') {
           _ready = true;
           _updatePresence();
@@ -327,10 +342,15 @@
             '<span style="color:' + _nick.color + '">' + _esc(_nick.name) + '</span>' +
             ' &nbsp;|&nbsp; <span style="color:#555">/help</span>'
           );
-        }
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        } else if (status === 'CHANNEL_ERROR') {
           _ready = false;
-          _err('კავშირი გაწყდა. გადატვირთე გვერდი.');
+          _err('CHANNEL_ERROR' + (err ? ': ' + err.message : '') + ' — გადატვირთე გვერდი.');
+        } else if (status === 'TIMED_OUT') {
+          _ready = false;
+          _err('TIMED_OUT — კავშირი ვერ დამყარდა.');
+        } else if (status === 'CLOSED') {
+          _ready = false;
+          _sys('კავშირი დაიხურა (CLOSED).');
         }
       });
   }
