@@ -74,14 +74,23 @@
     }, FADE_AFTER);
   }
 
-  // ── Override consolePrint ─────────────────────────────────────────────────
-  var _origPrint = global.consolePrint;
+  // ── Override consolePrint after body scripts have run ────────────────────
+  var _origPrint = null;
 
-  global.consolePrint = function (html, type) {
-    if (typeof _origPrint === 'function') _origPrint(html, type);
-    var termOpen = global._tmOpen;
-    if (type === 'chat' && !termOpen) _addLine(html);
-  };
+  function _hookPrint() {
+    _origPrint = global.consolePrint || null;
+    global.consolePrint = function (html, type) {
+      if (typeof _origPrint === 'function') _origPrint(html, type);
+      var termOpen = global._tmOpen;
+      if (type === 'chat' && !termOpen) _addLine(html);
+    };
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _hookPrint);
+  } else {
+    _hookPrint();
+  }
 
   // ── Hide HUD when terminal opens, show when it closes ────────────────────
   function _syncHud() {
