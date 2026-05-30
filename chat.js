@@ -307,52 +307,63 @@
       return;
     }
 
-    // Prefer existing client from viewer (_sbNotif) to avoid duplicate connections
     var sb = global.supabase;
     if (!sb || typeof sb.createClient !== 'function') {
       _err('Supabase SDK ვერ ჩაიტვირთა.');
       return;
     }
 
-    // Reuse viewer's client if it exists, otherwise create new
-    _sbClient = global._sbNotif || sb.createClient(CFG.url, CFG.key, {
-      realtime: { params: { eventsPerSecond: 10 } }
-    });
+    _sys('SDK მზადაა, ვქმნით კლიენტს...');
 
-    _sys('Supabase: კლიენტი შეიქმნა, ვუკავშირდებით...');
+    try {
+      // Always create a fresh client — never reuse notification client
+      _sbClient = sb.createClient(CFG.url, CFG.key);
+    } catch (e) {
+      _err('createClient შეცდომა: ' + e.message);
+      return;
+    }
 
-    _channel = _sbClient
-      .channel(CFG.roomId, {
-        config: {
-          broadcast : { self: false },
-          presence  : { key: '' },
-        },
-      })
-      .on('broadcast', { event: 'chat' }, _onBroadcast)
-      .on('presence',  { event: 'sync'  }, _onPresenceSync)
-      .on('presence',  { event: 'join'  }, _onPresenceJoin)
-      .on('presence',  { event: 'leave' }, _onPresenceLeave)
-      .subscribe(function (status, err) {
-        _sys('Realtime status: ' + status + (err ? ' | ' + err.message : ''));
-        if (status === 'SUBSCRIBED') {
-          _ready = true;
-          _updatePresence();
-          _sys(
-            'ჩატი მზადაა &nbsp;|&nbsp; ' +
-            '<span style="color:' + _nick.color + '">' + _esc(_nick.name) + '</span>' +
-            ' &nbsp;|&nbsp; <span style="color:#555">/help</span>'
-          );
-        } else if (status === 'CHANNEL_ERROR') {
-          _ready = false;
-          _err('CHANNEL_ERROR' + (err ? ': ' + err.message : '') + ' — გადატვირთე გვერდი.');
-        } else if (status === 'TIMED_OUT') {
-          _ready = false;
-          _err('TIMED_OUT — კავშირი ვერ დამყარდა.');
-        } else if (status === 'CLOSED') {
-          _ready = false;
-          _sys('კავშირი დაიხურა (CLOSED).');
-        }
-      });
+    _sys('კლიენტი შეიქმნა, ვუკავშირდებით channel-ს...');
+
+    try {
+      _channel = _sbClient
+        .channel(CFG.roomId, {
+          config: {
+            broadcast : { self: false },
+            presence  : { key: '' },
+          },
+        })
+        .on('broadcast', { event: 'chat' }, _onBroadcast)
+        .on('presence',  { event: 'sync'  }, _onPresenceSync)
+        .on('presence',  { event: 'join'  }, _onPresenceJoin)
+        .on('presence',  { event: 'leave' }, _onPresenceLeave)
+        .subscribe(function (status, err) {
+          _sys('Realtime status → ' + status + (err ? ' [' + err.message + ']' : ''));
+          if (status === 'SUBSCRIBED') {
+            _ready = true;
+            _updatePresence();
+            _sys(
+              'ჩატი მზადაა &nbsp;|&nbsp; ' +
+              '<span style="color:' + _nick.color + '">' + _esc(_nick.name) + '</span>' +
+              ' &nbsp;|&nbsp; <span style="color:#555">/help</span>'
+            );
+          } else if (status === 'CHANNEL_ERROR') {
+            _ready = false;
+            _err('CHANNEL_ERROR' + (err ? ': ' + err.message : '') + ' — გადატვირთე.');
+          } else if (status === 'TIMED_OUT') {
+            _ready = false;
+            _err('TIMED_OUT — კავშირი ვერ დამყარდა.');
+          } else if (status === 'CLOSED') {
+            _ready = false;
+            _sys('CLOSED — კავშირი დაიხურა.');
+          }
+        });
+    } catch (e) {
+      _err('channel შეცდომა: ' + e.message);
+      return;
+    }
+
+    _sys('subscribe გაგზავნილია, ველოდებით...');
   }
 
   // ── chatInit ──────────────────────────────────────────────────────────────
