@@ -83,18 +83,7 @@
   function _print(html, type) {
     if (typeof global.consolePrint === 'function') {
       global.consolePrint(html, type || 'sys');
-      return;
     }
-    var log = document.getElementById('tmOut')
-           || document.getElementById('consoleLog')
-           || document.getElementById('console-log')
-           || document.querySelector('.console-log');
-    if (!log) return;
-    var line = document.createElement('div');
-    line.className = 'tl chat';
-    line.innerHTML = html;
-    log.appendChild(line);
-    log.scrollTop = log.scrollHeight;
   }
 
   function _sys(msg) {
