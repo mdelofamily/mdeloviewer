@@ -68,7 +68,7 @@
 
   function _ts() {
     var d = new Date();
-    return d.getHours() + ':' + ('0' + d.getMinutes()).slice(-2);
+    return (d.getHours() % 12 || 12) + ':' + ('0' + d.getMinutes()).slice(-2);
   }
 
   function _esc(s) {
