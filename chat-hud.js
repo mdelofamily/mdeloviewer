@@ -19,12 +19,14 @@
     style.textContent = [
       '#chatHud{',
         'position:fixed;',
-        'bottom:48px;left:16px;',
+        'top:60px;left:16px;',
         'z-index:9000;',
         'pointer-events:none;',
         'display:flex;flex-direction:column;gap:2px;',
         'max-width:340px;',
+        'transition:opacity 0.2s;',
       '}',
+      '#chatHud.hud-hidden{opacity:0;}',
       '.chud-line{',
         'font:13px/1.45 "Courier New",monospace;',
         'color:#e6edf3;',
@@ -73,20 +75,33 @@
   }
 
   // ── Override consolePrint ─────────────────────────────────────────────────
-  // Wrap the existing one (terminal still gets it too)
   var _origPrint = global.consolePrint;
 
   global.consolePrint = function (html, type) {
-    // Forward to terminal always
     if (typeof _origPrint === 'function') _origPrint(html, type);
-    // HUD only when terminal is closed and message is real chat
-    var termOpen = typeof _tmOpen !== 'undefined' && _tmOpen;
+    var termOpen = global._tmOpen;
     if (type === 'chat' && !termOpen) _addLine(html);
   };
 
-  // ── Re-hook if consolePrint is set later ─────────────────────────────────
-  // (chat.js sets window.consolePrint at parse time — if chat-hud.js loads
-  //  after, the reference above already captured it. Safe.)
+  // ── Hide HUD when terminal opens, show when it closes ────────────────────
+  function _syncHud() {
+    if (!_el) return;
+    _el.classList.toggle('hud-hidden', !!global._tmOpen);
+  }
+
+  // Poll until toggleTerm/closeTerm exist, then wrap them
+  var _hookTries = 0;
+  var _hookPoll = setInterval(function () {
+    if (typeof global.toggleTerm === 'function' && typeof global.closeTerm === 'function') {
+      clearInterval(_hookPoll);
+      var origToggle = global.toggleTerm;
+      var origClose  = global.closeTerm;
+      global.toggleTerm = function () { origToggle.apply(this, arguments); setTimeout(_syncHud, 30); };
+      global.closeTerm  = function () { origClose.apply(this, arguments);  setTimeout(_syncHud, 30); };
+    } else if (++_hookTries > 40) {
+      clearInterval(_hookPoll);
+    }
+  }, 150);
 
   // ── Public ────────────────────────────────────────────────────────────────
   global.chatHudAddLine = _addLine;
