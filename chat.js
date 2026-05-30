@@ -68,7 +68,7 @@
 
   function _ts() {
     var d = new Date();
-    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    return d.getHours() + ':' + ('0' + d.getMinutes()).slice(-2);
   }
 
   function _esc(s) {
@@ -110,7 +110,7 @@
   }
 
   function _printMsg(nick, color, text, isAction) {
-    var t  = '<span style="color:#555">[' + _ts() + ']</span> ';
+    var t  = '<span style="color:#888">[' + _ts() + ']</span> ';
     var n  = '<span style="font-weight:bold;color:' + color + '">' + _esc(nick) + '</span>';
     var tx = '<span style="color:#ddd">' + _esc(text) + '</span>';
 
