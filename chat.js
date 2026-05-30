@@ -99,7 +99,7 @@
   }
 
   function _printMsg(nick, color, text, isAction) {
-    var t  = '<span style="color:#888">[' + _ts() + ']</span> ';
+    var t  = '<span style="color:#aaa">[' + _ts() + ']</span> ';
     var n  = '<span style="font-weight:bold;color:' + color + '">' + _esc(nick) + '</span>';
     var tx = '<span style="color:#ddd">' + _esc(text) + '</span>';
 
