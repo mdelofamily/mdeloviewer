@@ -85,12 +85,14 @@
       global.consolePrint(html);
       return;
     }
-    var log = document.getElementById('consoleLog')
+    // Direct fallback — works with Mdelo terminal even without consolePrint wrapper
+    var log = document.getElementById('tmOut')
+           || document.getElementById('consoleLog')
            || document.getElementById('console-log')
            || document.querySelector('.console-log');
     if (!log) return;
     var line = document.createElement('div');
-    line.className = 'chat-line';
+    line.className = 'tl chat';
     line.innerHTML = html;
     log.appendChild(line);
     log.scrollTop = log.scrollHeight;
