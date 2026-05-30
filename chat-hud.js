@@ -19,7 +19,7 @@
     style.textContent = [
       '#chatHud{',
         'position:fixed;',
-        'top:60px;left:16px;',
+        'top:60px;left:0px;',
         'z-index:9000;',
         'pointer-events:none;',
         'display:flex;flex-direction:column;gap:2px;',
