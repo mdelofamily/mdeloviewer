@@ -11,7 +11,7 @@
   //   window.SUPABASE_URL      = "https://xxx.supabase.co"
   //   window.SUPABASE_ANON_KEY = "eyJ..."
   //   window.MDELO_ROOM_ID     = "map_<slug>"   (per-map room)
-8
+
   var CFG = {
     url    : global.SUPABASE_URL      || '',
     key    : global.SUPABASE_ANON_KEY || '',
@@ -49,11 +49,14 @@
     set color(c){ localStorage.setItem('mdelo_color', c); },
   };
 
-  function _makeGuest() {
-    var n = 'visitor_' + (Math.random() * 9000 + 1000 | 0);
-    localStorage.setItem('mdelo_nick', n);
-    return n;
-  }
+var _sessionId = 'visitor_' + (Math.random() * 9000 + 1000 | 0);
+
+var _nick = {
+  get name()  { return localStorage.getItem('mdelo_nick') || _sessionId; },
+  set name(v) { localStorage.setItem('mdelo_nick', v); },
+  get color() { return localStorage.getItem('mdelo_color') || _hashColor(this.name); },
+  set color(c){ localStorage.setItem('mdelo_color', c); },
+};
 
   // ── Utilities ─────────────────────────────────────────────────────────────
   function _hash(s) {
