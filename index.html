@@ -1054,7 +1054,7 @@ function tmClear() { document.getElementById('tmOut').innerHTML = ''; }
 
 // ── chat history (localStorage, 3 days) ──
 var _HIST_TTL = 3 * 24 * 60 * 60 * 1000;
-var _HIST_KEY = 'mdelo_chat_' + (_CFG && _CFG.title ? _CFG.title.replace(/[^a-zA-Z0-9ა-ჿ]/g, '_') : 'map');
+var _HIST_KEY = 'mdelo_chat_' + (_CFG && _CFG.title ? _CFG.title.replace(/[^a-zA-Z0-9\u10d0-\u10ff]/g, '_') : 'map');
 var _HIST_MAX = 300;
 
 function _histSave(html) {
