@@ -4,33 +4,6 @@
 //  Load order: after objects.js, before ui-palette.js
 // ============================================================
 
-//
-// DSL syntax reference:
-//   @N [marker] title        — node start  (marker: ! ? ...)
-//   [speaker] text           — named speaker block
-//   [] text                  — player name placeholder (runtime: mdelo_nick || "მოგზაური")
-//   <> text                  — object speaker (runtime: ობიექტის სახელი = _dlgTitle)
-//   <სახელი> text            — object speaker (კასტომ სახელი)
-//   plain text               — narrator (სახელის გარეშე)
-//   {atmosphere text}        — atmosphere / effect line
-//   [[label|url]]            — external link (inline)
-//   [[object name]]          — map object link (inline)
-//   -> text =>N              — choice button, no notification
-//   ->! text =>N             — choice + notification (auto text)
-//   -> text ->! notif =>N    — choice + explicit notification text
-//
-// speaker encoding in HTML:
-//   <b class="spk-player">[]</b>        — [] player placeholder
-//   <b class="spk-object">\x01name</b>  — <> object (\x01 = empty = use _dlgTitle)
-//   <b class="spk-named">name</b>       — [name] named speaker
-//
-// Returns: { nodes: Array, title: string, marker: string }
-//   nodes  — dialogue[] ready for _editingDialogue
-//   title  — object title from @0 header (may be "")
-//   marker — object marker from @0 header (! ? 💬 or "")
-//
-
-// ── OBJ_PREFIX: internal marker for object speakers ─────────
 const _OBJ_PREFIX = '\x01';
 
 function parseBulkDSL(raw) {
@@ -59,8 +32,13 @@ function parseBulkDSL(raw) {
       html = '<b class="spk-player">[]</b> ' + _esc(block);
     } else if (speaker.startsWith(_OBJ_PREFIX)) {
       // <> or <name> — object speaker
-      // store raw name after prefix; empty = use _dlgTitle at runtime
-      const objName = speaker.slice(1);
+      let objName = speaker.slice(1);
+      
+      // ── ცვლილება აქ არის: თუ სახელი ცარიელია (<>), ვიყენებთ ჰედერიდან წამოღებულ rootTitle-ს ──
+      if (!objName) {
+        objName = rootTitle || "ობიექტი";
+      }
+      
       html = '<b class="spk-object">' + _esc(_OBJ_PREFIX + objName) + '</b> ' + _esc(block);
     } else {
       // [name] — named speaker
@@ -104,7 +82,6 @@ function parseBulkDSL(raw) {
         if (cur.buttons.length < 3) {
           cur.buttons.push(btn);
         }
-        // silently drop 4th+ buttons (editor limit is 3)
       }
       continue;
     }
@@ -119,11 +96,10 @@ function parseBulkDSL(raw) {
     }
 
     // ── object speaker <> or <name> ──────────────────────────
-    // must be checked BEFORE [] to avoid conflict
     const objM = line.match(/^<([^>]*)>(.*)/);
     if (objM) {
       flush();
-      speaker = _OBJ_PREFIX + objM[1].trim();  // \x01 + name (empty = auto)
+      speaker = _OBJ_PREFIX + objM[1].trim();  // \x01 + name
       const rest = objM[2].trim();
       if (rest) textBuf.push(rest);
       continue;
@@ -161,7 +137,6 @@ function _parseBtn(line) {
   let rest   = line;
   let notify = false;
 
-  // strip leading ->! or ->
   if (rest.startsWith('->!')) {
     notify = true;
     rest   = rest.slice(3).trim();
@@ -169,7 +144,6 @@ function _parseBtn(line) {
     rest = rest.slice(2).trim();
   }
 
-  // extract =>N at end
   let nextNode = '';
   const nxtM = rest.match(/^(.*?)\s*=>(\d+)\s*$/);
   if (nxtM) {
@@ -177,7 +151,6 @@ function _parseBtn(line) {
     nextNode = 'node_' + nxtM[2];
   }
 
-  // extract inline " ->! notif_text" separator
   let notifyText = '';
   const sep = rest.indexOf(' ->! ');
   if (sep >= 0) {
@@ -209,33 +182,28 @@ function unparseDialogue(o) {
   const lines  = [];
 
   nodes.forEach((node, ni) => {
-    // node header
     const hdr = '@' + ni +
       (mrkSym && ni === 0 ? ' ' + mrkSym : '') +
       (title  && ni === 0 ? ' ' + title  : '');
     lines.push(hdr);
 
-    // text — strip HTML back to DSL
     if (node.text) {
       const plain = node.text
         .replace(/<br>/gi, '\n')
-        // [] player placeholder
         .replace(/<b[^>]*class="spk-player"[^>]*>\[\]<\/b>\s*/gi, '[] ')
-        // <> object speaker: extract stored name after \x01
         .replace(/<b[^>]*class="spk-object"[^>]*>([^<]*)<\/b>\s*/gi, (_, inner) => {
-          // inner is escaped \x01name — unescape &lt; etc then strip \x01
           const raw = inner
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
           const name = raw.startsWith(_OBJ_PREFIX) ? raw.slice(1) : raw;
-          return '<' + name + '> ';
+          
+          // თუ შენახული სახელი ემთხვევა rootTitle-ს, უკან სერიალიზაციისას ისევ <> ვწერთ
+          return (name === title) ? '<> ' : '<' + name + '> ';
         })
-        // [name] named speaker
         .replace(/<b[^>]*class="spk-named"[^>]*>([^<]*)<\/b>\s*/gi, (_, inner) => {
           const name = inner
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
           return '[' + name + '] ';
         })
-        // legacy bold (editor-written, no class)
         .replace(/<b>\[\]<\/b>\s*/gi, '[] ')
         .replace(/<b>([^<]*)<\/b>\s*/gi, '[$1] ')
         .replace(/<[^>]+>/g, '')
@@ -245,7 +213,6 @@ function unparseDialogue(o) {
       plain.split('\n').forEach(l => { if (l.trim()) lines.push(l.trim()); });
     }
 
-    // buttons
     (node.buttons || []).forEach(btn => {
       if (!btn.label) return;
       const next = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
