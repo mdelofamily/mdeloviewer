@@ -51,11 +51,20 @@ body{background:#111;overflow:hidden;width:100vw;height:100dvh;}
 #tmSlashBtn{background:transparent;border:1px solid rgba(0,255,136,.18);color:rgba(0,255,136,.65);font-family:'Courier New',monospace;font-size:15px;font-weight:bold;padding:1px 8px;cursor:pointer;border-radius:2px;transition:all .12s;flex-shrink:0;line-height:1.5;margin-right:5px;}
 #tmSlashBtn:hover{background:rgba(0,255,136,.09);border-color:rgba(0,255,136,.45);color:#00ff88;}
 #tmSlashBtn:active{background:rgba(0,255,136,.18);}
-.tm-ir{position:relative;z-index:1;display:flex;align-items:center;padding:7px 13px;border-top:1px solid rgba(0,255,136,.09);background:rgba(0,0,0,.2);flex-shrink:0;}
+.tm-ir{position:relative;z-index:1;display:flex;flex-direction:column;border-top:1px solid rgba(0,255,136,.09);background:rgba(0,0,0,.2);flex-shrink:0;}
+.tm-ir-row{display:flex;align-items:center;padding:7px 13px;}
 .tm-pr{color:#00ff88;font-family:'Courier New',monospace;font-size:13px;margin-right:7px;opacity:.45;white-space:nowrap;}
 #tmIn{flex:1;background:transparent;border:none;outline:none;color:#00ff88;font-family:'Courier New',Consolas,monospace;font-size:13px;caret-color:#00ff88;}
 #tmIn::placeholder{color:rgba(0,255,136,.2);}
 #tmHint{color:rgba(0,255,136,.2);font-family:'Courier New',monospace;font-size:13px;pointer-events:none;user-select:none;}
+#tmTa{display:none;background:transparent;border:none;border-bottom:1px solid rgba(0,255,136,.09);outline:none;color:#00ff88;font-family:'Courier New',Consolas,monospace;font-size:13px;caret-color:#00ff88;resize:none;padding:8px 13px;line-height:1.55;min-height:64px;max-height:120px;overflow-y:auto;}
+#tmTa::placeholder{color:rgba(0,255,136,.2);}
+#tmMlBtn{background:transparent;border:1px solid rgba(0,255,136,.18);color:rgba(0,255,136,.65);font-family:'Courier New',monospace;font-size:13px;font-weight:bold;padding:1px 7px;cursor:pointer;border-radius:2px;transition:all .12s;flex-shrink:0;line-height:1.5;margin-right:5px;}
+#tmMlBtn:hover{background:rgba(0,255,136,.09);border-color:rgba(0,255,136,.45);color:#00ff88;}
+#tmMlBtn:active{background:rgba(0,255,136,.18);}
+#tmMlBtn.on{background:rgba(0,255,136,.1);border-color:rgba(0,255,136,.35);color:#00ff88;}
+#tmSendBtn{display:none;background:transparent;border:1px solid rgba(0,255,136,.18);color:rgba(0,255,136,.65);font-family:'Courier New',monospace;font-size:14px;padding:2px 10px;cursor:pointer;border-radius:2px;transition:all .12s;flex-shrink:0;line-height:1.5;margin-left:auto;}
+#tmSendBtn:active{background:rgba(0,255,136,.18);}
 #menuBtn{position:fixed;top:8px;right:12px;z-index:30;width:36px;height:36px;border-radius:8px;background:rgba(22,27,34,0.8);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(48,54,61,0.6);color:rgba(180,190,200,0.85);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
 #menuBtn:hover{border-color:#58a6ff;color:#58a6ff;}
 #gameMenu{display:none;position:fixed;inset:0;z-index:40;background:rgba(13,17,23,0.92);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);flex-direction:column;align-items:center;justify-content:flex-start;padding:50px 16px 20px;overflow-y:auto;}
@@ -147,10 +156,15 @@ body{background:#111;overflow:hidden;width:100vw;height:100dvh;}
   </div>
   <div id="tmOut"></div>
   <div class="tm-ir">
-    <span class="tm-pr">~/mdelo $</span>
-    <button id="tmSlashBtn" onclick="tmInsertSlash()" title="/ ბრძანება">/</button>
-    <input id="tmIn" autocomplete="off" spellcheck="false" placeholder="...">
-    <span id="tmHint"></span>
+    <textarea id="tmTa" autocomplete="off" spellcheck="false" placeholder="..."></textarea>
+    <div class="tm-ir-row">
+      <span class="tm-pr">~/mdelo $</span>
+      <button id="tmMlBtn" onclick="tmToggleMulti()">□</button>
+      <button id="tmSlashBtn" onclick="tmInsertSlash()" title="/ ბრძანება">/</button>
+      <input id="tmIn" autocomplete="off" spellcheck="false" placeholder="...">
+      <span id="tmHint"></span>
+      <button id="tmSendBtn" onclick="tmSend()">➤</button>
+    </div>
   </div>
 </div>
 <div id="mapWrap">
@@ -1027,9 +1041,9 @@ function _tmInit() {
   document.getElementById('mapTitle').style.display = 'none';
 }
 
-var _tmOpen = false, _tmFull = false, _tmHist = [], _tmHIdx = -1, _tmHCur = '';
+var _tmOpen = false, _tmFull = false, _tmHist = [], _tmHIdx = -1, _tmHCur = '', _tmMulti = false;
 var _tmBooted = false;
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/წასვლა','/ლეგენდა','/მენიუ','/სრული','/ისტორია','/დახურვა','/nick','/me','/who','/color','/help'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/წასვლა','/ლეგენდა','/მენიუ','/სრული','/ისტორია','/ვადა','/ტექსტი','/დახურვა','/nick','/me','/who','/color','/help'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -1056,7 +1070,10 @@ function tmClear() { document.getElementById('tmOut').innerHTML = ''; }
 // ── chat history (localStorage, 3 days) ──
 var _HIST_TTL = 3 * 24 * 60 * 60 * 1000;
 var _HIST_KEY = 'mdelo_chat_' + (_CFG && _CFG.title ? _CFG.title.replace(/[^a-zA-Z0-9ა-ჿ]/g, '_') : 'map');
+var _HIST_TTL_KEY = _HIST_KEY + '_ttl';
 var _HIST_MAX = 300;
+// load saved TTL
+(function () { try { var s = localStorage.getItem(_HIST_TTL_KEY); if (s) { var n = parseInt(s); if (n >= 1 && n <= 365) _HIST_TTL = n * 86400000; } } catch (e) {} })();
 
 function _histSave(html) {
   try {
@@ -1089,6 +1106,43 @@ function _histClear() {
   try { localStorage.removeItem(_HIST_KEY); } catch (e) {}
   _tmL('tok', 'ისტორია წაიშალა');
 }
+
+// ── multiline (chat) mode ──
+function tmToggleMulti() {
+  _tmMulti = !_tmMulti;
+  var btn   = document.getElementById('tmMlBtn');
+  var inp   = document.getElementById('tmIn');
+  var ta    = document.getElementById('tmTa');
+  var hint  = document.getElementById('tmHint');
+  var slash = document.getElementById('tmSlashBtn');
+  var send  = document.getElementById('tmSendBtn');
+  btn.textContent = _tmMulti ? '■' : '□';
+  btn.classList.toggle('on', _tmMulti);
+  inp.style.display   = _tmMulti ? 'none'  : '';
+  hint.style.display  = _tmMulti ? 'none'  : '';
+  slash.style.display = _tmMulti ? 'none'  : '';
+  ta.style.display    = _tmMulti ? 'block' : 'none';
+  send.style.display  = _tmMulti ? 'block' : 'none';
+  setTimeout(function () { (_tmMulti ? ta : inp).focus(); }, 50);
+}
+
+function tmSend() {
+  var ta = document.getElementById('tmTa');
+  var v = ta.value.trim(); if (!v) return;
+  _tmHist.unshift(v); _tmHIdx = -1; _tmHCur = '';
+  ta.value = '';
+  if (typeof chatHandleInput === 'function' && chatHandleInput(v)) return;
+  _tmL('ti', v); _tmRun(v);
+}
+
+// textarea keydown (multiline mode)
+(function () {
+  var ta = document.getElementById('tmTa');
+  ta.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); tmSend(); }
+    if (e.key === 'Escape') { closeTerm(); }
+  });
+})();
 
 
 function _tmL(cls, txt) {
@@ -1198,6 +1252,8 @@ function _tmRun(raw) {
     'მენიუ':       _tmMenu,
     'სრული':       tmToggleFull,
     'ისტორია':     _histClear,
+    'ვადა':        _tmVada,
+    'ტექსტი':      tmToggleMulti,
     'დახურვა':     closeTerm
   };
   var fn = map[cmd];
@@ -1220,6 +1276,8 @@ function _tmHelp() {
     ['/მენიუ',          'მენიუს toggle'],
     ['/სრული',          'სრული ↔ ნახევარი'],
     ['/ისტორია',        'ჩატის ისტორიის წაშლა'],
+    ['/ვადა [N]',       'ისტ. შენახვა N დღე'],
+    ['/ტექსტი',         'ჩატ ↔ ბრძანება mode'],
     ['/დახურვა',        'დახურვა  [Esc]'],
     ['/nick სახელი',    'ნიკნეიმის შეცვლა'],
     ['/me ტექსტი',      '* აქშნის მესიჯი'],
@@ -1277,6 +1335,18 @@ function _tmGo(args) {
 }
 function _tmLegend() { toggleQuest(); _tmL('tok', 'ლეგენდა: toggled'); }
 function _tmMenu() { closeTerm(); toggleMenu(); }
+function _tmVada(args) {
+  var n = parseInt(args[0]);
+  if (!args.length || isNaN(n) || n < 1 || n > 365) {
+    var cur = Math.round(_HIST_TTL / 86400000);
+    _tmL('tnf', 'ამჟამინდელი ვადა: ' + cur + ' დღე');
+    _tmL('tdm', 'გამოყენება: /ვადა [1–365]');
+    return;
+  }
+  _HIST_TTL = n * 86400000;
+  try { localStorage.setItem(_HIST_TTL_KEY, String(n)); } catch (e) {}
+  _tmL('tok', 'ისტორიის ვადა: ' + n + ' დღე');
+}
 </script>
 </body>
 </html>
