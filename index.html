@@ -1028,6 +1028,7 @@ function _tmInit() {
 }
 
 var _tmOpen = false, _tmFull = false, _tmHist = [], _tmHIdx = -1, _tmHCur = '';
+var _tmBooted = false;
 var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/წასვლა','/ლეგენდა','/მენიუ','/სრული','/ისტორია','/დახურვა','/nick','/me','/who','/color','/help'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
@@ -1035,7 +1036,7 @@ function _tmOpen_() {
   _tmOpen = true;
   document.getElementById('mdlTerm').classList.add('open');
   setTimeout(function () { document.getElementById('tmIn').focus(); }, 240);
-  if (!document.getElementById('tmOut').children.length) _tmBoot();
+  if (!_tmBooted) { _tmBooted = true; _tmBoot(); }
 }
 function closeTerm() {
   _tmOpen = false; _tmFull = false;
@@ -1054,7 +1055,7 @@ function tmClear() { document.getElementById('tmOut').innerHTML = ''; }
 
 // ── chat history (localStorage, 3 days) ──
 var _HIST_TTL = 3 * 24 * 60 * 60 * 1000;
-var _HIST_KEY = 'mdelo_chat_' + (_CFG && _CFG.title ? _CFG.title.replace(/[^a-zA-Z0-9\u10d0-\u10ff]/g, '_') : 'map');
+var _HIST_KEY = 'mdelo_chat_' + (_CFG && _CFG.title ? _CFG.title.replace(/[^a-zA-Z0-9ა-ჿ]/g, '_') : 'map');
 var _HIST_MAX = 300;
 
 function _histSave(html) {
