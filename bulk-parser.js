@@ -16,8 +16,11 @@
 //   [[label|url]]            — external link (inline)
 //   [[object name]]          — map object link (inline)
 //   -> text =>N              — choice button, no notification
-//   ->! text =>N             — choice + notification (auto text)
-//   -> text ->! notif =>N    — choice + explicit notification text
+//   ->* text =>N             — choice + info notification
+//   ->! text =>N             — choice + warning notification
+//   ->~ text =>N             — choice + danger notification
+//   ->+ text =>N             — choice + project notification
+//   ->. text =>N             — choice + done notification
 //
 // speaker encoding in HTML:
 //   <b class="spk-player">[]</b>        — [] player placeholder
@@ -101,10 +104,7 @@ function parseBulkDSL(raw) {
       flush();
       const btn = _parseBtn(line);
       if (btn) {
-        if (cur.buttons.length < 3) {
-          cur.buttons.push(btn);
-        }
-        // silently drop 4th+ buttons (editor limit is 3)
+        cur.buttons.push(btn);
       }
       continue;
     }
@@ -157,14 +157,19 @@ function parseBulkDSL(raw) {
 }
 
 // ── choice line parser ──────────────────────────────────────
-function _parseBtn(line) {
-  let rest   = line;
-  let notify = false;
+// notify type chars: * info  ! warning  ~ danger  + project  . done
+const _NOTIFY_TYPES = { '*': 'info', '!': 'warning', '~': 'danger', '+': 'project', '.': 'done' };
 
-  // strip leading ->! or ->
-  if (rest.startsWith('->!')) {
-    notify = true;
-    rest   = rest.slice(3).trim();
+function _parseBtn(line) {
+  let rest = line;
+  let notify = false;
+  let notifyType = '';
+
+  // detect ->X where X is a notify type char
+  if (rest.length > 2 && _NOTIFY_TYPES[rest[2]]) {
+    notify     = true;
+    notifyType = _NOTIFY_TYPES[rest[2]];
+    rest       = rest.slice(3).trim();
   } else {
     rest = rest.slice(2).trim();
   }
@@ -177,17 +182,8 @@ function _parseBtn(line) {
     nextNode = 'node_' + nxtM[2];
   }
 
-  // extract inline " ->! notif_text" separator
-  let notifyText = '';
-  const sep = rest.indexOf(' ->! ');
-  if (sep >= 0) {
-    notifyText = rest.slice(sep + 5).trim();
-    rest       = rest.slice(0, sep).trim();
-    notify     = true;
-  }
-
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyText, link: '' };
+  return { label: rest, nextNode, notify, notifyType, link: '' };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -246,13 +242,13 @@ function unparseDialogue(o) {
     }
 
     // buttons
+    const _TYPE_CHARS = { info: '*', warning: '!', danger: '~', project: '+', done: '.' };
     (node.buttons || []).forEach(btn => {
       if (!btn.label) return;
       const next = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
-      if (btn.notify && !btn.notifyText) {
-        lines.push('->!' + btn.label + next);
-      } else if (btn.notify && btn.notifyText) {
-        lines.push('-> ' + btn.label + ' ->! ' + btn.notifyText + next);
+      if (btn.notify) {
+        const tc = _TYPE_CHARS[btn.notifyType] || '*';
+        lines.push('->' + tc + btn.label + next);
       } else {
         lines.push('-> ' + btn.label + next);
       }
