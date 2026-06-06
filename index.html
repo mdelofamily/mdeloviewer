@@ -673,7 +673,10 @@ function _dlgShowNode(nodeId) {
   const btnWrap = document.getElementById('hsPopupBtns');
   if (btnWrap) { btnWrap.innerHTML = ''; btnWrap.classList.remove('visible'); }
   body.innerHTML = '';
-  const txt = (node.text || '').replace(/\[\]/g, localStorage.getItem('mdelo_nick') || 'მოგზაური');
+  const objTitle = (_dlgObj && (_dlgObj.title || _dlgObj.lb)) || '';
+  const txt = (node.text || '')
+    .replace(/\[\]/g, localStorage.getItem('mdelo_nick') || 'მოგზაური')
+    .replace(/\x01([^<"]*)/g, (_, name) => name.trim() || objTitle); // <> → obj title, <name> → name
   _typewriterHTML(body, parseLinks(txt), 35, () => {
     if (!btnWrap) return;
     (node.buttons || []).forEach(btn => {
