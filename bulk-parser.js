@@ -114,7 +114,7 @@ function parseBulkDSL(raw) {
     if (atmM) {
       flush();
       speaker = null;
-      cur.text += (cur.text ? '<br>' : '') + _esc(atmM[1].trim());
+      cur.text += (cur.text ? '<br>' : '') + '✦ ' + _esc(atmM[1].trim());
       continue;
     }
 
