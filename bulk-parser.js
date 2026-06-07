@@ -4,19 +4,51 @@
 //  Load order: after objects.js, before ui-palette.js
 // ============================================================
 
-const _OBJ_PREFIX = '\x01';
+//
+// DSL syntax reference:
+//   @N [marker] title        — node start  (marker: ! ? ...)
+//   [speaker] text           — named speaker block
+//   [] text                  — player name placeholder (runtime: mdelo_nick || "მოგზაური")
+//   <> text                  — object speaker (runtime: ობიექტის სახელი = _dlgTitle)
+//   <სახელი> text            — object speaker (კასტომ სახელი)
+//   plain text               — narrator (სახელის გარეშე)
+//   {atmosphere text}        — atmosphere / effect line
+//   [[label|url]]            — external link (inline)
+//   [[object name]]          — map object link (inline)
+//   -> text =>N              — choice button, no notification
+//   ->* text =>N             — choice + info notification
+//   ->! text =>N             — choice + warning notification
+//   ->~ text =>N             — choice + danger notification
+//   ->+ text =>N             — choice + project notification
+//   ->. text =>N             — choice + done notification
+//   ->! label | notify text =>N  — custom notification message
+//
+// speaker encoding in HTML:
+//   <b class="spk-player">[]</b>        — [] player placeholder
+//   <b class="spk-object">\x01name</b>  — <> object (\x01 = empty = use _dlgTitle)
+//   <b class="spk-named">name</b>       — [name] named speaker
+//
+// Returns: { nodes: Array, title: string, marker: string }
+//   nodes  — dialogue[] ready for _editingDialogue
+//   title  — object title from @0 header (may be "")
+//   marker — object marker from @0 header (! ? 💬 or "")
+//
+
+// ── OBJ_PREFIX: internal marker for object speakers ─────────
+const _OBJ_PREFIX = '__OBJ__';
 
 function parseBulkDSL(raw) {
   const lines  = raw.replace(/\r\n/g, '\n').split('\n');
   const result = [];
 
-  let cur     = null;
-  let speaker = null;
-  let textBuf = [];
+  let cur     = null;   // node being built
+  let speaker = null;   // null=narrator | ""=player | "\x01name"=object | "name"=named
+  let textBuf = [];     // accumulated lines for current text block
 
   let rootTitle  = '';
   let rootMarker = '';
 
+  // flush accumulated text buffer into cur.text as HTML
   function flush() {
     if (!cur || !textBuf.length) { textBuf = []; return; }
     const block = textBuf.join(' ').trim();
@@ -24,13 +56,18 @@ function parseBulkDSL(raw) {
 
     let html;
     if (speaker === null) {
+      // narrator — plain text, no speaker label
       html = _esc(block);
     } else if (speaker === '') {
+      // [] — player placeholder, resolved at runtime
       html = '<b class="spk-player">[]</b> ' + _esc(block);
     } else if (speaker.startsWith(_OBJ_PREFIX)) {
+      // <> or <name> — object speaker
+      // store raw name after prefix; empty = use _dlgTitle at runtime
       const objName = speaker.slice(1);
       html = '<b class="spk-object">' + _esc(_OBJ_PREFIX + objName) + '</b> ' + _esc(block);
     } else {
+      // [name] — named speaker
       html = '<b class="spk-named">' + _esc(speaker) + '</b> ' + _esc(block);
     }
 
@@ -41,6 +78,7 @@ function parseBulkDSL(raw) {
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
 
+    // ── @N node header ──────────────────────────────────────
     if (/^@\d/.test(line)) {
       if (cur) { flush(); result.push(cur); }
 
@@ -62,6 +100,7 @@ function parseBulkDSL(raw) {
 
     if (!cur) continue;
 
+    // ── choice line ──────────────────────────────────────────
     if (/^->/.test(line)) {
       flush();
       const btn = _parseBtn(line);
@@ -71,6 +110,7 @@ function parseBulkDSL(raw) {
       continue;
     }
 
+    // ── atmosphere {text} ────────────────────────────────────
     const atmM = line.match(/^\{(.+)\}$/);
     if (atmM) {
       flush();
@@ -79,38 +119,46 @@ function parseBulkDSL(raw) {
       continue;
     }
 
+    // ── object speaker <> or <name> ──────────────────────────
+    // must be checked BEFORE [] to avoid conflict
     const objM = line.match(/^<([^>]*)>(.*)/);
     if (objM) {
       flush();
-      speaker = _OBJ_PREFIX + objM[1].trim();
+      speaker = _OBJ_PREFIX + objM[1].trim();  // \x01 + name (empty = auto)
       const rest = objM[2].trim();
       if (rest) textBuf.push(rest);
       continue;
     }
 
+    // ── player/named speaker [] or [name] ────────────────────
     const spkM = line.match(/^\[([^\]]*)\](.*)/);
     if (spkM) {
       flush();
-      speaker    = spkM[1];
+      speaker    = spkM[1];           // "" = player, "name" = named
       const rest = spkM[2].trim();
       if (rest) textBuf.push(rest);
       continue;
     }
 
+    // ── empty line → flush block, reset speaker ──────────────
     if (!line.trim()) {
       flush();
       speaker = null;
       continue;
     }
 
+    // ── regular text line (narrator) ─────────────────────────
     textBuf.push(line.trim());
   }
 
+  // finalize last node
   if (cur) { flush(); result.push(cur); }
 
   return { nodes: result, title: rootTitle, marker: rootMarker };
 }
 
+// ── choice line parser ──────────────────────────────────────
+// notify type chars: * info  ! warning  ~ danger  + project  . done
 const _NOTIFY_TYPES = { '*': 'info', '!': 'warning', '~': 'danger', '+': 'project', '.': 'done' };
 
 function _parseBtn(line) {
@@ -118,6 +166,7 @@ function _parseBtn(line) {
   let notify = false;
   let notifyType = '';
 
+  // detect ->X where X is a notify type char
   if (rest.length > 2 && _NOTIFY_TYPES[rest[2]]) {
     notify     = true;
     notifyType = _NOTIFY_TYPES[rest[2]];
@@ -126,6 +175,7 @@ function _parseBtn(line) {
     rest = rest.slice(2).trim();
   }
 
+  // extract =>N at end
   let nextNode = '';
   const nxtM = rest.match(/^(.*?)\s*=>(\d+)\s*$/);
   if (nxtM) {
@@ -133,6 +183,7 @@ function _parseBtn(line) {
     nextNode = 'node_' + nxtM[2];
   }
 
+  // extract | separator: "label | notify text"
   let notifyText = '';
   const sepIdx = rest.indexOf(' | ');
   if (notify && sepIdx >= 0) {
@@ -144,6 +195,7 @@ function _parseBtn(line) {
   return { label: rest, nextNode, notify, notifyType, notifyText, link: '' };
 }
 
+// ── minimal HTML escape ─────────────────────────────────────
 function _esc(s) {
   return s
     .replace(/&/g, '&amp;')
@@ -151,6 +203,7 @@ function _esc(s) {
     .replace(/>/g, '&gt;');
 }
 
+// ── dialogue[] → DSL serializer ────────────────────────────
 function unparseDialogue(o) {
   const nodes  = o.dialogue || [];
   const title  = o.title  || o.lb || '';
@@ -161,26 +214,33 @@ function unparseDialogue(o) {
   const lines  = [];
 
   nodes.forEach((node, ni) => {
+    // node header
     const hdr = '@' + ni +
       (mrkSym && ni === 0 ? ' ' + mrkSym : '') +
       (title  && ni === 0 ? ' ' + title  : '');
     lines.push(hdr);
 
+    // text — strip HTML back to DSL
     if (node.text) {
       const plain = node.text
         .replace(/<br>/gi, '\n')
+        // [] player placeholder
         .replace(/<b[^>]*class="spk-player"[^>]*>\[\]<\/b>\s*/gi, '[] ')
+        // <> object speaker: extract stored name after \x01
         .replace(/<b[^>]*class="spk-object"[^>]*>([^<]*)<\/b>\s*/gi, (_, inner) => {
+          // inner is escaped \x01name — unescape &lt; etc then strip \x01
           const raw = inner
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
           const name = raw.startsWith(_OBJ_PREFIX) ? raw.slice(1) : raw;
           return '<' + name + '> ';
         })
+        // [name] named speaker
         .replace(/<b[^>]*class="spk-named"[^>]*>([^<]*)<\/b>\s*/gi, (_, inner) => {
           const name = inner
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
           return '[' + name + '] ';
         })
+        // legacy bold (editor-written, no class)
         .replace(/<b>\[\]<\/b>\s*/gi, '[] ')
         .replace(/<b>([^<]*)<\/b>\s*/gi, '[$1] ')
         .replace(/<[^>]+>/g, '')
@@ -191,13 +251,14 @@ function unparseDialogue(o) {
         if (!l.trim()) return;
         const t = l.trim();
         if (t.startsWith('✦ ')) {
-          lines.push('{' + t.slice(2) + '}');
+          lines.push('{' + t.slice(2) + '}');  // restore atmosphere syntax
         } else {
           lines.push(t);
         }
       });
     }
 
+    // buttons
     const _TYPE_CHARS = { info: '*', warning: '!', danger: '~', project: '+', done: '.' };
     (node.buttons || []).forEach(btn => {
       if (!btn.label) return;
@@ -217,5 +278,6 @@ function unparseDialogue(o) {
   return lines.join('\n');
 }
 
+// ── WINDOW BINDINGS ────────────────────────────────────────
 window.parseBulkDSL    = parseBulkDSL;
 window.unparseDialogue = unparseDialogue;
