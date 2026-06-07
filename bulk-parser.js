@@ -63,7 +63,7 @@ function parseBulkDSL(raw) {
     } else if (speaker.startsWith(_OBJ_PREFIX)) {
       // <> or <name> — object speaker
       // store raw name after prefix; empty = use _dlgTitle at runtime
-      const objName = speaker.slice(1);
+      const objName = speaker.slice(_OBJ_PREFIX.length);
       html = '<b class="spk-object">' + _esc(_OBJ_PREFIX + objName) + '</b> ' + _esc(block);
     } else {
       // [name] — named speaker
@@ -158,6 +158,15 @@ function parseBulkDSL(raw) {
 
 // ── choice line parser ──────────────────────────────────────
 // notify type chars: * info  ! warning  ~ danger  + project  . done
+//
+// Full button DSL syntax:
+//   -> label                     — close popup (or go to =>N)
+//   -> label =>N                 — jump to node N
+//   -> label |https://url        — open URL in new tab
+//   -> label @@ზონის სახელი      — navigate map to area (fitAreas)
+//   ->* label @@area |url =>N   — all modifiers can combine
+//   notify prefix: ->*  ->!  ->~  ->+  ->.
+//
 const _NOTIFY_TYPES = { '*': 'info', '!': 'warning', '~': 'danger', '+': 'project', '.': 'done' };
 
 function _parseBtn(line) {
@@ -182,8 +191,18 @@ function _parseBtn(line) {
     nextNode = 'node_' + nxtM[2];
   }
 
+  // extract trailing |url  (no spaces in URL)
+  let link = '';
+  const linkM = rest.match(/^(.*?)\s*\|(\S+)\s*$/);
+  if (linkM) { link = linkM[2]; rest = linkM[1].trim(); }
+
+  // extract trailing @@area name  (may contain spaces, must come after |url extraction)
+  let area = '';
+  const areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
+  if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
+
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyType, link: '' };
+  return { label: rest, nextNode, notify, notifyType, link, area };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -222,7 +241,7 @@ function unparseDialogue(o) {
           // inner is escaped \x01name — unescape &lt; etc then strip \x01
           const raw = inner
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-          const name = raw.startsWith(_OBJ_PREFIX) ? raw.slice(1) : raw;
+          const name = raw.startsWith(_OBJ_PREFIX) ? raw.slice(_OBJ_PREFIX.length) : raw;
           return '<' + name + '> ';
         })
         // [name] named speaker
@@ -253,12 +272,15 @@ function unparseDialogue(o) {
     const _TYPE_CHARS = { info: '*', warning: '!', danger: '~', project: '+', done: '.' };
     (node.buttons || []).forEach(btn => {
       if (!btn.label) return;
-      const next = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
+      const next     = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
+      const areaPart = btn.area ? ' @@' + btn.area : '';
+      const linkPart = btn.link ? ' |'  + btn.link : '';
+      const suffix   = areaPart + linkPart + next;
       if (btn.notify) {
         const tc = _TYPE_CHARS[btn.notifyType] || '*';
-        lines.push('->' + tc + ' ' + btn.label + next);
+        lines.push('->' + tc + ' ' + btn.label + suffix);
       } else {
-        lines.push('-> ' + btn.label + next);
+        lines.push('-> ' + btn.label + suffix);
       }
     });
 

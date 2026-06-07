@@ -695,10 +695,16 @@ function _dlgShowNode(nodeId) {
           fetch(SUPA_URL_D + '/rest/v1/notifications', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'apikey': SUPA_KEY_D, 'Authorization': 'Bearer ' + SUPA_KEY_D, 'Prefer': 'return=minimal' },
-            body: JSON.stringify({ type: nType, symbol: nSymbol, text: notifyTxt, sender: sender, linked_area: '' })
+            body: JSON.stringify({ type: nType, symbol: nSymbol, text: notifyTxt, sender: sender, linked_area: btn.area || '' })
           }).catch(() => {});
         }
         if (btn.link) window.open(btn.link, '_blank');
+        if (btn.area) {
+          closeHsPopup();
+          fitAreas(btn.area);
+          blinkAreasByGroupOrTitle('', btn.area);
+          return;
+        }
         if (btn.nextNode && _dlgNodes[btn.nextNode]) { _dlgShowNode(btn.nextNode); }
         else { closeHsPopup(); }
       };
@@ -1059,7 +1065,8 @@ async function loadDialogueOverrides() {
 }
 
 // Save/update a dialogue override — called from terminal.js
-window.dlgOverrideSave = async function(objTitle, nodesJson, dsl) {
+// marker: DSL marker string ('!' | '?' | '...' | '') — optional
+window.dlgOverrideSave = async function(objTitle, nodesJson, dsl, marker) {
   try {
     var body = JSON.stringify({
       map_id: _MAP_ID,
@@ -1080,7 +1087,21 @@ window.dlgOverrideSave = async function(objTitle, nodesJson, dsl) {
     });
     if (r.ok) {
       var oi = _findOiByTitle(objTitle);
-      if (oi >= 0 && typeof _OBJS !== 'undefined' && _OBJS[oi]) _OBJS[oi].dialogue = nodesJson;
+      if (oi >= 0 && typeof _OBJS !== 'undefined' && _OBJS[oi]) {
+        _OBJS[oi].dialogue = nodesJson;
+        // apply marker locally — '...' (DSL) → '💬' (internal)
+        if (marker !== undefined && marker !== null) {
+          var mk = marker === '...' ? '💬' : marker;
+          _OBJS[oi].marker = mk;
+          var hsEl = document.querySelector(
+            '.hotspot[data-title="' + objTitle.replace(/\\/g,'\\\\').replace(/"/g,'\\"') + '"]:not(.hs-area)'
+          );
+          if (hsEl) {
+            var mkEl = hsEl.querySelector('.hs-marker');
+            if (mkEl) { mkEl.textContent = mk || ''; mkEl.style.display = mk ? '' : 'none'; }
+          }
+        }
+      }
       return true;
     }
     var errBody = r.text ? await r.text().catch(function(){return "";}) : "";
@@ -1094,7 +1115,7 @@ window.dlgGetCurrentDsl = function(objTitle) {
   if (oi < 0 || typeof _OBJS === 'undefined' || !_OBJS[oi]) return '';
   var obj = _OBJS[oi];
   if (obj.dialogue && obj.dialogue.length && typeof unparseDialogue === 'function') {
-    return unparseDialogue({ lb: objTitle, dialogue: obj.dialogue });
+    return unparseDialogue({ lb: objTitle, dialogue: obj.dialogue, marker: obj.marker || '' });
   }
   return '';
 };
@@ -1182,7 +1203,7 @@ function parseBulkDSL(raw) {
     } else if (speaker.startsWith(_OBJ_PREFIX)) {
       // <> or <name> — object speaker
       // store raw name after prefix; empty = use _dlgTitle at runtime
-      const objName = speaker.slice(1);
+      const objName = speaker.slice(_OBJ_PREFIX.length);
       html = '<b class="spk-object">' + _esc(_OBJ_PREFIX + objName) + '</b> ' + _esc(block);
     } else {
       // [name] — named speaker
@@ -1277,6 +1298,15 @@ function parseBulkDSL(raw) {
 
 // ── choice line parser ──────────────────────────────────────
 // notify type chars: * info  ! warning  ~ danger  + project  . done
+//
+// Full button DSL syntax:
+//   -> label                     — close popup (or go to =>N)
+//   -> label =>N                 — jump to node N
+//   -> label |https://url        — open URL in new tab
+//   -> label @@ზონის სახელი      — navigate map to area (fitAreas)
+//   ->* label @@area |url =>N   — all modifiers can combine
+//   notify prefix: ->*  ->!  ->~  ->+  ->.
+//
 const _NOTIFY_TYPES = { '*': 'info', '!': 'warning', '~': 'danger', '+': 'project', '.': 'done' };
 
 function _parseBtn(line) {
@@ -1301,8 +1331,18 @@ function _parseBtn(line) {
     nextNode = 'node_' + nxtM[2];
   }
 
+  // extract trailing |url  (no spaces in URL)
+  let link = '';
+  const linkM = rest.match(/^(.*?)\s*\|(\S+)\s*$/);
+  if (linkM) { link = linkM[2]; rest = linkM[1].trim(); }
+
+  // extract trailing @@area name  (may contain spaces, must come after |url extraction)
+  let area = '';
+  const areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
+  if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
+
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyType, link: '' };
+  return { label: rest, nextNode, notify, notifyType, link, area };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -1341,7 +1381,7 @@ function unparseDialogue(o) {
           // inner is escaped \x01name — unescape &lt; etc then strip \x01
           const raw = inner
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-          const name = raw.startsWith(_OBJ_PREFIX) ? raw.slice(1) : raw;
+          const name = raw.startsWith(_OBJ_PREFIX) ? raw.slice(_OBJ_PREFIX.length) : raw;
           return '<' + name + '> ';
         })
         // [name] named speaker
@@ -1372,12 +1412,15 @@ function unparseDialogue(o) {
     const _TYPE_CHARS = { info: '*', warning: '!', danger: '~', project: '+', done: '.' };
     (node.buttons || []).forEach(btn => {
       if (!btn.label) return;
-      const next = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
+      const next     = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
+      const areaPart = btn.area ? ' @@' + btn.area : '';
+      const linkPart = btn.link ? ' |'  + btn.link : '';
+      const suffix   = areaPart + linkPart + next;
       if (btn.notify) {
         const tc = _TYPE_CHARS[btn.notifyType] || '*';
-        lines.push('->' + tc + ' ' + btn.label + next);
+        lines.push('->' + tc + ' ' + btn.label + suffix);
       } else {
-        lines.push('-> ' + btn.label + next);
+        lines.push('-> ' + btn.label + suffix);
       }
     });
 
@@ -1758,7 +1801,7 @@ function _tmDlgEdit(args) {
 
   // fallback template if no dialogue exists yet
   if (!dsl) {
-    dsl = '@0 💬 ' + title + '\n\n<> \n\n-> ';
+    dsl = '@0 ' + title + '\n\n<> \n\n-> ';
   }
 
   // switch to multiline mode and load DSL
@@ -1797,7 +1840,8 @@ async function _tmSaveDlg(dsl) {
   }
 
   // parseBulkDSL may return array or { nodes, title, marker }
-  var nodes = Array.isArray(result) ? result : (result && result.nodes ? result.nodes : []);
+  var nodes  = Array.isArray(result) ? result : (result && result.nodes ? result.nodes : []);
+  var marker = (!Array.isArray(result) && result && result.marker != null) ? result.marker : undefined;
   if (!nodes.length) {
     _tmL('ter', '✗ DSL: კვანძები ვერ მოიძებნა — შეამოწმე ფორმატი');
     return;
@@ -1812,7 +1856,7 @@ async function _tmSaveDlg(dsl) {
 
   var ok = false, okResult = null;
   try {
-    okResult = await dlgOverrideSave(title, nodes, dsl); ok = okResult === true;
+    okResult = await dlgOverrideSave(title, nodes, dsl, marker); ok = okResult === true;
   } catch (e) {
     _tmL('ter', '✗ Supabase: ' + e.message);
     return;
