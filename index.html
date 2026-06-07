@@ -677,7 +677,7 @@ function _dlgShowNode(nodeId) {
   const _he = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const txt = (node.text || '')
     .replace(/\[\]/g, (localStorage.getItem('mdelo_nick') || 'მოგზაური') + ':')
-    .replace(/\x01([^<"]*)/g, (_, name) => (name.trim() || _he(objTitle)) + ':')
+    .replace(/__OBJ__([^<"]*)/g, (_, name) => (name.trim() || _he(objTitle)) + ':')
     .replace(/&lt;([^&<\n]*)&gt;/g, (_, name) => '<b>' + (name.trim() || _he(objTitle)) + ':</b>');
   _typewriterHTML(body, parseLinks(txt), 35, () => {
     if (!btnWrap) return;
