@@ -21,6 +21,7 @@
 //   ->~ text =>N             — choice + danger notification
 //   ->+ text =>N             — choice + project notification
 //   ->. text =>N             — choice + done notification
+//   ->! label | notify text =>N  — custom notification message
 //
 // speaker encoding in HTML:
 //   <b class="spk-player">[]</b>        — [] player placeholder
@@ -182,8 +183,16 @@ function _parseBtn(line) {
     nextNode = 'node_' + nxtM[2];
   }
 
+  // extract | separator: "label | notify text"
+  let notifyText = '';
+  const sepIdx = rest.indexOf(' | ');
+  if (notify && sepIdx >= 0) {
+    notifyText = rest.slice(sepIdx + 3).trim();
+    rest       = rest.slice(0, sepIdx).trim();
+  }
+
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyType, link: '' };
+  return { label: rest, nextNode, notify, notifyType, notifyText, link: '' };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -255,8 +264,9 @@ function unparseDialogue(o) {
       if (!btn.label) return;
       const next = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
       if (btn.notify) {
-        const tc = _TYPE_CHARS[btn.notifyType] || '*';
-        lines.push('->' + tc + ' ' + btn.label + next);
+        const tc  = _TYPE_CHARS[btn.notifyType] || '*';
+        const sep = btn.notifyText ? ' | ' + btn.notifyText : '';
+        lines.push('->' + tc + ' ' + btn.label + sep + next);
       } else {
         lines.push('-> ' + btn.label + next);
       }
