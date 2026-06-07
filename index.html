@@ -1043,6 +1043,28 @@ function _findOiByTitle(title) {
   return (hs && hs.dataset.oi != null) ? +hs.dataset.oi : -1;
 }
 
+// Update hotspot DOM marker element.
+// mk = internal marker string: '!' | '?' | '💬' | ''
+// Creates .hs-marker if missing; hides/shows .hs-dot accordingly.
+function _applyMarkerDom(hsEl, mk) {
+  if (!hsEl) return;
+  var dotEl = hsEl.querySelector('.hs-dot');
+  var mkEl  = hsEl.querySelector('.hs-marker');
+  if (mk) {
+    if (!mkEl) {
+      mkEl = document.createElement('div');
+      mkEl.className = 'hs-marker';
+      hsEl.appendChild(mkEl);
+    }
+    mkEl.textContent  = mk;
+    mkEl.style.display = '';
+    if (dotEl) dotEl.style.display = 'none';
+  } else {
+    if (mkEl)  mkEl.style.display  = 'none';
+    if (dotEl) dotEl.style.display = '';
+  }
+}
+
 // Patch _OBJS[oi].dialogue with data from Supabase row
 function _applyDlgOverride(row) {
   if (!row || !row.obj_title || !row.nodes_json) return;
@@ -1062,13 +1084,11 @@ function _applyDlgOverride(row) {
       var parsed = parseBulkDSL(row.dsl);
       var mk = parsed.marker === '...' ? '💬' : (parsed.marker || '');
       _OBJS[oi].marker = mk;
+      if (parsed.title) _OBJS[oi].lb = parsed.title;
       var hsEl = document.querySelector(
         '.hotspot[data-title="' + row.obj_title.replace(/\\/g,'\\\\').replace(/"/g,'\\"') + '"]:not(.hs-area)'
       );
-      if (hsEl) {
-        var mkEl = hsEl.querySelector('.hs-marker');
-        if (mkEl) { mkEl.textContent = mk || ''; mkEl.style.display = mk ? '' : 'none'; }
-      }
+      _applyMarkerDom(hsEl, mk);
     } catch(e) {}
   }
 }
@@ -1087,8 +1107,7 @@ async function loadDialogueOverrides() {
 }
 
 // Save/update a dialogue override — called from terminal.js
-// marker: DSL marker string ('!' | '?' | '...' | '') — optional
-window.dlgOverrideSave = async function(objTitle, nodesJson, dsl, marker) {
+window.dlgOverrideSave = async function(objTitle, nodesJson, dsl) {
   try {
     var body = JSON.stringify({
       map_id: _MAP_ID,
@@ -1108,22 +1127,8 @@ window.dlgOverrideSave = async function(objTitle, nodesJson, dsl, marker) {
       body: body
     });
     if (r.ok) {
-      var oi = _findOiByTitle(objTitle);
-      if (oi >= 0 && typeof _OBJS !== 'undefined' && _OBJS[oi]) {
-        _OBJS[oi].dialogue = nodesJson;
-        // apply marker locally — '...' (DSL) → '💬' (internal)
-        if (marker !== undefined && marker !== null) {
-          var mk = marker === '...' ? '💬' : marker;
-          _OBJS[oi].marker = mk;
-          var hsEl = document.querySelector(
-            '.hotspot[data-title="' + objTitle.replace(/\\/g,'\\\\').replace(/"/g,'\\"') + '"]:not(.hs-area)'
-          );
-          if (hsEl) {
-            var mkEl = hsEl.querySelector('.hs-marker');
-            if (mkEl) { mkEl.textContent = mk || ''; mkEl.style.display = mk ? '' : 'none'; }
-          }
-        }
-      }
+      // reuse _applyDlgOverride for nodes + marker + lb — single source of truth
+      _applyDlgOverride({ obj_title: objTitle, nodes_json: nodesJson, dsl: dsl });
       return true;
     }
     var errBody = r.text ? await r.text().catch(function(){return "";}) : "";
@@ -1878,7 +1883,7 @@ async function _tmSaveDlg(dsl) {
 
   var ok = false, okResult = null;
   try {
-    okResult = await dlgOverrideSave(title, nodes, dsl, marker); ok = okResult === true;
+    okResult = await dlgOverrideSave(title, nodes, dsl); ok = okResult === true;
   } catch (e) {
     _tmL('ter', '✗ Supabase: ' + e.message);
     return;
