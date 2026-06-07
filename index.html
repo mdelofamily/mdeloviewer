@@ -677,9 +677,7 @@ function _dlgShowNode(nodeId) {
   const _he = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const txt = (node.text || '')
     .replace(/\[\]/g, (localStorage.getItem('mdelo_nick') || 'მოგზაური') + ':')
-    // new format (\x01): parseBulkDSL stores \x01name inside spk-object tag
     .replace(/\x01([^<"]*)/g, (_, name) => (name.trim() || _he(objTitle)) + ':')
-    // old format: &lt;&gt; or &lt;name&gt; anywhere in text (pre-\x01 bulk-parser)
     .replace(/&lt;([^&<\n]*)&gt;/g, (_, name) => '<b>' + (name.trim() || _he(objTitle)) + ':</b>');
   _typewriterHTML(body, parseLinks(txt), 35, () => {
     if (!btnWrap) return;
@@ -885,7 +883,6 @@ function renderNotifBar() {
     c.className = 'ncard' + (n.type === 'emergency' ? ' pulse' : '');
     c.dataset.type = n.type || 'info'; c.title = n.text || ''; c.textContent = n.symbol || '💬';
     c.onclick = () => openNotifPopup(n);
-    // ── long tap → delete ──
     let _lt = null;
     c.addEventListener('touchstart', e => {
       _lt = setTimeout(() => {
@@ -907,15 +904,11 @@ function renderNotifBar() {
 
 function _ncardDeleteConfirm(card, n) {
   const type = n.type || 'info';
-
-  // emergency — დაბლოკილი
   if (type === 'emergency') {
     const ov = _ncardOverlay(card, '🔒', '#8b949e');
     setTimeout(() => ov.remove(), 1200);
     return;
   }
-
-  // danger / warning — confirm dialog
   if (type === 'danger' || type === 'warning') {
     const ov = _ncardOverlay(card, '?', { danger: '#fb8f44', warning: '#f0a500' }[type]);
     ov.style.flexDirection = 'column';
@@ -938,8 +931,6 @@ function _ncardDeleteConfirm(card, n) {
     no.addEventListener('click',  e => { e.stopPropagation(); ov.remove(); });
     return;
   }
-
-  // info / done / project — პირდაპირ წაშლა
   const ov = _ncardOverlay(card, '🗑', '#f85149');
   ov.addEventListener('click', async e => { e.stopPropagation(); await _ncardDoDelete(ov, n); });
   setTimeout(() => {
@@ -968,13 +959,25 @@ async function _ncardDoDelete(ov, n) {
     else ov.remove();
   } catch (e) { ov.remove(); }
 }
+
 function _startRealtime() {
   if (typeof supabase === 'undefined') return;
   try {
     const client = supabase.createClient(SUPA_URL, SUPA_KEY);
-    client.channel('notif-live').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, () => loadNotifs()).subscribe();
+    // notifications channel
+    client.channel('notif-live')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, () => loadNotifs())
+      .subscribe();
+    // dialogue overrides channel — realtime patch for all viewers
+    const mapId = (_CFG && _CFG.title) ? _CFG.title : 'map';
+    client.channel('dlg-overrides')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dialogue_overrides' }, payload => {
+        if (payload.new && payload.new.map_id === mapId) _applyDlgOverride(payload.new);
+      })
+      .subscribe();
   } catch (e) {}
 }
+
 function openNotifPopup(n) {
   _curNotif = n;
   const p = document.getElementById('notifPopup');
@@ -1023,9 +1026,82 @@ function goToArea() {
   }
 }
 
+// ── dialogue overrides (Supabase) ──
+// Allows admin to edit dialogue via terminal; all viewers get updates via realtime.
+
+const _MAP_ID = (_CFG && _CFG.title) ? _CFG.title : 'map';
+
+// Find _OBJS index by hotspot data-title
+function _findOiByTitle(title) {
+  var hs = document.querySelector('.hotspot[data-title="' + title.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]:not(.hs-area):not(.no-interact)');
+  return (hs && hs.dataset.oi != null) ? +hs.dataset.oi : -1;
+}
+
+// Patch _OBJS[oi].dialogue with data from Supabase row
+function _applyDlgOverride(row) {
+  if (!row || !row.obj_title || !row.nodes_json) return;
+  var oi = _findOiByTitle(row.obj_title);
+  if (oi < 0 || !window._OBJS || !_OBJS[oi]) return;
+  _OBJS[oi].dialogue = Array.isArray(row.nodes_json) ? row.nodes_json : [];
+}
+
+// Load all overrides for this map on startup
+async function loadDialogueOverrides() {
+  try {
+    var r = await fetch(
+      SUPA_URL + '/rest/v1/dialogue_overrides?map_id=eq.' + encodeURIComponent(_MAP_ID),
+      { headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY } }
+    );
+    if (!r.ok) return;
+    var rows = await r.json();
+    rows.forEach(_applyDlgOverride);
+  } catch (e) {}
+}
+
+// Save/update a dialogue override — called from terminal.js
+window.dlgOverrideSave = async function(objTitle, nodesJson, dsl) {
+  try {
+    var body = JSON.stringify({
+      map_id: _MAP_ID,
+      obj_title: objTitle,
+      nodes_json: nodesJson,
+      dsl: dsl,
+      updated_at: new Date().toISOString()
+    });
+    var r = await fetch(SUPA_URL + '/rest/v1/dialogue_overrides', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPA_KEY,
+        'Authorization': 'Bearer ' + SUPA_KEY,
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: body
+    });
+    if (r.ok) {
+      // patch locally immediately (don't wait for realtime round-trip)
+      var oi = _findOiByTitle(objTitle);
+      if (oi >= 0 && window._OBJS && _OBJS[oi]) _OBJS[oi].dialogue = nodesJson;
+    }
+    return r.ok;
+  } catch (e) { return false; }
+};
+
+// Get current DSL string for an object — called from terminal.js
+window.dlgGetCurrentDsl = function(objTitle) {
+  var oi = _findOiByTitle(objTitle);
+  if (oi < 0 || !window._OBJS || !_OBJS[oi]) return '';
+  var obj = _OBJS[oi];
+  if (obj.dialogue && obj.dialogue.length && typeof unparseDialogue === 'function') {
+    return unparseDialogue({ lb: objTitle, dialogue: obj.dialogue });
+  }
+  return '';
+};
+
 // ── init ──
 window.addEventListener('load', () => {
   loadNotifs();
+  loadDialogueOverrides();
   _startRealtime();
   applySpotHash();
   applyAreaHash();
@@ -1040,6 +1116,280 @@ window.addEventListener('load', () => {
 });
 window.addEventListener('hashchange', () => { applySpotHash(); applyAreaHash(); });
 </script>
+<script>// ============================================================
+//  bulk-parser.js — Bulk DSL → dialogue[] converter
+//  Depends on: nothing (pure functions)
+//  Load order: after objects.js, before ui-palette.js
+// ============================================================
+
+//
+// DSL syntax reference:
+//   @N [marker] title        — node start  (marker: ! ? ...)
+//   [speaker] text           — named speaker block
+//   [] text                  — player name placeholder (runtime: mdelo_nick || "მოგზაური")
+//   <> text                  — object speaker (runtime: ობიექტის სახელი = _dlgTitle)
+//   <სახელი> text            — object speaker (კასტომ სახელი)
+//   plain text               — narrator (სახელის გარეშე)
+//   {atmosphere text}        — atmosphere / effect line
+//   [[label|url]]            — external link (inline)
+//   [[object name]]          — map object link (inline)
+//   -> text =>N              — choice button, no notification
+//   ->* text =>N             — choice + info notification
+//   ->! text =>N             — choice + warning notification
+//   ->~ text =>N             — choice + danger notification
+//   ->+ text =>N             — choice + project notification
+//   ->. text =>N             — choice + done notification
+//
+// speaker encoding in HTML:
+//   <b class="spk-player">[]</b>        — [] player placeholder
+//   <b class="spk-object">\x01name</b>  — <> object (\x01 = empty = use _dlgTitle)
+//   <b class="spk-named">name</b>       — [name] named speaker
+//
+// Returns: { nodes: Array, title: string, marker: string }
+//   nodes  — dialogue[] ready for _editingDialogue
+//   title  — object title from @0 header (may be "")
+//   marker — object marker from @0 header (! ? 💬 or "")
+//
+
+// ── OBJ_PREFIX: internal marker for object speakers ─────────
+const _OBJ_PREFIX = '\x01';
+
+function parseBulkDSL(raw) {
+  const lines  = raw.replace(/\r\n/g, '\n').split('\n');
+  const result = [];
+
+  let cur     = null;   // node being built
+  let speaker = null;   // null=narrator | ""=player | "\x01name"=object | "name"=named
+  let textBuf = [];     // accumulated lines for current text block
+
+  let rootTitle  = '';
+  let rootMarker = '';
+
+  // flush accumulated text buffer into cur.text as HTML
+  function flush() {
+    if (!cur || !textBuf.length) { textBuf = []; return; }
+    const block = textBuf.join(' ').trim();
+    if (!block) { textBuf = []; return; }
+
+    let html;
+    if (speaker === null) {
+      // narrator — plain text, no speaker label
+      html = _esc(block);
+    } else if (speaker === '') {
+      // [] — player placeholder, resolved at runtime
+      html = '<b class="spk-player">[]</b> ' + _esc(block);
+    } else if (speaker.startsWith(_OBJ_PREFIX)) {
+      // <> or <name> — object speaker
+      // store raw name after prefix; empty = use _dlgTitle at runtime
+      const objName = speaker.slice(1);
+      html = '<b class="spk-object">' + _esc(_OBJ_PREFIX + objName) + '</b> ' + _esc(block);
+    } else {
+      // [name] — named speaker
+      html = '<b class="spk-named">' + _esc(speaker) + '</b> ' + _esc(block);
+    }
+
+    cur.text += (cur.text ? '<br>' : '') + html;
+    textBuf = [];
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+
+    // ── @N node header ──────────────────────────────────────
+    if (/^@\d/.test(line)) {
+      if (cur) { flush(); result.push(cur); }
+
+      const m      = line.match(/^@(\d+)\s*(\.\.\.|[!?])?\s*(.*)/);
+      const idx    = m ? m[1] : '0';
+      const mrkRaw = m ? (m[2] || '').trim() : '';
+      const title  = m ? (m[3] || '').trim() : '';
+      const marker = mrkRaw === '!'   ? '!'   :
+                     mrkRaw === '?'   ? '?'   :
+                     mrkRaw === '...' ? '...' : '';
+
+      if (idx === '0') { rootTitle = title; rootMarker = marker; }
+
+      cur     = { id: 'node_' + idx, text: '', buttons: [] };
+      speaker = null;
+      textBuf = [];
+      continue;
+    }
+
+    if (!cur) continue;
+
+    // ── choice line ──────────────────────────────────────────
+    if (/^->/.test(line)) {
+      flush();
+      const btn = _parseBtn(line);
+      if (btn) {
+        cur.buttons.push(btn);
+      }
+      continue;
+    }
+
+    // ── atmosphere {text} ────────────────────────────────────
+    const atmM = line.match(/^\{(.+)\}$/);
+    if (atmM) {
+      flush();
+      speaker = null;
+      cur.text += (cur.text ? '<br>' : '') + '✦ ' + _esc(atmM[1].trim());
+      continue;
+    }
+
+    // ── object speaker <> or <name> ──────────────────────────
+    // must be checked BEFORE [] to avoid conflict
+    const objM = line.match(/^<([^>]*)>(.*)/);
+    if (objM) {
+      flush();
+      speaker = _OBJ_PREFIX + objM[1].trim();  // \x01 + name (empty = auto)
+      const rest = objM[2].trim();
+      if (rest) textBuf.push(rest);
+      continue;
+    }
+
+    // ── player/named speaker [] or [name] ────────────────────
+    const spkM = line.match(/^\[([^\]]*)\](.*)/);
+    if (spkM) {
+      flush();
+      speaker    = spkM[1];           // "" = player, "name" = named
+      const rest = spkM[2].trim();
+      if (rest) textBuf.push(rest);
+      continue;
+    }
+
+    // ── empty line → flush block, reset speaker ──────────────
+    if (!line.trim()) {
+      flush();
+      speaker = null;
+      continue;
+    }
+
+    // ── regular text line (narrator) ─────────────────────────
+    textBuf.push(line.trim());
+  }
+
+  // finalize last node
+  if (cur) { flush(); result.push(cur); }
+
+  return { nodes: result, title: rootTitle, marker: rootMarker };
+}
+
+// ── choice line parser ──────────────────────────────────────
+// notify type chars: * info  ! warning  ~ danger  + project  . done
+const _NOTIFY_TYPES = { '*': 'info', '!': 'warning', '~': 'danger', '+': 'project', '.': 'done' };
+
+function _parseBtn(line) {
+  let rest = line;
+  let notify = false;
+  let notifyType = '';
+
+  // detect ->X where X is a notify type char
+  if (rest.length > 2 && _NOTIFY_TYPES[rest[2]]) {
+    notify     = true;
+    notifyType = _NOTIFY_TYPES[rest[2]];
+    rest       = rest.slice(3).trim();
+  } else {
+    rest = rest.slice(2).trim();
+  }
+
+  // extract =>N at end
+  let nextNode = '';
+  const nxtM = rest.match(/^(.*?)\s*=>(\d+)\s*$/);
+  if (nxtM) {
+    rest     = nxtM[1].trim();
+    nextNode = 'node_' + nxtM[2];
+  }
+
+  if (!rest) return null;
+  return { label: rest, nextNode, notify, notifyType, link: '' };
+}
+
+// ── minimal HTML escape ─────────────────────────────────────
+function _esc(s) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// ── dialogue[] → DSL serializer ────────────────────────────
+function unparseDialogue(o) {
+  const nodes  = o.dialogue || [];
+  const title  = o.title  || o.lb || '';
+  const marker = o.marker || '';
+  if (!nodes.length && !title) return '';
+
+  const mrkSym = marker === '!' ? '!' : marker === '?' ? '?' : marker === '💬' ? '...' : '';
+  const lines  = [];
+
+  nodes.forEach((node, ni) => {
+    // node header
+    const hdr = '@' + ni +
+      (mrkSym && ni === 0 ? ' ' + mrkSym : '') +
+      (title  && ni === 0 ? ' ' + title  : '');
+    lines.push(hdr);
+
+    // text — strip HTML back to DSL
+    if (node.text) {
+      const plain = node.text
+        .replace(/<br>/gi, '\n')
+        // [] player placeholder
+        .replace(/<b[^>]*class="spk-player"[^>]*>\[\]<\/b>\s*/gi, '[] ')
+        // <> object speaker: extract stored name after \x01
+        .replace(/<b[^>]*class="spk-object"[^>]*>([^<]*)<\/b>\s*/gi, (_, inner) => {
+          // inner is escaped \x01name — unescape &lt; etc then strip \x01
+          const raw = inner
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+          const name = raw.startsWith(_OBJ_PREFIX) ? raw.slice(1) : raw;
+          return '<' + name + '> ';
+        })
+        // [name] named speaker
+        .replace(/<b[^>]*class="spk-named"[^>]*>([^<]*)<\/b>\s*/gi, (_, inner) => {
+          const name = inner
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+          return '[' + name + '] ';
+        })
+        // legacy bold (editor-written, no class)
+        .replace(/<b>\[\]<\/b>\s*/gi, '[] ')
+        .replace(/<b>([^<]*)<\/b>\s*/gi, '[$1] ')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g,  '<')
+        .replace(/&gt;/g,  '>');
+      plain.split('\n').forEach(l => {
+        if (!l.trim()) return;
+        const t = l.trim();
+        if (t.startsWith('✦ ')) {
+          lines.push('{' + t.slice(2) + '}');  // restore atmosphere syntax
+        } else {
+          lines.push(t);
+        }
+      });
+    }
+
+    // buttons
+    const _TYPE_CHARS = { info: '*', warning: '!', danger: '~', project: '+', done: '.' };
+    (node.buttons || []).forEach(btn => {
+      if (!btn.label) return;
+      const next = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
+      if (btn.notify) {
+        const tc = _TYPE_CHARS[btn.notifyType] || '*';
+        lines.push('->' + tc + ' ' + btn.label + next);
+      } else {
+        lines.push('-> ' + btn.label + next);
+      }
+    });
+
+    if (ni < nodes.length - 1) lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
+// ── WINDOW BINDINGS ────────────────────────────────────────
+window.parseBulkDSL    = parseBulkDSL;
+window.unparseDialogue = unparseDialogue;
+</script>
 <script>// terminal.js — viewer terminal + /commands
 // injected inline by export-html.js assembler
 // depends on: _CFG, scale (runtime.js), applyScale, fitAreas, toggleMenu (runtime.js)
@@ -1052,7 +1402,8 @@ function _tmInit() {
 
 var _tmOpen = false, _tmFull = false, _tmHist = [], _tmHIdx = -1, _tmHCur = '', _tmMulti = false;
 var _tmBooted = false;
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/წასვლა','/ლეგენდა','/მენიუ','/სრული','/ისტორია','/ვადა','/ტექსტი','/დახურვა','/nick','/me','/who','/color','/help'];
+var _tmEditObj = null; // title of object currently being edited in DSL mode
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/სრული','/ისტორია','/ვადა','/ტექსტი','/დახურვა','/nick','/me','/who','/color','/help'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -1062,6 +1413,8 @@ function _tmOpen_() {
   if (!_tmBooted) { _tmBooted = true; _tmBoot(); }
 }
 function closeTerm() {
+  // cancel edit mode silently on close
+  if (_tmEditObj) { _tmEditObj = null; document.getElementById('tmTa').value = ''; if (_tmMulti) tmToggleMulti(); }
   _tmOpen = false; _tmFull = false;
   var t = document.getElementById('mdlTerm');
   t.classList.remove('open', 'tmfull');
@@ -1081,7 +1434,6 @@ var _HIST_TTL = 3 * 24 * 60 * 60 * 1000;
 var _HIST_KEY = 'mdelo_chat_' + (_CFG && _CFG.title ? _CFG.title.replace(/[^a-zA-Z0-9ა-ჿ]/g, '_') : 'map');
 var _HIST_TTL_KEY = _HIST_KEY + '_ttl';
 var _HIST_MAX = 300;
-// load saved TTL
 (function () { try { var s = localStorage.getItem(_HIST_TTL_KEY); if (s) { var n = parseInt(s); if (n >= 1 && n <= 365) _HIST_TTL = n * 86400000; } } catch (e) {} })();
 
 function _histSave(html) {
@@ -1116,7 +1468,7 @@ function _histClear() {
   _tmL('tok', 'ისტორია წაიშალა');
 }
 
-// ── multiline (chat) mode ──
+// ── multiline (chat/edit) mode ──
 function tmToggleMulti() {
   _tmMulti = !_tmMulti;
   var btn   = document.getElementById('tmMlBtn');
@@ -1135,21 +1487,30 @@ function tmToggleMulti() {
   setTimeout(function () { (_tmMulti ? ta : inp).focus(); }, 50);
 }
 
+// ── send handler (shared by button and Ctrl+Enter) ──
 function tmSend() {
   var ta = document.getElementById('tmTa');
   var v = ta.value.trim(); if (!v) return;
+
+  // DSL edit mode intercept — don't treat as chat
+  if (_tmEditObj) { _tmSaveDlg(v); return; }
+
   _tmHist.unshift(v); _tmHIdx = -1; _tmHCur = '';
   ta.value = '';
   if (typeof chatHandleInput === 'function' && chatHandleInput(v)) return;
   _tmL('ti', v); _tmRun(v);
 }
 
-// textarea keydown (multiline mode)
+// textarea keydown (multiline + edit mode)
 (function () {
   var ta = document.getElementById('tmTa');
   ta.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); tmSend(); }
-    if (e.key === 'Escape') { closeTerm(); }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (_tmEditObj) { _tmEditCancel(); }
+      else { closeTerm(); }
+    }
   });
 })();
 
@@ -1256,6 +1617,7 @@ function _tmRun(raw) {
     'მასშტაბი':    _tmZoom,
     'ზონები':      _tmAreas,
     'ობიექტები':   _tmObjects,
+    'დიალოგი':     _tmDlgEdit,
     'წასვლა':      _tmGo,
     'ლეგენდა':     _tmLegend,
     'მენიუ':       _tmMenu,
@@ -1274,29 +1636,30 @@ function _tmRun(raw) {
 // ── built-in commands ──
 function _tmHelp() {
   var list = [
-    ['/დახმარება',      'ბრძანების სია'],
-    ['/გასუფთავება',    'კონსოლის გასუფთავება'],
-    ['/ინფო',           'რუკის ინფორმაცია'],
-    ['/მასშტაბი [N]',   'zoom 0.25–6'],
-    ['/ზონები',         'ზონების სია'],
-    ['/ობიექტები',      'ობიექტების სია'],
-    ['/წასვლა [N]',     'ზონაზე ნავიგაცია'],
-    ['/ლეგენდა',        'აღწერას ჩვენა/დამალვა'],
-    ['/მენიუ',          'მენიუს toggle'],
-    ['/სრული',          'სრული ↔ ნახევარი'],
-    ['/ისტორია',        'ჩატის ისტორიის წაშლა'],
-    ['/ვადა [N]',       'ისტ. შენახვა N დღე'],
-    ['/ტექსტი',         'ჩატ ↔ ბრძანება mode'],
-    ['/დახურვა',        'დახურვა  [Esc]'],
-    ['/nick სახელი',    'ნიკნეიმის შეცვლა'],
-    ['/me ტექსტი',      '* აქშნის მესიჯი'],
-    ['/who',            'ონლაინ სია'],
-    ['/color #hex',     'ნიკნეიმის ფერი']
+    ['/დახმარება',        'ბრძანების სია'],
+    ['/გასუფთავება',      'კონსოლის გასუფთავება'],
+    ['/ინფო',             'რუკის ინფორმაცია'],
+    ['/მასშტაბი [N]',     'zoom 0.25–6'],
+    ['/ზონები',           'ზონების სია'],
+    ['/ობიექტები',        'ობიექტები + dialogue სტატუსი'],
+    ['/დიალოგი [სახელი]', 'DSL რედაქტირება · Ctrl+Enter შესანახად'],
+    ['/წასვლა [N]',       'ზონაზე ნავიგაცია'],
+    ['/ლეგენდა',          'აღწერას ჩვენა/დამალვა'],
+    ['/მენიუ',            'მენიუს toggle'],
+    ['/სრული',            'სრული ↔ ნახევარი'],
+    ['/ისტორია',          'ჩატის ისტორიის წაშლა'],
+    ['/ვადა [N]',         'ისტ. შენახვა N დღე'],
+    ['/ტექსტი',           'ჩატ ↔ ბრძანება mode'],
+    ['/დახურვა',          'დახურვა  [Esc]'],
+    ['/nick სახელი',      'ნიკნეიმის შეცვლა'],
+    ['/me ტექსტი',        '* აქშნის მესიჯი'],
+    ['/who',              'ონლაინ სია'],
+    ['/color #hex',       'ნიკნეიმის ფერი']
   ];
   _tmL('tdm', _SEP); _tmL('tsy', '--- ბრძანები ---');
   for (var i = 0; i < list.length; i++) {
     var c = list[i][0], d = list[i][1];
-    var pad = c; while (pad.length < 22) pad += ' ';
+    var pad = c; while (pad.length < 24) pad += ' ';
     _tmL('tnf', pad + d);
   }
   _tmL('tdm', 'Tab — ავტოდასრულება   ↑↓ — ისტორია');
@@ -1328,13 +1691,25 @@ function _tmAreas() {
   els.forEach(function (el) { var t = el.dataset.title; if (t && !seen[t]) { seen[t] = 1; _tmL('tnf', '▸ ' + t); } });
   _tmL('tdm', _SEP); _tmL('tdm', 'გამოიყენე: წასვლა [სახელი]');
 }
+
 function _tmObjects() {
   var els = document.querySelectorAll('.hotspot:not(.hs-area):not(.no-interact)');
   if (!els.length) { _tmL('tdm', 'ობიექტები: ცარიელია'); return; }
   _tmL('tdm', _SEP);
-  els.forEach(function (el) { _tmL('tnf', '◆ ' + (el.dataset.title || '(უსახელო)')); });
+  _tmL('tsy', 'ობიექტები  [/დიალოგი სახელი — რედაქტირება]');
+  els.forEach(function (el) {
+    var title = el.dataset.title || '(უსახელო)';
+    var oi = el.dataset.oi;
+    var obj = (oi != null && window._OBJS && _OBJS[+oi]) ? _OBJS[+oi] : null;
+    var suffix = '';
+    if (obj && obj.dialogue && obj.dialogue.length) {
+      suffix = ' [💬 ' + obj.dialogue.length + ']';
+    }
+    _tmL('tnf', '◆ ' + title + suffix);
+  });
   _tmL('tdm', _SEP);
 }
+
 function _tmGo(args) {
   var label = args.join(' ').trim();
   if (!label) { _tmL('ter', 'გამოყენება: წასვლა [ზონის სახელი]'); return; }
@@ -1355,6 +1730,102 @@ function _tmVada(args) {
   _HIST_TTL = n * 86400000;
   try { localStorage.setItem(_HIST_TTL_KEY, String(n)); } catch (e) {}
   _tmL('tok', 'ისტორიის ვადა: ' + n + ' დღე');
+}
+
+// ── dialogue DSL editor ──
+
+// Open DSL edit mode for an object
+function _tmDlgEdit(args) {
+  var title = args.join(' ').trim();
+  if (!title) {
+    _tmL('ter', 'გამოყენება: /დიალოგი [ობიექტის სახელი]');
+    _tmL('tdm', 'სია: /ობიექტები');
+    return;
+  }
+
+  // verify object exists in DOM
+  var hs = document.querySelector('.hotspot[data-title="' + title.replace(/"/g, '\\"') + '"]:not(.hs-area):not(.no-interact)');
+  if (!hs) {
+    _tmL('ter', 'ობიექტი ვერ მოიძებნა: "' + title + '"');
+    _tmL('tdm', 'სია: /ობიექტები');
+    return;
+  }
+
+  // get current DSL (from override or embedded dialogue)
+  var dsl = '';
+  if (typeof dlgGetCurrentDsl === 'function') dsl = dlgGetCurrentDsl(title);
+
+  // fallback template if no dialogue exists yet
+  if (!dsl) {
+    dsl = '@0 💬 ' + title + '\n\n<> \n\n-> ';
+  }
+
+  // switch to multiline mode and load DSL
+  if (!_tmMulti) tmToggleMulti();
+  document.getElementById('tmTa').value = dsl;
+  _tmEditObj = title;
+
+  _tmL('tsy', '─── ' + title + ' — DSL ──────────────');
+  _tmL('tdm', 'Ctrl+Enter — შენახვა · Esc — გაუქმება');
+}
+
+// Cancel edit mode without saving
+function _tmEditCancel() {
+  var title = _tmEditObj;
+  _tmEditObj = null;
+  document.getElementById('tmTa').value = '';
+  if (_tmMulti) tmToggleMulti();
+  _tmL('tdm', title + ' — გაუქმდა');
+}
+
+// Save DSL to Supabase and patch _OBJS locally
+async function _tmSaveDlg(dsl) {
+  var title = _tmEditObj;
+
+  if (typeof parseBulkDSL !== 'function') {
+    _tmL('ter', '✗ bulk-parser.js არ არის ჩატვირთული');
+    return;
+  }
+
+  var result;
+  try {
+    result = parseBulkDSL(dsl);
+  } catch (e) {
+    _tmL('ter', '✗ DSL შეცდომა: ' + e.message);
+    return;
+  }
+
+  // parseBulkDSL may return array or { nodes, title, marker }
+  var nodes = Array.isArray(result) ? result : (result && result.nodes ? result.nodes : []);
+  if (!nodes.length) {
+    _tmL('ter', '✗ DSL: კვანძები ვერ მოიძებნა — შეამოწმე ფორმატი');
+    return;
+  }
+
+  _tmL('tdm', '↑ ' + title + ' — ვინახავ...');
+
+  if (typeof dlgOverrideSave !== 'function') {
+    _tmL('ter', '✗ dlgOverrideSave ვერ მოიძებნა (runtime.js?)');
+    return;
+  }
+
+  var ok = false;
+  try {
+    ok = await dlgOverrideSave(title, nodes, dsl);
+  } catch (e) {
+    _tmL('ter', '✗ Supabase: ' + e.message);
+    return;
+  }
+
+  if (ok) {
+    _tmEditObj = null;
+    document.getElementById('tmTa').value = '';
+    if (_tmMulti) tmToggleMulti();
+    _tmL('tok', title + ' — შენახულია ✓  (ყველა viewer განახლდება)');
+  } else {
+    _tmL('ter', '✗ შენახვა ვერ მოხერხდა — Supabase error');
+    _tmL('tdm', 'DSL textarea-ში რჩება, შეგიძლია კვლავ სცადო');
+  }
 }
 </script>
 </body>
