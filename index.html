@@ -1053,10 +1053,11 @@ function _applyMarkerDom(hsEl, mk) {
   if (mk) {
     if (!mkEl) {
       mkEl = document.createElement('div');
-      mkEl.className = 'hs-marker';
       hsEl.appendChild(mkEl);
     }
-    mkEl.textContent  = mk;
+    // must set color class — without it the element is invisible
+    mkEl.className   = mk === '!' ? 'hs-marker exc' : mk === '?' ? 'hs-marker q' : 'hs-marker chat';
+    mkEl.textContent = mk;
     mkEl.style.display = '';
     if (dotEl) dotEl.style.display = 'none';
   } else {
@@ -1772,11 +1773,12 @@ function _tmObjects() {
     var title = el.dataset.title || '(უსახელო)';
     var oi = el.dataset.oi;
     var obj = (oi != null && typeof _OBJS !== 'undefined' && _OBJS[+oi]) ? _OBJS[+oi] : null;
+    var displayName = (obj && obj.lb) ? obj.lb : title;
     var suffix = '';
     if (obj && obj.dialogue && obj.dialogue.length) {
       suffix = ' [💬 ' + obj.dialogue.length + ']';
     }
-    _tmL('tnf', '◆ ' + title + suffix);
+    _tmL('tnf', '◆ ' + displayName + suffix);
   });
   _tmL('tdm', _SEP);
 }
