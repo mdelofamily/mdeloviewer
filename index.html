@@ -1048,7 +1048,29 @@ function _applyDlgOverride(row) {
   if (!row || !row.obj_title || !row.nodes_json) return;
   var oi = _findOiByTitle(row.obj_title);
   if (oi < 0 || typeof _OBJS === 'undefined' || !_OBJS[oi]) return;
-  _OBJS[oi].dialogue = Array.isArray(row.nodes_json) ? row.nodes_json : [];
+
+  // migrate legacy __OBJ___OBJ__ bug (pre-fix bulk-parser saves)
+  var nodes = (Array.isArray(row.nodes_json) ? row.nodes_json : []).map(function(node) {
+    if (!node || !node.text) return node;
+    return Object.assign({}, node, { text: node.text.replace(/__OBJ___OBJ__/g, '__OBJ__') });
+  });
+  _OBJS[oi].dialogue = nodes;
+
+  // extract marker from saved DSL (no extra DB column needed)
+  if (row.dsl && typeof parseBulkDSL === 'function') {
+    try {
+      var parsed = parseBulkDSL(row.dsl);
+      var mk = parsed.marker === '...' ? '💬' : (parsed.marker || '');
+      _OBJS[oi].marker = mk;
+      var hsEl = document.querySelector(
+        '.hotspot[data-title="' + row.obj_title.replace(/\\/g,'\\\\').replace(/"/g,'\\"') + '"]:not(.hs-area)'
+      );
+      if (hsEl) {
+        var mkEl = hsEl.querySelector('.hs-marker');
+        if (mkEl) { mkEl.textContent = mk || ''; mkEl.style.display = mk ? '' : 'none'; }
+      }
+    } catch(e) {}
+  }
 }
 
 // Load all overrides for this map on startup
