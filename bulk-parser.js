@@ -34,7 +34,7 @@
 //
 
 // ── OBJ_PREFIX: internal marker for object speakers ─────────
-const _OBJ_PREFIX = '\x01';
+const _OBJ_PREFIX = '__OBJ__';
 
 function parseBulkDSL(raw) {
   const lines  = raw.replace(/\r\n/g, '\n').split('\n');
