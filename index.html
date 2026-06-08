@@ -576,15 +576,34 @@ function blinkAreasByGroupOrTitle(grp, title) {
 // Navigate to a named area or hotspot — shared by btn.area and goToArea
 function _gotoNamedLocation(title) {
   var aEls = document.querySelectorAll('.hs-area[data-title="' + title + '"]');
-  if (aEls.length) { fitAreas(title); blinkAreasByGroupOrTitle('', title); }
-  else {
-    var hs = document.querySelector('.hotspot[data-title="' + title + '"]');
-    if (hs) {
-      var ox = +(hs.dataset.ox || 0), oy = +(hs.dataset.oy || 0);
-      var ow = +(hs.dataset.ow || 64),  oh = +(hs.dataset.oh || 64);
-      wrap.scrollLeft = (ox + ow / 2) * scale - wrap.clientWidth  / 2;
-      wrap.scrollTop  = (oy + oh / 2) * scale - wrap.clientHeight / 2;
+  if (aEls.length) { fitAreas(title); blinkAreasByGroupOrTitle('', title); return; }
+
+  // try exact data-title match — prefer instance with dialogue
+  var _cands = document.querySelectorAll('.hotspot[data-title="' + title + '"]');
+  var hs = null;
+  for (var _j = 0; _j < _cands.length; _j++) {
+    var _cOi = +(_cands[_j].dataset.oi);
+    if (typeof _OBJS !== 'undefined' && _OBJS[_cOi] && _OBJS[_cOi].dialogue && _OBJS[_cOi].dialogue.length) {
+      hs = _cands[_j]; break;
     }
+  }
+  if (!hs && _cands.length) hs = _cands[0];
+
+  // fallback: search by obj.lb or obj.title (renamed objects)
+  if (!hs && typeof _OBJS !== 'undefined') {
+    for (var _i = 0; _i < _OBJS.length; _i++) {
+      if (_OBJS[_i] && (_OBJS[_i].lb === title || _OBJS[_i].title === title)) {
+        hs = document.querySelector('.hotspot[data-oi="' + _i + '"]');
+        if (hs) break;
+      }
+    }
+  }
+
+  if (hs) {
+    var ox = +(hs.dataset.ox || 0), oy = +(hs.dataset.oy || 0);
+    var ow = +(hs.dataset.ow || 64),  oh = +(hs.dataset.oh || 64);
+    wrap.scrollLeft = (ox + ow / 2) * scale - wrap.clientWidth  / 2;
+    wrap.scrollTop  = (oy + oh / 2) * scale - wrap.clientHeight / 2;
   }
 }
 
