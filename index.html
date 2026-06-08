@@ -1085,7 +1085,7 @@ function _applyDlgOverride(row) {
       var parsed = parseBulkDSL(row.dsl);
       var mk = parsed.marker === '...' ? '💬' : (parsed.marker || '');
       _OBJS[oi].marker = mk;
-      if (parsed.title) _OBJS[oi].lb = parsed.title;
+      if (parsed.title) { _OBJS[oi].lb = parsed.title; _OBJS[oi].title = parsed.title; }
       // use data-oi for exact targeting — data-title may be shared by identical objects
       var hsEl = document.querySelector('.hotspot[data-oi="' + oi + '"]:not(.hs-area)');
       _applyMarkerDom(hsEl, mk);
@@ -1142,7 +1142,7 @@ window.dlgGetCurrentDsl = function(objTitle) {
   if (oi < 0 || typeof _OBJS === 'undefined' || !_OBJS[oi]) return '';
   var obj = _OBJS[oi];
   if (obj.dialogue && obj.dialogue.length && typeof unparseDialogue === 'function') {
-    return unparseDialogue({ lb: objTitle, dialogue: obj.dialogue, marker: obj.marker || '' });
+    return unparseDialogue({ lb: obj.lb || objTitle, dialogue: obj.dialogue, marker: obj.marker || '' });
   }
   return '';
 };
