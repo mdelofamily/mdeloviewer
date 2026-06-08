@@ -1556,7 +1556,20 @@ function tmToggleMulti() {
   slash.style.display = _tmMulti ? 'none'  : '';
   ta.style.display    = _tmMulti ? 'block' : 'none';
   send.style.display  = _tmMulti ? 'block' : 'none';
+  if (_tmMulti) {
+    ta.style.overflowY = 'auto';
+    ta.style.maxHeight = Math.round(window.innerHeight * 0.6) + 'px';
+    _tmTaResize(ta);
+  } else {
+    ta.style.height = '';
+  }
   setTimeout(function () { (_tmMulti ? ta : inp).focus(); }, 50);
+}
+
+function _tmTaResize(ta) {
+  ta = ta || document.getElementById('tmTa');
+  ta.style.height = 'auto';
+  ta.style.height = ta.scrollHeight + 'px';
 }
 
 // ── send handler (shared by button and Ctrl+Enter) ──
@@ -1584,6 +1597,7 @@ function tmSend() {
       else { closeTerm(); }
     }
   });
+  ta.addEventListener('input', function () { if (_tmMulti) _tmTaResize(ta); });
 })();
 
 
@@ -1846,6 +1860,7 @@ function _tmDlgEdit(args) {
   // switch to multiline mode and load DSL
   if (!_tmMulti) tmToggleMulti();
   document.getElementById('tmTa').value = dsl;
+  _tmTaResize();
   _tmEditObj = objKey;
 
   _tmL('tsy', '─── ' + ((_OBJS && _OBJS[+hs.dataset.oi] && _OBJS[+hs.dataset.oi].lb) || objKey) + ' — DSL ──────────────');
