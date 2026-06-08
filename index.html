@@ -568,6 +568,19 @@ function blinkAreasByGroupOrTitle(grp, title) {
   if (!els.length && title) els = [...document.querySelectorAll('.hs-area[data-title="' + title + '"]')];
   _doBlink(els);
 }
+// Navigate to a named area or hotspot — shared by btn.area and goToArea
+function _gotoNamedLocation(title) {
+  var aEls = document.querySelectorAll('.hs-area[data-title="' + title + '"]');
+  if (aEls.length) { fitAreas(title); blinkAreasByGroupOrTitle('', title); }
+  else {
+    var hs = document.querySelector('.hotspot[data-title="' + title + '"]');
+    if (hs) {
+      wrap.scrollLeft = +hs.dataset.ox * scale - wrap.clientWidth / 2;
+      wrap.scrollTop  = +hs.dataset.oy * scale - wrap.clientHeight / 2;
+    }
+  }
+}
+
 function fitAreas(title) {
   const els = [...document.querySelectorAll('.hs-area[data-title="' + title + '"]')];
   if (!els.length) return;
@@ -702,8 +715,7 @@ function _dlgShowNode(nodeId) {
         if (btn.link) window.open(btn.link, '_blank');
         if (btn.area) {
           closeHsPopup();
-          fitAreas(btn.area);
-          blinkAreasByGroupOrTitle('', btn.area);
+          _gotoNamedLocation(btn.area);
           return;
         }
         if (btn.nextNode && _dlgNodes[btn.nextNode]) { _dlgShowNode(btn.nextNode); }
@@ -1024,13 +1036,7 @@ function closeNotifPopup() { const p = document.getElementById('notifPopup'); p.
 function goToArea() {
   if (!_curNotif || !_curNotif.linked_area) return;
   closeNotifPopup();
-  const title = _curNotif.linked_area;
-  const els = document.querySelectorAll('.hs-area[data-title="' + title + '"]');
-  if (els.length) { fitAreas(title); blinkAreasByGroupOrTitle('', title); }
-  else {
-    const hs = document.querySelector('.hotspot[data-title="' + title + '"]');
-    if (hs) { const ox = +hs.dataset.ox, oy = +hs.dataset.oy; wrap.scrollLeft = ox * scale - wrap.clientWidth / 2; wrap.scrollTop = oy * scale - wrap.clientHeight / 2; }
-  }
+  _gotoNamedLocation(_curNotif.linked_area);
 }
 
 // ── dialogue overrides (Supabase) ──
