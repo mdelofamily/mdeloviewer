@@ -705,19 +705,33 @@ function _parseNodes(dialogue) {
   const first = dialogue && dialogue.length ? dialogue[0].id : null;
   return { nodes, first };
 }
-function _dlgShowNode(nodeId) {
+function _dlgShowNode(nodeId, selectedLabel) {
   const node = _dlgNodes[nodeId]; if (!node) return;
   const body = document.getElementById('hsPopupBody');
   const btnWrap = document.getElementById('hsPopupBtns');
   if (btnWrap) { btnWrap.innerHTML = ''; btnWrap.classList.remove('visible'); }
-  body.innerHTML = '';
+
+  // append selected answer to history (no typewriter, italic)
+  if (selectedLabel) {
+    const nick = localStorage.getItem('mdelo_nick') || 'მოგზაური';
+    const ans = document.createElement('div');
+    ans.style.cssText = 'font-style:italic;opacity:0.55;font-size:12px;margin:6px 0 2px;';
+    ans.textContent = nick + ': ' + selectedLabel;
+    body.appendChild(ans);
+  }
+
   const objTitle = (_dlgObj && (_dlgObj.title || _dlgObj.lb)) || '';
   const _he = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const txt = (node.text || '')
     .replace(/\[\]/g, (localStorage.getItem('mdelo_nick') || 'მოგზაური') + ':')
     .replace(/__OBJ__([^<"]*)/g, (_, name) => (name.trim() || _he(objTitle)) + ':')
     .replace(/&lt;([^&<\n]*)&gt;/g, (_, name) => '<b>' + (name.trim() || _he(objTitle)) + ':</b>');
-  _typewriterHTML(body, parseLinks(txt), 35, () => {
+
+  // new node appended into fresh div — history above stays intact
+  const nodeEl = document.createElement('div');
+  body.appendChild(nodeEl);
+
+  _typewriterHTML(nodeEl, parseLinks(txt), 35, () => {
     if (!btnWrap) return;
     (node.buttons || []).forEach(btn => {
       if (!btn.label) return;
@@ -737,12 +751,8 @@ function _dlgShowNode(nodeId) {
           }).catch(() => {});
         }
         if (btn.link) window.open(btn.link, '_blank');
-        if (btn.area) {
-          closeHsPopup();
-          _gotoNamedLocation(btn.area);
-          return;
-        }
-        if (btn.nextNode && _dlgNodes[btn.nextNode]) { _dlgShowNode(btn.nextNode); }
+        if (btn.area) { closeHsPopup(); _gotoNamedLocation(btn.area); return; }
+        if (btn.nextNode && _dlgNodes[btn.nextNode]) { _dlgShowNode(btn.nextNode, btn.label); }
         else { closeHsPopup(); }
       };
       btnWrap.appendChild(b);
