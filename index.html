@@ -457,7 +457,8 @@ wrap.addEventListener('click', e => {
     } else {
       const oi = hs.dataset.oi;
       const objData = (oi != null && _OBJS[+oi]) ? _OBJS[+oi] : null;
-      openHsPopup(hs, hs.dataset.title || '', hs.dataset.tooltip || '', objData);
+      const displayTitle = (objData && (objData.title || objData.lb)) || hs.dataset.title || '';
+      openHsPopup(hs, displayTitle, hs.dataset.tooltip || '', objData);
     }
     return;
   }
