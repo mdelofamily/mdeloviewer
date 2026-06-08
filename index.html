@@ -777,7 +777,7 @@ function openHsPopup(el, title, raw, obj) {
   document.getElementById('hsPopupBody').innerHTML = '';
   const bw = document.getElementById('hsPopupBtns');
   if (bw) bw.innerHTML = '';
-  const pw = Math.min(window.innerWidth * 0.88, 360), left = (window.innerWidth - pw) / 2, top = Math.max(60, (window.innerHeight - 200) / 2);
+  const pw = Math.min(window.innerWidth * 0.95), left = (window.innerWidth - pw) / 2, top = Math.max(60, (window.innerHeight - 200) / 2);
   popup.style.cssText = 'display:block;left:' + left + 'px;top:' + top + 'px;max-width:' + pw + 'px;';
   popup.classList.add('show');
   wrap.style.overflow = 'hidden';
