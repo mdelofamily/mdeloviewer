@@ -104,7 +104,7 @@ body{background:#111;overflow:hidden;width:100vw;height:100dvh;}
 .hs-area{border:none;background:transparent;cursor:pointer;border-radius:4px;}
 .hotspot.no-interact{cursor:default;pointer-events:none;}
 .hs-area:hover{background:rgba(255,220,80,0.07);}
-#areaPopup{display:none;position:fixed;z-index:60;background:rgba(22,27,34,0.97);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid #f0a500;border-radius:10px;padding:11px 14px 12px;flex-direction:column;gap:8px;min-width:200px;max-width:min(88vw,320px);}
+#areaPopup{display:none;position:fixed;z-index:60;left:50%!important;top:20%!important;transform:translateX(-50%)!important;background:rgba(22,27,34,0.55);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(240,165,0,0.45);border-radius:10px;padding:11px 14px 12px;flex-direction:column;gap:8px;min-width:200px;max-width:min(88vw,320px);}
 #areaPopup.show{display:flex;}
 #areaPopup .ap-close{position:absolute;top:7px;right:10px;background:none;border:none;color:#8b949e;font-size:15px;cursor:pointer;}
 #areaPopup .ap-title{font-size:14px;font-weight:600;color:#f0a500;padding-right:18px;}
@@ -512,59 +512,105 @@ function openAreaPopup(title, tip) {
   const pop = document.getElementById('areaPopup');
   const pw = Math.min(window.innerWidth * 0.88, 320);
   pop.style.cssText = 'left:' + ((window.innerWidth - pw) / 2) + 'px;top:' + Math.max(60, (window.innerHeight - 180) / 2) + 'px;max-width:' + pw + 'px;';
-  pop.classList.add('show'); wrap.style.overflow = 'hidden';
+  pop.classList.add('show');
 }
 function closeAreaPopup() {
   document.getElementById('areaPopup').classList.remove('show');
-  wrap.style.overflow = 'auto';
+  if (_areaHlCanvas) { _areaHlCanvas.remove(); _areaHlCanvas = null; }
 }
 
 // ── area blink outline ──
+var _areaHlCanvas = null;
+function _tracePoly(cells, TS) {
+  const edgeSet = new Set();
+  const norm = (x1,y1,x2,y2) => x1<x2||(x1===x2&&y1<y2)?x1+','+y1+','+x2+','+y2:x2+','+y2+','+x1+','+y1;
+  cells.forEach(key => {
+    const [r,cc] = key.split(',').map(Number);
+    const px=cc*TS, py=r*TS;
+    if (!cells.has(r+','+(cc-1))) edgeSet.add(norm(px,py,px,py+TS));
+    if (!cells.has(r+','+(cc+1))) edgeSet.add(norm(px+TS,py,px+TS,py+TS));
+    if (!cells.has((r-1)+','+cc)) edgeSet.add(norm(px,py,px+TS,py));
+    if (!cells.has((r+1)+','+cc)) edgeSet.add(norm(px,py+TS,px+TS,py+TS));
+  });
+  const edges = [...edgeSet].map(s=>s.split(',').map(Number));
+  const adj = new Map();
+  edges.forEach(([x1,y1,x2,y2],i) => {
+    const k1=x1+','+y1, k2=x2+','+y2;
+    if (!adj.has(k1)) adj.set(k1,[]);
+    if (!adj.has(k2)) adj.set(k2,[]);
+    adj.get(k1).push(i); adj.get(k2).push(i);
+  });
+  const used = new Set(), polys = [];
+  for (let si=0; si<edges.length; si++) {
+    if (used.has(si)) continue;
+    const [sx,sy] = [edges[si][0],edges[si][1]];
+    let cx=sx, cy=sy, ci=si;
+    const poly = [];
+    do {
+      used.add(ci);
+      const [x1,y1,x2,y2]=edges[ci];
+      poly.push([cx,cy]);
+      [cx,cy] = (x1===cx&&y1===cy)?[x2,y2]:[x1,y1];
+      const nb=(adj.get(cx+','+cy)||[]).find(i=>!used.has(i));
+      if (nb===undefined) break;
+      ci=nb;
+    } while (cx!==sx||cy!==sy);
+    if (poly.length>=3) polys.push(poly);
+  }
+  return polys;
+}
+function _drawRounded(ctx, poly, R) {
+  ctx.beginPath();
+  const n=poly.length;
+  for (let i=0; i<n; i++) {
+    const prev=poly[(i-1+n)%n], curr=poly[i], next=poly[(i+1)%n];
+    const dx1=curr[0]-prev[0], dy1=curr[1]-prev[1];
+    const dx2=next[0]-curr[0], dy2=next[1]-curr[1];
+    const l1=Math.sqrt(dx1*dx1+dy1*dy1)||1, l2=Math.sqrt(dx2*dx2+dy2*dy2)||1;
+    const r=Math.min(R,l1/2,l2/2);
+    const p1x=curr[0]-r*dx1/l1, p1y=curr[1]-r*dy1/l1;
+    if (i===0) ctx.moveTo(p1x,p1y); else ctx.lineTo(p1x,p1y);
+    ctx.arcTo(curr[0],curr[1],curr[0]+r*dx2/l2,curr[1]+r*dy2/l2,r);
+  }
+  ctx.closePath(); ctx.stroke();
+}
 function _doBlink(els) {
   if (!els.length) return;
-  const TS = _TS;
-  const cells = new Set();
+  const TS=_TS;
+  const cells=new Set();
   els.forEach(el => {
-    const ox = +el.dataset.ox, oy = +el.dataset.oy, ow = +el.dataset.ow, oh = +el.dataset.oh;
-    for (let r = 0; r < Math.round(oh / TS); r++)
-      for (let cc = 0; cc < Math.round(ow / TS); cc++)
-        cells.add((Math.round(oy / TS) + r) + ',' + (Math.round(ox / TS) + cc));
+    const ox=+el.dataset.ox,oy=+el.dataset.oy,ow=+el.dataset.ow,oh=+el.dataset.oh;
+    for (let r=0;r<Math.round(oh/TS);r++)
+      for (let cc=0;cc<Math.round(ow/TS);cc++)
+        cells.add((Math.round(oy/TS)+r)+','+(Math.round(ox/TS)+cc));
   });
-  const edges = [];
-  cells.forEach(key => {
-    const [r, cc] = key.split(',').map(Number);
-    const px = cc * TS, py = r * TS;
-    if (!cells.has(r + ',' + (cc - 1))) edges.push([px, py, px, py + TS]);
-    if (!cells.has(r + ',' + (cc + 1))) edges.push([px + TS, py, px + TS, py + TS]);
-    if (!cells.has((r - 1) + ',' + cc)) edges.push([px, py, px + TS, py]);
-    if (!cells.has((r + 1) + ',' + cc)) edges.push([px, py + TS, px + TS, py + TS]);
-  });
-  if (!edges.length) return;
-  const ov = document.createElement('canvas');
-  ov.width = _W; ov.height = _H;
-  ov.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:15;';
+  const polys=_tracePoly(cells,TS);
+  if (!polys.length) return;
+  if (_areaHlCanvas) { _areaHlCanvas.remove(); _areaHlCanvas=null; }
+  const ov=document.createElement('canvas');
+  ov.width=_W; ov.height=_H;
+  ov.style.cssText='position:absolute;top:0;left:0;pointer-events:none;z-index:15;';
   inner.appendChild(ov);
-  const ctx = ov.getContext('2d');
-  ctx.lineWidth = 2; ctx.lineCap = 'square';
+  const ctx=ov.getContext('2d');
+  const R=Math.max(4,TS*0.25);
+  ctx.lineWidth=2.5; ctx.lineCap='round'; ctx.lineJoin='round';
   function draw(alpha) {
-    ctx.clearRect(0, 0, ov.width, ov.height);
-    if (alpha <= 0) return;
-    ctx.strokeStyle = 'rgba(255,220,80,' + alpha.toFixed(2) + ')';
-    ctx.beginPath();
-    edges.forEach(([x1, y1, x2, y2]) => { ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); });
-    ctx.stroke();
+    ctx.clearRect(0,0,ov.width,ov.height);
+    if (alpha<=0) return;
+    ctx.strokeStyle='rgba(255,220,80,'+alpha.toFixed(2)+')';
+    polys.forEach(p=>_drawRounded(ctx,p,R));
   }
-  const PULSE_MS = 550; let start = null, phase = 0;
+  const PULSE=550; let start=null, phase=0;
   function frame(ts) {
-    if (!start) start = ts;
-    const t = Math.min((ts - start) / PULSE_MS, 1);
-    draw(phase % 2 === 0 ? t : 1 - t);
-    if (t < 1) { requestAnimationFrame(frame); }
-    else {
-      phase++;
-      if (phase < 6) { start = null; requestAnimationFrame(frame); }
-      else { let fo = 1; (function fade() { fo -= 0.08; if (fo > 0) { draw(fo * 0.9); requestAnimationFrame(fade); } else { draw(0); ov.remove(); } })(); }
-    }
+    if (!start) start=ts;
+    const t=Math.min((ts-start)/PULSE,1);
+    draw(phase%2===0?t:1-t);
+    if (t<1) { requestAnimationFrame(frame); return; }
+    phase++;
+    if (phase<6) { start=null; requestAnimationFrame(frame); return; }
+    // blink done — keep persistent at low alpha
+    draw(0.45);
+    _areaHlCanvas=ov;
   }
   requestAnimationFrame(frame);
 }
@@ -715,7 +761,7 @@ function _dlgShowNode(nodeId, selectedLabel) {
   if (selectedLabel) {
     const nick = localStorage.getItem('mdelo_nick') || 'მოგზაური';
     const ans = document.createElement('div');
-    ans.style.cssText = 'font-style:italic;opacity:0.55;font-size:12px;margin:6px 0 2px;';
+    ans.style.cssText = 'font-style:italic;opacity:0.55;font-size:12px;margin:6px 0 2px; display:flex; justify-content:flex-end; text-align:right;';
     ans.textContent = nick + ': ' + selectedLabel;
     body.appendChild(ans);
   }
