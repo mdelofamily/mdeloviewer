@@ -1110,9 +1110,9 @@ function tmToggleMulti() {
   ta.style.display    = _tmMulti ? 'block' : 'none';
   send.style.display  = _tmMulti ? 'block' : 'none';
   if (_tmMulti) {
+    ta.style.height = '44px';
+    ta.style.maxHeight = '88px';
     ta.style.overflowY = 'auto';
-    ta.style.maxHeight = Math.round(window.innerHeight * 0.6) + 'px';
-    _tmTaResize(ta);
   } else {
     ta.style.height = '';
   }
@@ -1440,6 +1440,7 @@ async function _tmSaveDlg(dsl) {
 
   var result;
   try {
+    // strip #? / #! headers before passing to parseBulkDSL
     var _dslClean = (typeof parseUnlockHeaders === 'function') ? parseUnlockHeaders(dsl).dsl.trim() : dsl;
     result = parseBulkDSL(_dslClean || '@0\n');
   } catch (e) {
