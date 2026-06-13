@@ -201,8 +201,15 @@ function _parseBtn(line) {
   const areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
   if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
 
+  // extract [^Xname] marker effect tokens  e.g. [^?კარიბჭე] [^~სახლი]
+  const markers = [];
+  rest = rest.replace(/\[\^([!?~-])([^\]]+)\]/g, function(_, mk, title) {
+    markers.push({ mk: mk === '-' ? '' : mk, title: title.trim() });
+    return '';
+  }).trim();
+
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyType, link, area };
+  return { label: rest, nextNode, notify, notifyType, link, area, markers };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -275,7 +282,8 @@ function unparseDialogue(o) {
       const next     = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
       const areaPart = btn.area ? ' @@' + btn.area : '';
       const linkPart = btn.link ? ' |'  + btn.link : '';
-      const suffix   = areaPart + linkPart + next;
+      const mkPart   = (btn.markers || []).map(m => ' [^' + (m.mk || '-') + m.title + ']').join('');
+      const suffix   = areaPart + linkPart + mkPart + next;
       if (btn.notify) {
         const tc = _TYPE_CHARS[btn.notifyType] || '*';
         lines.push('->' + tc + ' ' + btn.label + suffix);
