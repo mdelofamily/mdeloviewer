@@ -201,7 +201,7 @@ function _parseBtn(line) {
   const areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
   if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
 
-  // extract [^Xname] marker effect tokens  e.g. [^?კარიბჭე] [^~სახლი]
+  // [^Xსახელი] marker effect tokens e.g. [^?კარიბჭე] [^~სახლი]
   const markers = [];
   rest = rest.replace(/\[\^([!?~-])([^\]]+)\]/g, function(_, mk, title) {
     markers.push({ mk: mk === '-' ? '' : mk, title: title.trim() });
