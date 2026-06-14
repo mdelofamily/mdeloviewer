@@ -204,7 +204,7 @@ function _parseBtn(line) {
   // [^Xსახელი] marker effect tokens e.g. [^?კარიბჭე] [^~სახლი]
   const markers = [];
   rest = rest.replace(/\[\^([!?~-])([^\]]+)\]/g, function(_, mk, title) {
-    markers.push({ mk: mk === '-' ? '' : mk, title: title.trim() });
+    markers.push({ mk: mk === '-' ? '' : mk === '~' ? '💬' : mk, title: title.trim() });
     return '';
   }).trim();
 
