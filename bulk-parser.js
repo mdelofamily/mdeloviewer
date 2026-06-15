@@ -215,8 +215,15 @@ function _parseBtn(line) {
     return '';
   }).trim();
 
+  // [+flag_name] — button-level flag set e.g. [+gate_entered]
+  const flags = [];
+  rest = rest.replace(/\[\+([^\]]+)\]/g, function(_, name) {
+    flags.push(name.trim());
+    return '';
+  }).trim();
+
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyType, link, area, markers };
+  return { label: rest, nextNode, notify, notifyType, link, area, markers, flags };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -290,7 +297,8 @@ function unparseDialogue(o) {
       const areaPart = btn.area ? ' @@' + btn.area : '';
       const linkPart = btn.link ? ' |'  + btn.link : '';
       const mkPart   = (btn.markers || []).map(m => ' [^' + (m.mk || '-') + m.title + ']').join('');
-      const suffix   = areaPart + linkPart + mkPart + next;
+      const flagPart = (btn.flags   || []).map(f => ' [+' + f + ']').join('');
+      const suffix   = areaPart + linkPart + mkPart + flagPart + next;
       if (btn.notify) {
         const tc = _TYPE_CHARS[btn.notifyType] || '*';
         lines.push('->' + tc + ' ' + btn.label + suffix);
