@@ -99,6 +99,13 @@ function parseBulkDSL(raw) {
 
     if (!cur) continue;
 
+    // ── #if flag =>N conditional redirect ───────────────────────
+    if (/^>>\s/.test(line)) {
+      const ifM = line.match(/^>>\s+(\S+)\s*=>(\d+)/);
+      if (ifM) cur.condition = { flag: ifM[1], target: 'node_' + ifM[2] };
+      continue;
+    }
+
     // ── choice line ──────────────────────────────────────────
     if (/^->/.test(line)) {
       flush();
