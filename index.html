@@ -202,6 +202,11 @@ have nice shit!" data-oi="7" data-dialog-id="dlg_7" style="left:832px;top:736px;
     <div class="hotspot" data-ox="512" data-oy="1056" data-ow="64" data-oh="96" data-title="ეკალი" data-tooltip="" data-oi="25" data-dialog-id="dlg_25" style="left:512px;top:1056px;width:64px;height:96px;"><div class="hs-dot"></div></div>
     <div class="hotspot" data-ox="1312" data-oy="448" data-ow="64" data-oh="64" data-title="ნიავი" data-tooltip="" data-oi="26" data-dialog-id="dlg_26" style="left:1312px;top:448px;width:64px;height:64px;"><div class="hs-dot"></div></div>
     <div class="hotspot" data-ox="0" data-oy="1536" data-ow="64" data-oh="64" data-title="ნიავქარი" data-tooltip="" data-oi="27" data-dialog-id="dlg_27" style="left:0px;top:1536px;width:64px;height:64px;"><div class="hs-dot"></div></div>
+    <div class="hotspot hs-area" data-group="g_1781517156603" data-ox="768" data-oy="960" data-ow="320" data-oh="192" data-title="ველური არე" data-tooltip="" style="left:768px;top:960px;width:320px;height:192px;"></div>
+    <div class="hotspot hs-area" data-group="g_1781517156603" data-ox="640" data-oy="1152" data-ow="128" data-oh="128" data-title="ველური არე" data-tooltip="" style="left:640px;top:1152px;width:128px;height:128px;"></div>
+    <div class="hotspot hs-area" data-group="g_1781517152154" data-ox="672" data-oy="1088" data-ow="96" data-oh="96" data-title="" data-tooltip="" style="left:672px;top:1088px;width:96px;height:96px;"></div>
+    <div class="hotspot hs-area" data-group="g_1781517156603" data-ox="1024" data-oy="1088" data-ow="224" data-oh="320" data-title="ველური არე" data-tooltip="" style="left:1024px;top:1088px;width:224px;height:320px;"></div>
+    <div class="hotspot hs-area" data-group="g_1781517156603" data-ox="704" data-oy="1120" data-ow="320" data-oh="288" data-title="ველური არე" data-tooltip="" style="left:704px;top:1120px;width:320px;height:288px;"></div>
   </div>
 </div>
 <button id="questBtn" onclick="toggleQuest()">?</button><div id="questPopup">პროექტი ციფრული ეზო, ეფუძნება იდეას, რომ ეზოს ვიზუალური მოდელი და მასზე მნიშვნელოვანი დეტალების დატანა,  გააუმჯობესებს კომუნიკაციის ხარისხს. აგრეთვე სასურველი მიზნის, მისი მიღწვისკენ გადადგმული და გადასადგმელი ნაბიჯების ვიზუალური სიცხადე, გაზრდის მოქმედების მოტივაციას.</div>
@@ -1481,10 +1486,6 @@ function _dlgShowNode(nodeId, selectedLabel) {
             if (_oi != null && _OBJS && _OBJS[+_oi]) _OBJS[+_oi].marker = m.mk === '~' ? '...' : m.mk;
           });
         }
-        // [+flag_name] button-level flag set
-        if (btn.flags && btn.flags.length) {
-          btn.flags.forEach(function(f) { if (typeof flagSet === 'function') flagSet(f); });
-        }
         if (btn.nextNode && _dlgNodes[btn.nextNode]) { _dlgShowNode(btn.nextNode, btn.label); }
         else {
           if (_dlgActive && typeof completeDialog === 'function') completeDialog(_dlgActive);
@@ -1829,7 +1830,6 @@ function _applyMarkerDom(hsEl, mk) {
       mkEl = document.createElement('div');
       hsEl.appendChild(mkEl);
     }
-    // must set color class — without it the element is invisible
     mkEl.className   = mk === '!' ? 'hs-marker exc' : mk === '?' ? 'hs-marker q' : 'hs-marker chat';
     mkEl.textContent = mk === '💬' ? '...' : mk;
     mkEl.style.display = '';
@@ -1838,6 +1838,28 @@ function _applyMarkerDom(hsEl, mk) {
     if (mkEl)  mkEl.style.display  = 'none';
     if (dotEl) dotEl.style.display = '';
   }
+  // persist marker state
+  var title = hsEl.dataset.title;
+  if (title) _markerSave(title, mk || '');
+}
+
+// ── marker persistence ───────────────────────────────────────
+var _MK_KEY = 'mdelo_markers_' + (typeof _CFG !== 'undefined' ? (_CFG.title || 'map') : 'map').replace(/[^a-zA-Z0-9ა-ჿ_-]/g, '_');
+function _markerSave(title, mk) {
+  try {
+    var s = JSON.parse(localStorage.getItem(_MK_KEY) || '{}');
+    if (mk === '') delete s[title]; else s[title] = mk;
+    localStorage.setItem(_MK_KEY, JSON.stringify(s));
+  } catch(e) {}
+}
+function _markerRestore() {
+  try {
+    var s = JSON.parse(localStorage.getItem(_MK_KEY) || '{}');
+    Object.keys(s).forEach(function(title) {
+      var el = document.querySelector('.hotspot[data-title="' + title + '"]:not(.hs-area)');
+      if (el) _applyMarkerDom(el, s[title]);
+    });
+  } catch(e) {}
 }
 
 // Patch _OBJS[oi].dialogue with data from Supabase row
@@ -1955,6 +1977,7 @@ window.addEventListener('load', () => {
   applySpotHash();
   applyAreaHash();
   _tmInit();
+  _markerRestore();
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').then(reg => {
       if ('periodicSync' in reg) { reg.periodicSync.register('notif-check', { minInterval: 5 * 60 * 1000 }).catch(() => {}); }
