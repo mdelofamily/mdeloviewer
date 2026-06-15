@@ -251,6 +251,11 @@ function unparseDialogue(o) {
       (title  && ni === 0 ? ' ' + title  : '');
     lines.push(hdr);
 
+    // >> flag =>N condition
+    if (node.condition) {
+      lines.push('>> ' + node.condition.flag + ' =>' + node.condition.target.replace('node_', ''));
+    }
+
     // text — strip HTML back to DSL
     if (node.text) {
       const plain = node.text
