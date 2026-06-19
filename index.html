@@ -2257,7 +2257,7 @@ function _tmInit() {
 var _tmOpen = false, _tmFull = false, _tmHist = [], _tmHIdx = -1, _tmHCur = '', _tmMulti = false;
 var _tmBooted = false;
 var _tmEditObj = null; // title of object currently being edited in DSL mode
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/სრული','/ისტორია','/ვადა','/ტექსტი','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/ფოთოლი'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/სრული','/ისტორია','/ვადა','/ტექსტი','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/edit','/ფოთოლი'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -2500,6 +2500,7 @@ function _tmRun(raw) {
     'cd':          _tmMenuCd,
     'md':          _tmMenuMd,
     'rm':          _tmMenuRm,
+    'edit':        _tmMenuEdit,
     'ფოთოლი':      _tmMenuLeaf
   };
   var fn = map[cmd];
@@ -2536,7 +2537,8 @@ function _tmHelp() {
     ['/cd [სახელი|..|/]', 'მენიუში ნავიგაცია'],
     ['/md <სახელი>',      'ახალი ქვე-სექცია + ავტო-cd'],
     ['/ფოთოლი ტექსტი|ინდიკატორი', 'item-ის დამატება მიმდინარე კვანძში'],
-    ['/rm <სახელი|N>',    'სექციის (სახელით) ან item-ის (ინდექსით) წაშლა']
+    ['/rm <სახელი|N>',    'სექციის (სახელით) ან item-ის (ინდექსით) წაშლა'],
+    ['/edit <N> <...>',   'item-ის [N] შინაარსის რედაქტირება']
   ];
   _tmL('tdm', _SEP); _tmL('tsy', '--- ბრძანები ---');
   for (var i = 0; i < list.length; i++) {
@@ -2903,6 +2905,37 @@ async function _tmMenuRm(args) {
     _tmL('tok', '✗ "' + arg + '" — სექცია წაიშალა (ქვე-შემცველობასთან ერთად)');
     await _tmMenuSaveNode(removed.id, { deleted: true });
   }
+}
+
+// Edit an existing item in place by index.
+//   /edit <N> <ახალი ტექსტი>         — text item: ცვლის label-ს მთლიანად
+//   /edit <N> <ახალი ტექსტი> <%>     — progress item: ცვლის label-სა და value-ს ერთად
+//   /edit <N> <%>                    — progress item: ცვლის მხოლოდ value-ს, label ხელუხლებელია
+async function _tmMenuEdit(args) {
+  var node = _tmMenuCwdNode();
+  if (!node) { _tmL('ter', 'root-ში items არ არსებობს'); return; }
+  var idx = parseInt(args[0]);
+  if (isNaN(idx) || !node.items || !node.items[idx]) {
+    _tmL('ter', 'გამოყენება: /edit <ინდექსი> <ახალი შინაარსი> — სია: /ls');
+    return;
+  }
+  var rest = args.slice(1);
+  if (!rest.length) { _tmL('ter', 'გამოყენება: /edit <ინდექსი> <ახალი შინაარსი>'); return; }
+
+  var itObj = typeof node.items[idx] === 'string' ? { type: 'text', emoji: '•', label: node.items[idx] } : node.items[idx];
+
+  if (itObj.type === 'progress') {
+    var lastIsNum = /^\d+$/.test(rest[rest.length - 1]);
+    var label = (lastIsNum ? rest.slice(0, -1) : rest).join(' ').trim();
+    if (lastIsNum) itObj.value = Math.max(0, Math.min(100, parseInt(rest[rest.length - 1])));
+    if (label) itObj.label = label;
+  } else {
+    itObj.label = rest.join(' ').trim();
+  }
+
+  node.items[idx] = itObj;
+  _tmL('tok', '✎ [' + idx + '] განახლდა');
+  await _tmMenuSaveNode(node.id, { items_json: node.items });
 }
 
 // Partial upsert into menu_overrides — only the given fields get written/replaced server-side.
