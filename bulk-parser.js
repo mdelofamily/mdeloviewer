@@ -21,6 +21,9 @@
 //   ->~ text =>N             — choice + danger notification
 //   ->+ text =>N             — choice + project notification
 //   ->. text =>N             — choice + done notification
+//   [$name]                  — button-level: run saved macro "name" on click
+//                               (resolved via window.runMacro — local scope wins
+//                               over საერთო on a name clash, same as /macro)
 //
 // speaker encoding in HTML:
 //   <b class="spk-player">[]</b>        — [] player placeholder
@@ -171,6 +174,7 @@ function parseBulkDSL(raw) {
 //   -> label =>N                 — jump to node N
 //   -> label |https://url        — open URL in new tab
 //   -> label @@ზონის სახელი      — navigate map to area (fitAreas)
+//   -> label [$macro_name]      — run saved macro (window.runMacro) on click
 //   ->* label @@area |url =>N   — all modifiers can combine
 //   notify prefix: ->*  ->!  ->~  ->+  ->.
 //
@@ -198,15 +202,12 @@ function _parseBtn(line) {
     nextNode = 'node_' + nxtM[2];
   }
 
-  // extract trailing |url  (no spaces in URL)
-  let link = '';
-  const linkM = rest.match(/^(.*?)\s*\|(\S+)\s*$/);
-  if (linkM) { link = linkM[2]; rest = linkM[1].trim(); }
-
-  // extract trailing @@area name  (may contain spaces, must come after |url extraction)
-  let area = '';
-  const areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
-  if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
+  // bracket tokens [^..]/[+..]/[$..] — extracted BEFORE |url and @@area.
+  // These regexes match anywhere in the string regardless of position, so
+  // pulling them out first means a bracket token can sit before OR after
+  // @@area / |url in the DSL line without being swallowed by their
+  // end-anchored "\s*$" matching (which previously ate trailing brackets
+  // as part of the area/url capture).
 
   // [^Xსახელი] marker effect tokens e.g. [^?კარიბჭე] [^~სახლი]
   const markers = [];
@@ -222,8 +223,25 @@ function _parseBtn(line) {
     return '';
   }).trim();
 
+  // [$macro_name] — button-level: run saved macro on click (window.runMacro)
+  const cmds = [];
+  rest = rest.replace(/\[\$([^\]]+)\]/g, function(_, name) {
+    cmds.push(name.trim());
+    return '';
+  }).trim();
+
+  // extract trailing |url  (no spaces in URL)
+  let link = '';
+  const linkM = rest.match(/^(.*?)\s*\|(\S+)\s*$/);
+  if (linkM) { link = linkM[2]; rest = linkM[1].trim(); }
+
+  // extract trailing @@area name  (may contain spaces, must come after |url extraction)
+  let area = '';
+  const areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
+  if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
+
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyType, link, area, markers, flags };
+  return { label: rest, nextNode, notify, notifyType, link, area, markers, flags, cmds };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -303,7 +321,8 @@ function unparseDialogue(o) {
       const linkPart = btn.link ? ' |'  + btn.link : '';
       const mkPart   = (btn.markers || []).map(m => ' [^' + (m.mk || '-') + m.title + ']').join('');
       const flagPart = (btn.flags   || []).map(f => ' [+' + f + ']').join('');
-      const suffix   = areaPart + linkPart + mkPart + flagPart + next;
+      const cmdPart  = (btn.cmds    || []).map(c => ' [$' + c + ']').join('');
+      const suffix   = areaPart + linkPart + mkPart + flagPart + cmdPart + next;
       if (btn.notify) {
         const tc = _TYPE_CHARS[btn.notifyType] || '*';
         lines.push('->' + tc + ' ' + btn.label + suffix);
