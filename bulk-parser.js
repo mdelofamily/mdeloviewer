@@ -294,9 +294,14 @@ function unparseDialogue(o) {
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
           return '[' + name + '] ';
         })
-        // legacy bold (editor-written, no class)
+        // legacy bold (editor-written, no class) — uses a function callback here
+        // (not a literal replacement string), since this file's raw text gets
+        // embedded by export-html.js via tmpl.replace(/{{BULK_PARSER_JS}}/g, ...),
+        // and a dollar sign directly followed by a digit in a *string*
+        // replacement argument is a special capture-group token there — it
+        // would get silently swallowed in the exported output.
         .replace(/<b>\[\]<\/b>\s*/gi, '[] ')
-        .replace(/<b>([^<]*)<\/b>\s*/gi, '[$1] ')
+        .replace(/<b>([^<]*)<\/b>\s*/gi, (_, name) => '[' + name + '] ')
         .replace(/<[^>]+>/g, '')
         .replace(/&amp;/g, '&')
         .replace(/&lt;/g,  '<')
@@ -321,7 +326,14 @@ function unparseDialogue(o) {
       const linkPart = btn.link ? ' |'  + btn.link : '';
       const mkPart   = (btn.markers || []).map(m => ' [^' + (m.mk || '-') + m.title + ']').join('');
       const flagPart = (btn.flags   || []).map(f => ' [+' + f + ']').join('');
-      const cmdPart  = (btn.cmds    || []).map(c => ' [$' + c + ']').join('');
+      // NOTE: built via fromCharCode(36), not a literal dollar sign next to a
+      // quote — export-html.js embeds this whole file as a *string*
+      // replacement (tmpl.replace(/{{BULK_PARSER_JS}}/g, bulkParserJS)), and a
+      // dollar sign directly followed by an apostrophe in that string is a
+      // special JS replace-token (inserts the text after the match) — it
+      // would splice the rest of the HTML template into the middle of this
+      // script and corrupt the export.
+      const cmdPart  = (btn.cmds || []).map(c => ' [' + String.fromCharCode(36) + c + ']').join('');
       const suffix   = areaPart + linkPart + mkPart + flagPart + cmdPart + next;
       if (btn.notify) {
         const tc = _TYPE_CHARS[btn.notifyType] || '*';
