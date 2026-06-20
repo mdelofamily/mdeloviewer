@@ -2652,7 +2652,7 @@ function _tmHelp() {
     ['/color #hex',       'ნიკნეიმის ფერი'],
     ['/pwd',              'მენიუს მიმდინარე გზა'],
     ['/ls',               'მენიუს კვანძის შემცველობა'],
-    ['/cd [სახელი|..|/]', 'მენიუში ნავიგაცია'],
+    ['/cd [სახელი|..|/|a/b/c]', 'ნავიგაცია — ერთი ნაბიჯი ან slash-path'],
     ['/md <სახელი>',      'ახალი ქვე-სექცია + ავტო-cd'],
     ['/ფოთოლი ტექსტი|ინდიკატორი', 'item-ის დამატება მიმდინარე კვანძში'],
     ['/rm <სახელი|N>',    'სექციის (სახელით) ან item-ის (ინდექსით) წაშლა'],
@@ -3008,10 +3008,46 @@ function _tmMenuCd(args) {
     if (!_tmMenuStack.length) { _tmL('tnf', 'უკვე root-ში ხარ'); return; }
     _tmMenuStack.pop(); _tmL('tok', _tmMenuPathStr()); return;
   }
+  if (name.indexOf('/') >= 0) { _tmMenuCdPath(name); return; }
+
   var list  = _tmMenuCwdList();
   var found = list.find(function (n) { return (n.title || '').trim() === name; });
   if (!found) { _tmL('ter', 'ვერ მოიძებნა: "' + name + '"'); _tmL('tdm', 'სია: /ls'); return; }
   _tmMenuStack.push(found);
+  _tmL('tok', _tmMenuPathStr());
+}
+
+// Slash-segmented path: "/a/b/c" (absolute, from root) or "a/b/c" (relative, from cwd).
+// ".." is a valid segment too ("../sibling"). Resolved against a throwaway copy of
+// the stack first — Unix `cd` semantics: any missing segment aborts the WHOLE move,
+// cwd stays exactly where it was (no partial hop).
+function _tmMenuCdPath(path) {
+  var absolute = path.charAt(0) === '/';
+  var segments = path.split('/').map(function (s) { return s.trim(); }).filter(Boolean);
+  var stack = absolute ? [] : _tmMenuStack.slice();
+
+  for (var i = 0; i < segments.length; i++) {
+    var seg = segments[i];
+    if (seg === '.') continue;
+    if (seg === '..') {
+      if (!stack.length) {
+        _tmL('ter', 'root-ზე მაღლა ასვლა შეუძლებელია — სეგმენტი ' + (i + 1) + '/' + segments.length + ' (".."), cwd უცვლელია');
+        return;
+      }
+      stack.pop();
+      continue;
+    }
+    var topNode  = stack.length ? stack[stack.length - 1] : null;
+    var children = topNode ? (topNode.children || []) : (_CFG.menu || []);
+    var found = children.find(function (n) { return (n.title || '').trim() === seg; });
+    if (!found) {
+      _tmL('ter', 'ვერ მოიძებნა: "' + seg + '" (სეგმენტი ' + (i + 1) + '/' + segments.length + ') — cwd უცვლელია');
+      return;
+    }
+    stack.push(found);
+  }
+
+  _tmMenuStack = stack;
   _tmL('tok', _tmMenuPathStr());
 }
 
