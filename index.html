@@ -2386,7 +2386,7 @@ var _tmEditObj = null;     // truthy sentinel while an edit session is open (dlg
 var _tmEditMode = null;    // 'dlg' | 'menuItem' | null
 var _tmEditMenuCtx = null; // { node, idx, type } — set only when _tmEditMode === 'menuItem'
 var _tmEditLabel = null;   // human-readable label shown in cancel/header messages
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/სრული','/ისტორია','/ვადა','/ტექსტი','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/edit','/ფოთოლი','/macro'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/სრული','/ისტორია','/ვადა','/ტექსტი','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/edit','/ფოთოლი','/macro'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -2640,6 +2640,7 @@ async function _tmRun(raw) {
     'წასვლა':      _tmGo,
     'ლეგენდა':     _tmLegend,
     'მენიუ':       _tmMenu,
+    'გახსნა':      _tmOpenCmd,
     'სრული':       tmToggleFull,
     'ისტორია':     _histClear,
     'ვადა':        _tmVada,
@@ -2675,6 +2676,7 @@ function _tmHelp() {
     ['/ლეგენდა',          'აღწერას ჩვენა/დამალვა'],
     ['/ლეგენდა რედაქტირება', 'მთავარი ლეგენდის ტექსტის რედაქტირება'],
     ['/მენიუ',            'მენიუს toggle'],
+    ['/გახსნა',           'ტერმინალის გახსნა (macro/window hook-ისთვის)'],
     ['/სრული',            'სრული ↔ ნახევარი'],
     ['/ისტორია',          'ჩატის ისტორიის წაშლა'],
     ['/ვადა [N]',         'ისტ. შენახვა N დღე'],
@@ -2811,6 +2813,10 @@ async function _tmSaveLegend(text) {
   else _tmL('ter', '✗ Supabase: ' + (res && res.msg ? res.msg : 'უცნობი'));
 }
 function _tmMenu() { closeTerm(); toggleMenu(); }
+function _tmOpenCmd() {
+  if (!_tmOpen) _tmOpen_();
+  _tmL('tok', 'ტერმინალი გახსნილია');
+}
 function _tmVada(args) {
   var n = parseInt(args[0]);
   if (!args.length || isNaN(n) || n < 1 || n > 365) {
