@@ -1638,9 +1638,11 @@ function _dlgShowNode(nodeId, selectedLabel) {
             body: JSON.stringify({ type: nType, symbol: nSymbol, text: notifyTxt, sender: sender, linked_area: btn.area || '' })
           }).catch(() => {});
           // push-fetch (Scope C) — non-blocking, independent of the notifications insert above
+          // NOTE: send-push checks the NEW publishable key format (sb_publishable_...),
+          // not the legacy anon JWT (SUPA_KEY) used for REST calls above.
           fetch(SUPA_URL + '/functions/v1/send-push', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'apikey': SUPA_KEY },
+            headers: { 'Content-Type': 'application/json', 'apikey': 'sb_publishable_soE_2V-VW_fIu0DyM6QdzQ_TOvYNxF2' },
             body: JSON.stringify({ map_id: _MAP_ID, title: 'მდელო', body: notifyTxt, url: btn.area ? ('#area=' + encodeURIComponent(btn.area)) : '/' })
           }).catch(() => {});
         }
