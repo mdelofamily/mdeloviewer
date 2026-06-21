@@ -17,11 +17,26 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import webpush from "npm:web-push@3";
 
 // ---------------------------------------------------------------------------
-// Env / secrets (set via `supabase secrets set`)
+// Env / secrets
+//
+// SUPABASE_URL, SUPABASE_PUBLISHABLE_KEYS, and SUPABASE_SECRET_KEYS are
+// injected automatically into every Edge Function's environment by
+// Supabase — they do NOT need to be added manually in the Secrets dashboard.
+// The new key vars hold a JSON dict keyed by name (the key you see in
+// Settings > API Keys is named "default" unless you created extra ones),
+// replacing the legacy plain-string SUPABASE_ANON_KEY /
+// SUPABASE_SERVICE_ROLE_KEY vars.
+//
+// VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT are custom secrets
+// that DO need to be added manually (Edge Functions > Secrets).
 // ---------------------------------------------------------------------------
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+
+const SUPABASE_SECRET_KEYS = JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS")!);
+const SUPABASE_SECRET_KEY: string = SUPABASE_SECRET_KEYS["default"];
+
+const SUPABASE_PUBLISHABLE_KEYS = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS")!);
+const SUPABASE_PUBLISHABLE_KEY: string = SUPABASE_PUBLISHABLE_KEYS["default"];
 
 const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY")!;
 const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY")!;
@@ -29,9 +44,10 @@ const VAPID_SUBJECT = Deno.env.get("VAPID_SUBJECT") ?? "mailto:admin@mdelo.app";
 
 webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
-// Service-role client: needed to delete dead subscriptions (RLS would
-// otherwise block deletes from an anon-authenticated caller).
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+// Secret-key client: needed to delete dead subscriptions (RLS would
+// otherwise block deletes from a publishable-key-authenticated caller).
+// This key bypasses RLS — same role the old service_role key played.
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY);
 
 // ---------------------------------------------------------------------------
 // CORS — viewer runs on GitHub Pages, separate origin from Supabase.
@@ -50,19 +66,17 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 // ---------------------------------------------------------------------------
-// Auth — caller must present the Supabase anon key (standard pattern for
-// Edge Functions; this is not a secret, it just filters fully anonymous
-// bots hitting the endpoint directly). Accepts either apikey header or
-// Authorization: Bearer <anon_key>.
+// Auth — caller must present the Supabase publishable key (standard pattern
+// for Edge Functions; this is not a secret, it just filters fully anonymous
+// bots hitting the endpoint directly). Must be sent via the apikey header —
+// the new publishable/secret keys are NOT JWTs, so Supabase's platform-level
+// check rejects them if sent via Authorization: Bearer. We verify it
+// ourselves here since this function should run with --no-verify-jwt /
+// verify_jwt = false.
 // ---------------------------------------------------------------------------
 function isAuthorized(req: Request): boolean {
   const apikey = req.headers.get("apikey");
-  const authHeader = req.headers.get("Authorization");
-  const bearer = authHeader?.startsWith("Bearer ")
-    ? authHeader.slice("Bearer ".length)
-    : null;
-
-  return apikey === SUPABASE_ANON_KEY || bearer === SUPABASE_ANON_KEY;
+  return apikey === SUPABASE_PUBLISHABLE_KEY;
 }
 
 // ---------------------------------------------------------------------------
