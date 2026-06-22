@@ -346,8 +346,8 @@ function unparseDialogue(o) {
       const cmdPart  = (btn.cmds || []).map(c => ' [' + String.fromCharCode(36) + c + ']').join('');
       // "label :: notify text" — must sit between the label and the
       // area/link/bracket/=>N suffix, since _parseBtn strips those first and
-      // only then splits whatever remains on '>>'
-      const ntPart   = btn.notifyText ? ' >> ' + btn.notifyText : '';
+      // only then splits whatever remains on '::'
+      const ntPart   = btn.notifyText ? ' :: ' + btn.notifyText : '';
       const suffix   = areaPart + linkPart + mkPart + flagPart + cmdPart + next;
       if (btn.notify) {
         const tc = _TYPE_CHARS[btn.notifyType] || '*';
