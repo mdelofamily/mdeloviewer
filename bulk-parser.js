@@ -175,7 +175,7 @@ function parseBulkDSL(raw) {
 //   -> label |https://url        — open URL in new tab
 //   -> label @@ზონის სახელი      — navigate map to area (fitAreas)
 //   -> label [$macro_name]      — run saved macro (window.runMacro) on click
-//   ->* label >> notify text    — sends "notify text" to the notification feed
+//   ->* label :: notify text    — sends "notify text" to the notification feed
 //                                  instead of "label" (label stays on the button;
 //                                  falls back to label if >> isn't used)
 //   ->* label @@area |url =>N   — all modifiers can combine
@@ -243,11 +243,11 @@ function _parseBtn(line) {
   const areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
   if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
 
-  // "label >> notify text" — separates the button's own caption from a
+  // "label :: notify text" — separates the button's own caption from a
   // different message sent to the notification feed (runtime.js falls back
   // to the label itself when notifyText isn't set)
   let notifyText = '';
-  const ntM = rest.match(/^(.*?)\s*>>\s*(.+)$/);
+  const ntM = rest.match(/^(.*?)\s*::\s*(.+)$/);
   if (ntM) { rest = ntM[1].trim(); notifyText = ntM[2].trim(); }
 
   if (!rest) return null;
@@ -344,7 +344,7 @@ function unparseDialogue(o) {
       // would splice the rest of the HTML template into the middle of this
       // script and corrupt the export.
       const cmdPart  = (btn.cmds || []).map(c => ' [' + String.fromCharCode(36) + c + ']').join('');
-      // "label >> notify text" — must sit between the label and the
+      // "label :: notify text" — must sit between the label and the
       // area/link/bracket/=>N suffix, since _parseBtn strips those first and
       // only then splits whatever remains on '>>'
       const ntPart   = btn.notifyText ? ' >> ' + btn.notifyText : '';
