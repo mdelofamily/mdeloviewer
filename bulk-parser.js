@@ -63,7 +63,7 @@ function parseBulkDSL(raw) {
     } else if (speaker === '') {
       // [] — player placeholder, resolved at runtime
       html = '<b class="spk-player">[]</b> ' + _esc(block);
-    } else if (speaker.startsWith(_OBJ_PREFIX)) {
+    } else if (typeof speaker === 'string' && speaker.startsWith(_OBJ_PREFIX)) {
       // <> or <name> — object speaker
       // store raw name after prefix; empty = use _dlgTitle at runtime
       const objName = speaker.slice(_OBJ_PREFIX.length);
@@ -177,9 +177,9 @@ function parseBulkDSL(raw) {
 //   -> label [$macro_name]      — run saved macro (window.runMacro) on click
 //   ->* label :: notify text    — sends "notify text" to the notification feed
 //                                  instead of "label" (label stays on the button;
-//                                  falls back to label if >> isn't used)
+//                                  falls back to label if :: isn't used)
 //   ->* label @@area |url =>N   — all modifiers can combine
-//   notify prefix: ->*  ->!  ->~  ->+  ->.
+//   notify prefix: ->* ->!  ->~  ->+  ->.
 //
 const _NOTIFY_TYPES = { '*': 'info', '!': 'warning', '~': 'danger', '+': 'project', '.': 'done' };
 
@@ -304,15 +304,6 @@ function unparseDialogue(o) {
             .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
           return '[' + name + '] ';
         })
-        // legacy bold (editor-written, no class) — uses a function callback here
-        // (not a literal replacement string), since this file's raw text gets
-        // embedded by export-html.js via tmpl.replace(/{{BULK_PARSER_JS}}/g, ...),
-        // and a dollar sign directly followed by a digit in a *string*
-        // replacement argument is a special capture-group token there — it
-        // would get silently swallowed in the exported output.
-        .replace(/<b>\[\]<\/b>\s*/gi, '[] ')
-        .replace(/<b>([^<]*)<\/b>\s*/gi, (_, name) => '[' + name + '] ')
-        .replace(/<[^>]+>/g, '')
         .replace(/&amp;/g, '&')
         .replace(/&lt;/g,  '<')
         .replace(/&gt;/g,  '>');
