@@ -2403,7 +2403,7 @@ var _tmEditObj = null;     // truthy sentinel while an edit session is open (dlg
 var _tmEditMode = null;    // 'dlg' | 'menuItem' | null
 var _tmEditMenuCtx = null; // { node, idx, type } — set only when _tmEditMode === 'menuItem'
 var _tmEditLabel = null;   // human-readable label shown in cancel/header messages
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/სრული','/ისტორია','/ვადა','/ტექსტი','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/edit','/ფოთოლი','/macro'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/edit','/ფოთოლი','/macro'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -2645,6 +2645,10 @@ async function _tmRun(raw) {
     if (chainParts.length > 1) { await _tmRunChain(chainParts); return; }
   }
 
+  // ── /შეტყობინება[*!~+.] text [@@area] — direct notification send ──
+  var notifM = full.match(/^შეტყობინება([*!~+.]?)(?:\s+([\s\S]*))?$/);
+  if (notifM) { await _tmNotify(notifM[1], notifM[2] || ''); return; }
+
   var parts = full.split(/\s+/), cmd = parts[0], args = parts.slice(1);
   var map = {
     'დახმარება':   _tmHelp,
@@ -2698,6 +2702,7 @@ function _tmHelp() {
     ['/ისტორია',          'ჩატის ისტორიის წაშლა'],
     ['/ვადა [N]',         'ისტ. შენახვა N დღე'],
     ['/ტექსტი',           'ჩატ ↔ ბრძანება mode'],
+    ['/შეტყობინება[*!~+.] ტექსტი [@@ზონა]', 'შეტყობინების გაგზავნა'],
     ['/დახურვა',          'დახურვა  [Esc]'],
     ['/flag set/clear/list', 'flag სისტემა'],
     ['/nick სახელი',      'ნიკნეიმის შეცვლა'],
@@ -2833,6 +2838,46 @@ function _tmMenu() { closeTerm(); toggleMenu(); }
 function _tmOpenCmd() {
   if (!_tmOpen) _tmOpen_();
   _tmL('tok', 'ტერმინალი გახსნილია');
+}
+
+// ── /შეტყობინება — direct send to Supabase `notifications` table ──
+// type chars match bulk-parser.js _NOTIFY_TYPES:  * info  ! warning  ~ danger  + project  . done
+var _TM_NOTIFY_TYPES = { '*': 'info', '!': 'warning', '~': 'danger', '+': 'project', '.': 'done', '': 'info' };
+var _TM_NOTIFY_SYMS  = { info: '💬', warning: '⚠', danger: '❗', done: '✅', project: '🚀' };
+
+async function _tmNotify(typeChar, rest) {
+  rest = (rest || '').trim();
+  if (!rest) {
+    _tmL('tnf', 'გამოყენება: /შეტყობინება[*!~+.] ტექსტი [@@ზონა]');
+    _tmL('tdm', '*ინფო  !გაფრთხ.  ~საფრთხე  +პროექტი  .მზადაა');
+    return;
+  }
+
+  // optional trailing @@area
+  var area = '';
+  var areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
+  if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
+  if (!rest) { _tmL('ter', 'ტექსტი ცარიელია'); return; }
+
+  var type   = _TM_NOTIFY_TYPES[typeChar] || 'info';
+  var sym    = _TM_NOTIFY_SYMS[type];
+  var sender = localStorage.getItem('mdelo_sender') || (typeof _CFG !== 'undefined' && _CFG && _CFG.title) || 'ანონიმი';
+
+  try {
+    var r = await fetch(SUPA_URL + '/rest/v1/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ type: type, symbol: sym, text: rest, sender: sender, linked_area: area })
+    });
+    if (r.ok) {
+      _tmL('tok', sym + ' შეტყობინება გაიგზავნა');
+      if (typeof loadNotifs === 'function') loadNotifs();
+    } else {
+      _tmL('ter', 'შეცდომა: ' + r.status);
+    }
+  } catch (e) {
+    _tmL('ter', 'კავშირის შეცდომა');
+  }
 }
 function _tmVada(args) {
   var n = parseInt(args[0]);
