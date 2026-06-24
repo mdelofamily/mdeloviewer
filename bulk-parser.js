@@ -174,7 +174,11 @@ function parseBulkDSL(raw) {
 //   -> label =>N                 — jump to node N
 //   -> label |https://url        — open URL in new tab
 //   -> label @@ზონის სახელი      — navigate map to area (fitAreas)
-//   -> label [$macro_name]      — run saved macro (window.runMacro) on click
+//   -> label [$macro_name]      — run saved macro (window.runMacro) on click —
+//                                  the only action-token; anything that used to
+//                                  be a [^marker]/[+flag] token is now done by
+//                                  the macro itself (e.g. a macro body that
+//                                  runs /flag set or /marker set)
 //   ->* label :: notify text    — sends "notify text" to the notification feed
 //                                  instead of "label" (label stays on the button;
 //                                  falls back to label if :: isn't used)
@@ -205,26 +209,16 @@ function _parseBtn(line) {
     nextNode = 'node_' + nxtM[2];
   }
 
-  // bracket tokens [^..]/[+..]/[$..] — extracted BEFORE |url and @@area.
-  // These regexes match anywhere in the string regardless of position, so
-  // pulling them out first means a bracket token can sit before OR after
-  // @@area / |url in the DSL line without being swallowed by their
-  // end-anchored "\s*$" matching (which previously ate trailing brackets
-  // as part of the area/url capture).
-
-  // [^Xსახელი] marker effect tokens e.g. [^?კარიბჭე] [^~სახლი]
-  const markers = [];
-  rest = rest.replace(/\[\^([!?~-])([^\]]+)\]/g, function(_, mk, title) {
-    markers.push({ mk: mk === '-' ? '' : mk === '~' ? '💬' : mk, title: title.trim() });
-    return '';
-  }).trim();
-
-  // [+flag_name] — button-level flag set e.g. [+gate_entered]
-  const flags = [];
-  rest = rest.replace(/\[\+([^\]]+)\]/g, function(_, name) {
-    flags.push(name.trim());
-    return '';
-  }).trim();
+  // bracket token [$..] — extracted BEFORE |url and @@area. This regex
+  // matches anywhere in the string regardless of position, so pulling it
+  // out first means it can sit before OR after @@area / |url in the DSL
+  // line without being swallowed by their end-anchored "\s*$" matching
+  // (which previously ate a trailing bracket as part of the area/url
+  // capture). [^marker]/[+flag] tokens are retired — both effects are now
+  // expressed as saved macros (e.g. a macro that runs /flag set or
+  // /marker set internally) and triggered the same way as any other
+  // action: [$macro_name]. See TERMINAL_SCOPE instruction for the macro
+  // side of this migration.
 
   // [$macro_name] — button-level: run saved macro on click (window.runMacro)
   const cmds = [];
@@ -251,7 +245,7 @@ function _parseBtn(line) {
   if (ntM) { rest = ntM[1].trim(); notifyText = ntM[2].trim(); }
 
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyType, link, area, markers, flags, cmds, notifyText };
+  return { label: rest, nextNode, notify, notifyType, link, area, cmds, notifyText };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -325,8 +319,6 @@ function unparseDialogue(o) {
       const next     = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
       const areaPart = btn.area ? ' @@' + btn.area : '';
       const linkPart = btn.link ? ' |'  + btn.link : '';
-      const mkPart   = (btn.markers || []).map(m => ' [^' + (m.mk || '-') + m.title + ']').join('');
-      const flagPart = (btn.flags   || []).map(f => ' [+' + f + ']').join('');
       // NOTE: built via fromCharCode(36), not a literal dollar sign next to a
       // quote — export-html.js embeds this whole file as a *string*
       // replacement (tmpl.replace(/{{BULK_PARSER_JS}}/g, bulkParserJS)), and a
@@ -339,7 +331,7 @@ function unparseDialogue(o) {
       // area/link/bracket/=>N suffix, since _parseBtn strips those first and
       // only then splits whatever remains on '::'
       const ntPart   = btn.notifyText ? ' :: ' + btn.notifyText : '';
-      const suffix   = areaPart + linkPart + mkPart + flagPart + cmdPart + next;
+      const suffix   = areaPart + linkPart + cmdPart + next;
       if (btn.notify) {
         const tc = _TYPE_CHARS[btn.notifyType] || '*';
         lines.push('->' + tc + ' ' + btn.label + ntPart + suffix);
