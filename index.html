@@ -679,38 +679,17 @@ window.DIALOGS = {"dlg_0":{"id":"dlg_0","trigger":"0","requires":null,"nodes":[{
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Auto-hook: intercept #tmIn keydown if terminal.js doesn't already handle
-  // /flag commands. Runs after DOMContentLoaded.
+  // NOTE: terminal.js now owns /flag dispatch directly (delegates to
+  // unlockHandleCmd via _tmFlagDelegate) for both single-line and multiline
+  // input. The old capture-phase #tmIn auto-hook was removed — it only
+  // covered the single-line path and is now redundant/dead weight.
   // ─────────────────────────────────────────────────────────────────────────
-  function _hookTerminalInput() {
-    var inp = document.getElementById('tmIn');
-    if (!inp || inp._unlockHooked) return;
-    inp._unlockHooked = true;
-
-    inp.addEventListener('keydown', function (e) {
-      if (e.key !== 'Enter') return;
-      var raw = inp.value.trim();
-      if (!raw) return;
-      if (raw.charAt(0) !== '/') return;
-
-      var parts = raw.slice(1).split(/\s+/);
-      if (parts[0].toLowerCase() !== 'flag') return;
-
-      // We handle /flag — prevent terminal.js from seeing it as unknown
-      e.stopImmediatePropagation();
-      // Let the default submit finish first, then process
-      setTimeout(function () {
-        unlockHandleCmd(parts);
-      }, 0);
-    }, true); // capture phase — runs before terminal.js listener
-  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // Init
   // ─────────────────────────────────────────────────────────────────────────
   function unlockInit() {
     _restoreAreas();
-    _hookTerminalInput();
   }
 
   if (document.readyState === 'loading') {
@@ -914,7 +893,11 @@ function parseBulkDSL(raw) {
 //   -> label =>N                 — jump to node N
 //   -> label |https://url        — open URL in new tab
 //   -> label @@ზონის სახელი      — navigate map to area (fitAreas)
-//   -> label [$macro_name]      — run saved macro (window.runMacro) on click
+//   -> label [$macro_name]      — run saved macro (window.runMacro) on click —
+//                                  the only action-token; anything that used to
+//                                  be a [^marker]/[+flag] token is now done by
+//                                  the macro itself (e.g. a macro body that
+//                                  runs /flag set or /marker set)
 //   ->* label :: notify text    — sends "notify text" to the notification feed
 //                                  instead of "label" (label stays on the button;
 //                                  falls back to label if :: isn't used)
@@ -945,26 +928,16 @@ function _parseBtn(line) {
     nextNode = 'node_' + nxtM[2];
   }
 
-  // bracket tokens [^..]/[+..]/[$..] — extracted BEFORE |url and @@area.
-  // These regexes match anywhere in the string regardless of position, so
-  // pulling them out first means a bracket token can sit before OR after
-  // @@area / |url in the DSL line without being swallowed by their
-  // end-anchored "\s*$" matching (which previously ate trailing brackets
-  // as part of the area/url capture).
-
-  // [^Xსახელი] marker effect tokens e.g. [^?კარიბჭე] [^~სახლი]
-  const markers = [];
-  rest = rest.replace(/\[\^([!?~-])([^\]]+)\]/g, function(_, mk, title) {
-    markers.push({ mk: mk === '-' ? '' : mk === '~' ? '💬' : mk, title: title.trim() });
-    return '';
-  }).trim();
-
-  // [+flag_name] — button-level flag set e.g. [+gate_entered]
-  const flags = [];
-  rest = rest.replace(/\[\+([^\]]+)\]/g, function(_, name) {
-    flags.push(name.trim());
-    return '';
-  }).trim();
+  // bracket token [$..] — extracted BEFORE |url and @@area. This regex
+  // matches anywhere in the string regardless of position, so pulling it
+  // out first means it can sit before OR after @@area / |url in the DSL
+  // line without being swallowed by their end-anchored "\s*$" matching
+  // (which previously ate a trailing bracket as part of the area/url
+  // capture). [^marker]/[+flag] tokens are retired — both effects are now
+  // expressed as saved macros (e.g. a macro that runs /flag set or
+  // /marker set internally) and triggered the same way as any other
+  // action: [$macro_name]. See TERMINAL_SCOPE instruction for the macro
+  // side of this migration.
 
   // [$macro_name] — button-level: run saved macro on click (window.runMacro)
   const cmds = [];
@@ -991,7 +964,7 @@ function _parseBtn(line) {
   if (ntM) { rest = ntM[1].trim(); notifyText = ntM[2].trim(); }
 
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyType, link, area, markers, flags, cmds, notifyText };
+  return { label: rest, nextNode, notify, notifyType, link, area, cmds, notifyText };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -1065,8 +1038,6 @@ function unparseDialogue(o) {
       const next     = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
       const areaPart = btn.area ? ' @@' + btn.area : '';
       const linkPart = btn.link ? ' |'  + btn.link : '';
-      const mkPart   = (btn.markers || []).map(m => ' [^' + (m.mk || '-') + m.title + ']').join('');
-      const flagPart = (btn.flags   || []).map(f => ' [+' + f + ']').join('');
       // NOTE: built via fromCharCode(36), not a literal dollar sign next to a
       // quote — export-html.js embeds this whole file as a *string*
       // replacement (tmpl.replace(/{{BULK_PARSER_JS}}/g, bulkParserJS)), and a
@@ -1079,7 +1050,7 @@ function unparseDialogue(o) {
       // area/link/bracket/=>N suffix, since _parseBtn strips those first and
       // only then splits whatever remains on '::'
       const ntPart   = btn.notifyText ? ' :: ' + btn.notifyText : '';
-      const suffix   = areaPart + linkPart + mkPart + flagPart + cmdPart + next;
+      const suffix   = areaPart + linkPart + cmdPart + next;
       if (btn.notify) {
         const tc = _TYPE_CHARS[btn.notifyType] || '*';
         lines.push('->' + tc + ' ' + btn.label + ntPart + suffix);
@@ -2403,7 +2374,7 @@ var _tmEditObj = null;     // truthy sentinel while an edit session is open (dlg
 var _tmEditMode = null;    // 'dlg' | 'menuItem' | null
 var _tmEditMenuCtx = null; // { node, idx, type } — set only when _tmEditMode === 'menuItem'
 var _tmEditLabel = null;   // human-readable label shown in cancel/header messages
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/edit','/ფოთოლი','/macro'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/marker','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/edit','/ფოთოლი','/macro'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -2667,7 +2638,7 @@ async function _tmRun(raw) {
     'ვადა':        _tmVada,
     'ტექსტი':      tmToggleMulti,
     'დახურვა':     closeTerm,
-    'flag':        _tmFlag,
+    'flag':        _tmFlagDelegate,
     'pwd':         _tmMenuPwd,
     'ls':          _tmMenuLs,
     'cd':          _tmMenuCd,
@@ -2675,7 +2646,8 @@ async function _tmRun(raw) {
     'rm':          _tmMenuRm,
     'edit':        _tmMenuEdit,
     'ფოთოლი':      _tmMenuLeaf,
-    'macro':       _tmMacro
+    'macro':       _tmMacro,
+    'marker':      _tmMarkerCmd
   };
   var fn = map[cmd];
   if (fn) { await fn(args); return; }
@@ -2703,6 +2675,8 @@ function _tmHelp() {
     ['/ვადა [N]',         'ისტ. შენახვა N დღე'],
     ['/ტექსტი',           'ჩატ ↔ ბრძანება mode'],
     ['/შეტყობინება[*!~+.] ტექსტი [@@ზონა]', 'შეტყობინების გაგზავნა'],
+    ['/marker set <სახელი> ?/!/~/-', 'მარკერი — ლოკალური (მხ. შენ)'],
+    ['/marker reset [სახელი]', 'მარკერი → საწყისზე (ერთი ან ყველა)'],
     ['/დახურვა',          'დახურვა  [Esc]'],
     ['/flag set/clear/list', 'flag სისტემა'],
     ['/nick სახელი',      'ნიკნეიმის შეცვლა'],
@@ -2838,6 +2812,90 @@ function _tmMenu() { closeTerm(); toggleMenu(); }
 function _tmOpenCmd() {
   if (!_tmOpen) _tmOpen_();
   _tmL('tok', 'ტერმინალი გახსნილია');
+}
+
+// ── /marker set|reset — local-only marker override (personal exploration) ──
+// Reuses _applyMarkerDom / _markerSave / _mkRestoring / _MK_KEY from runtime.js — zero new infra.
+// Visible only on this device; community/Supabase state never touched.
+//   ?  →  '?'   (badge "?"   class q)    — აღებული ქუესტი
+//   !  →  '!'   (badge "!"   class exc)  — quest
+//   ~  →  '💬'  (badge "..." class chat) — ჩატი
+//   -  →  ''    (hs-dot "•")             — ნეიტრალური
+var _TM_MK_SYM = { '?': '?', '!': '!', '~': '💬', '-': '' };
+
+// Find hotspot by name — same dual-path lookup as /დიალოგი (data-title, then .lb fallback by oi).
+function _tmFindHotspot(name) {
+  var hs = document.querySelector('.hotspot[data-title="' + name.replace(/"/g, '\\"') + '"]:not(.hs-area):not(.no-interact)');
+  if (!hs && typeof _OBJS !== 'undefined') {
+    for (var _i = 0; _i < _OBJS.length; _i++) {
+      if (_OBJS[_i] && _OBJS[_i].lb === name) {
+        var _c = document.querySelector('.hotspot[data-oi="' + _i + '"]:not(.hs-area):not(.no-interact)');
+        if (_c) { hs = _c; break; }
+      }
+    }
+  }
+  return hs || null;
+}
+
+// Original (export/Supabase-baked) marker for an object, converted to _applyMarkerDom's input domain.
+function _tmOrigMk(oi) {
+  var raw = (typeof _OBJS !== 'undefined' && _OBJS[+oi] && _OBJS[+oi].marker) || '';
+  return raw === '...' ? '💬' : raw;
+}
+
+async function _tmMarkerCmd(args) {
+  var sub = (args[0] || '').toLowerCase();
+
+  if (sub === 'set') {
+    var rest = args.slice(1).join(' ').trim();
+    var m = rest.match(/^([\s\S]+?)\s+([?!~-])$/);
+    if (!m) {
+      _tmL('ter', 'გამოყენება: /marker set <სახელი> ?|!|~|-');
+      _tmL('tdm', '?ქუესტი  !აღებული  ~ჩატი(...)  -ნეიტრალური(•)');
+      return;
+    }
+    var name = m[1].trim(), sym = m[2];
+    var hs = _tmFindHotspot(name);
+    if (!hs) { _tmL('ter', 'ობიექტი ვერ მოიძებნა: "' + name + '"'); return; }
+    _applyMarkerDom(hs, _TM_MK_SYM[sym]);
+    _tmL('tok', name + ' — მარკერი "' + sym + '" (ლოკალური, მხ. შენ)');
+    return;
+  }
+
+  if (sub === 'reset') {
+    var name2 = args.slice(1).join(' ').trim();
+
+    if (!name2) {
+      try {
+        var s = JSON.parse(localStorage.getItem(_MK_KEY) || '{}');
+        _mkRestoring = true;
+        Object.keys(s).forEach(function (oi) {
+          var el = document.querySelector('.hotspot[data-oi="' + oi + '"]:not(.hs-area)');
+          if (el) _applyMarkerDom(el, _tmOrigMk(oi));
+        });
+        _mkRestoring = false;
+        localStorage.removeItem(_MK_KEY);
+        _tmL('tok', 'ყველა მარკერი — საწყის მდგომარეობაზე დაბრუნდა');
+      } catch (e) { _mkRestoring = false; _tmL('ter', 'შეცდომა: ' + e.message); }
+      return;
+    }
+
+    var hs2 = _tmFindHotspot(name2);
+    if (!hs2) { _tmL('ter', 'ობიექტი ვერ მოიძებნა: "' + name2 + '"'); return; }
+    var oi2 = hs2.dataset.oi;
+    _mkRestoring = true;
+    _applyMarkerDom(hs2, _tmOrigMk(oi2));
+    _mkRestoring = false;
+    try {
+      var s2 = JSON.parse(localStorage.getItem(_MK_KEY) || '{}');
+      delete s2[oi2];
+      localStorage.setItem(_MK_KEY, JSON.stringify(s2));
+    } catch (e) {}
+    _tmL('tok', name2 + ' — საწყის მდგომარეობაზე დაბრუნდა');
+    return;
+  }
+
+  _tmL('ter', 'გამოყენება: /marker set|reset <სახელი> [?|!|~|-]');
 }
 
 // ── /შეტყობინება — direct send to Supabase `notifications` table ──
@@ -3011,51 +3069,13 @@ async function _tmSaveDlg(dsl) {
 }
 
 // ── /flag command ──
-// Usage:
-//   /flag set <name>    — set a flag
-//   /flag clear <name>  — clear a flag
-//   /flag check <name>  — check if flag is set
-//   /flag list          — list all set flags
-//   /flag reset         — clear all flags
-function _tmFlag(args) {
-  var sub = (args[0] || '').toLowerCase();
-  var name = args.slice(1).join(' ').trim();
-
-  if (typeof window._flagSet !== 'function') {
-    _tmL('ter', '/flag: flag სისტემა არ არის ჩატვირთული (runtime.js?)'); return;
+// Delegates entirely to unlock.js's unlockHandleCmd (set/clear/check/list/reset).
+// terminal.js no longer reimplements flag logic — single source of truth in unlock.js.
+function _tmFlagDelegate(args) {
+  if (typeof unlockHandleCmd !== 'function') {
+    _tmL('ter', '/flag: unlock.js არ არის ჩატვირთული'); return;
   }
-
-  if (sub === 'set') {
-    if (!name) { _tmL('ter', 'გამოყენება: /flag set <სახელი>'); return; }
-    window._flagSet(name);
-    _tmL('tok', '▸ flag სეტი: ' + name);
-  } else if (sub === 'clear') {
-    if (!name) { _tmL('ter', 'გამოყენება: /flag clear <სახელი>'); return; }
-    window._flagClear(name);
-    _tmL('tok', '▸ flag წაიშალა: ' + name);
-  } else if (sub === 'check') {
-    if (!name) { _tmL('ter', 'გამოყენება: /flag check <სახელი>'); return; }
-    var val = window._flagCheck(name);
-    _tmL(val ? 'tok' : 'tnf', '▸ ' + name + ': ' + (val ? '✓ სეტია' : '✗ არ არის სეტი'));
-  } else if (sub === 'list') {
-    var flags = window._flagList();
-    _tmL('tdm', _SEP);
-    if (!flags.length) { _tmL('tdm', 'flag-ები: ცარიელია'); }
-    else { _tmL('tsy', 'სეტი flag-ები (' + flags.length + '):'); flags.forEach(function(f) { _tmL('tnf', '  ▸ ' + f); }); }
-    _tmL('tdm', _SEP);
-  } else if (sub === 'reset') {
-    window._flagReset();
-    _tmL('tok', '▸ ყველა flag გასუფთავდა');
-  } else {
-    _tmL('tdm', _SEP);
-    _tmL('tsy', '/flag ბრძანებები:');
-    _tmL('tnf', '  set <name>   — flag-ის სეტი');
-    _tmL('tnf', '  clear <name> — flag-ის წაშლა');
-    _tmL('tnf', '  check <name> — flag-ის შემოწმება');
-    _tmL('tnf', '  list         — ყველა flag-ის სია');
-    _tmL('tnf', '  reset        — ყველა flag-ის გასუფთავება');
-    _tmL('tdm', _SEP);
-  }
+  unlockHandleCmd(['flag'].concat(args));
 }
 
 // ── menu CLI — filesystem-style navigation/editing over _CFG.menu ──
@@ -3359,8 +3379,8 @@ async function _tmMenuSaveNode(nodeId, fields) {
 //   საერთო  — Supabase (terminal_macros table), every viewer sees it on next load
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
-var _TM_RESERVED = ['macro','cd','md','rm','ls','pwd','edit','ფოთოლი','flag','nick','me','who','color','help',
-  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','ობიექტები','დიალოგი','წასვლა','ლეგენდა','მენიუ','სრული','ისტორია','ვადა','ტექსტი','დახურვა'];
+var _TM_RESERVED = ['macro','marker','cd','md','rm','ls','pwd','edit','ფოთოლი','flag','nick','me','who','color','help',
+  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','ობიექტები','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა'];
 
 // Split a raw (no leading "/") command line on ";" — only where ";" is followed
 // (after optional whitespace) by "/", so semicolons inside ordinary text are safe.
