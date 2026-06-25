@@ -2583,6 +2583,10 @@ async function _tmRun(raw) {
   var notifM = full.match(/^შეტყობინება([*!~+.]?)(?:\s+([\s\S]*))?$/);
   if (notifM) { await _tmNotify(notifM[1], notifM[2] || ''); return; }
 
+  // /მენიუ/<სექცია>/<სექცია>/.../<ფოთოლი_index?> — deep-link straight to a menu panel/leaf
+  var menuPathM = full.match(/^მენიუ\/(.+)$/);
+  if (menuPathM) { _tmMenuOpenPath(menuPathM[1].split('/').map(function (s) { return s.trim(); }).filter(Boolean)); return; }
+
   var parts = full.split(/\s+/), cmd = parts[0], args = parts.slice(1);
   var map = {
     'დახმარება':   _tmHelp,
@@ -2633,6 +2637,7 @@ function _tmHelp() {
     ['/ლეგენდა',          'აღწერას ჩვენა/დამალვა'],
     ['/ლეგენდა რედაქტირება', 'მთავარი ლეგენდის ტექსტის რედაქტირება'],
     ['/მენიუ',            'მენიუს toggle'],
+    ['/მენიუ/სექცია/.../N', 'პირდაპირი ლინკი ნესტ. სექციაზე ან item-ზე'],
     ['/გახსნა',           'ტერმინალის გახსნა (macro/window hook-ისთვის)'],
     ['/შეყვანა',          'Enter/Send — ღია edit-სესიის submit (macro-chain-ისთვის)'],
     ['/სრული',            'სრული ↔ ნახევარი'],
@@ -2651,8 +2656,8 @@ function _tmHelp() {
     ['/pwd',              'მენიუს მიმდინარე გზა'],
     ['/ls',               'მენიუს კვანძის შემცველობა'],
     ['/cd [სახელი|..|/|a/b/c]', 'ნავიგაცია — ერთი ნაბიჯი ან slash-path'],
-    ['/md <სახელი>',      'ახალი ქვე-სექცია + ავტო-cd'],
-    ['/ფოთოლი ტექსტი|ინდიკატორი', 'item-ის დამატება მიმდინარე კვანძში'],
+    ['/md <სახელი> [ემოჯი]', 'ახალი ქვე-სექცია + ავტო-cd (default 📁)'],
+    ['/ფოთოლი ტექსტი|ინდიკატორი [ემოჯი]', 'item-ის დამატება მიმდინარე კვანძში'],
     ['/rm <სახელი|N>',    'სექციის (სახელით) ან item-ის (ინდექსით) წაშლა'],
     ['/edit <N>',         'item [N] — multiline რედაქტირება'],
     ['/edit <N> <...>',   'item [N] — სწრაფი ერთხაზიანი ედიტი'],
@@ -2774,6 +2779,54 @@ async function _tmSaveLegend(text) {
   else _tmL('ter', '✗ Supabase: ' + (res && res.msg ? res.msg : 'უცნობი'));
 }
 function _tmMenu() { closeTerm(); toggleMenu(); }
+
+// ── /მენიუ/<section>/<section>/.../<leaf-item-index?> — deep link ──
+// Drills the visible game-menu UI (runtime.js's _gmShowPanel/_gmOpenOverlay)
+// straight to a nested section or a specific item inside a leaf, instead of
+// making the person tap through each level by hand.
+function _tmMenuOpenPath(segs) {
+  if (!segs.length) { _tmMenu(); return; }
+  if (!_gmCfg) _gmCfg = _CFG;
+
+  var itemIdx = null;
+  if (/^\d+$/.test(segs[segs.length - 1])) { itemIdx = parseInt(segs[segs.length - 1]); segs = segs.slice(0, -1); }
+  if (!segs.length) { _tmMenu(); return; }
+
+  var nodes = _gmCfg.menu || [], path = [], node = null;
+  for (var i = 0; i < segs.length; i++) {
+    node = nodes.find(function (n) { return (n.title || '').trim() === segs[i]; });
+    if (!node) { _tmL('ter', 'მენიუში ვერ მოიძებნა: "' + segs[i] + '"'); return; }
+    if (i < segs.length - 1) {
+      if (!node.children || !node.children.length) { _tmL('ter', '"' + node.title + '" — ქვესექციები არ აქვს'); return; }
+      path.push({ title: node.title, nodes: node.children });
+      nodes = node.children;
+    }
+  }
+
+  var gm = document.getElementById('gameMenu');
+  if (!gm.classList.contains('open')) toggleMenu();
+
+  if (node.items && node.items.length) {
+    _gmOpenOverlay(node, nodes, path);
+    if (itemIdx != null) {
+      setTimeout(function () {
+        var body = document.getElementById('gmOverlayBody');
+        var el = body.children[itemIdx];
+        if (!el) { _tmL('ter', 'item [' + itemIdx + '] არ არსებობს'); return; }
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        var orig = el.style.backgroundColor;
+        el.style.transition = 'background-color .3s';
+        el.style.backgroundColor = 'rgba(0,255,136,.25)';
+        setTimeout(function () { el.style.backgroundColor = orig; }, 1200);
+      }, 80);
+    }
+  } else if (node.children && node.children.length) {
+    _gmShowPanel(node.children, path.concat([{ title: node.title, nodes: node.children }]));
+  } else {
+    _gmShowPanel(nodes, path);
+  }
+  _tmL('tok', '☰ → ' + segs.join('/') + (itemIdx != null ? '/' + itemIdx : ''));
+}
 function _tmOpenCmd() {
   if (!_tmOpen) _tmOpen_();
   _tmL('tok', 'ტერმინალი გახსნილია');
@@ -3156,18 +3209,32 @@ function _tmMenuCdPath(path) {
   _tmL('tok', _tmMenuPathStr());
 }
 
+// Detects whether a trailing arg token is a custom icon/emoji override rather
+// than part of the name/text itself — short (<=2 unicode chars, covers most
+// single emoji incl. variation selectors) and containing no ordinary letters
+// or digits, so a real word/number is never mistaken for an icon.
+function _tmIsIconToken(tok) {
+  if (!tok) return false;
+  return Array.from(tok).length <= 2 && !/[a-zA-Zა-ჿ0-9]/.test(tok);
+}
+
 async function _tmMenuMd(args) {
+  var icon = '📁';
+  if (args.length > 1 && _tmIsIconToken(args[args.length - 1])) {
+    icon = args[args.length - 1];
+    args = args.slice(0, -1);
+  }
   var name = args.join(' ').trim();
-  if (!name) { _tmL('ter', 'გამოყენება: /md <სახელი>'); return; }
+  if (!name) { _tmL('ter', 'გამოყენება: /md <სახელი> [ემოჯი]'); return; }
   var parent = _tmMenuCwdNode();
   var list   = _tmMenuCwdList();
   if (list.find(function (n) { return (n.title || '').trim() === name; })) {
     _tmL('ter', 'უკვე არსებობს: "' + name + '"'); return;
   }
-  var node = { id: 'nd_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), icon: '📁', title: name, items: [], children: [] };
+  var node = { id: 'nd_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), icon: icon, title: name, items: [], children: [] };
   list.push(node);
   _tmMenuStack.push(node);
-  _tmL('tok', '+ ' + name + '  →  ' + _tmMenuPathStr());
+  _tmL('tok', icon + ' ' + name + '  →  ' + _tmMenuPathStr());
   await _tmMenuSaveNode(node.id, { parent_id: parent ? parent.id : null, icon: node.icon, title: node.title, items_json: [] });
 }
 
@@ -3177,28 +3244,39 @@ async function _tmMenuLeaf(args) {
   if (!node) { _tmL('ter', 'root-ში ფოთლები არ შეიძლება — /cd <სახელი> შედი სექციაში'); return; }
 
   if (sub === 'ტექსტი') {
-    var text = args.slice(1).join(' ').trim();
-    if (!text) { _tmL('ter', 'გამოყენება: /ფოთოლი ტექსტი <ტექსტი>'); return; }
+    var rest = args.slice(1);
+    var emoji = '•';
+    if (rest.length > 1 && _tmIsIconToken(rest[rest.length - 1])) {
+      emoji = rest[rest.length - 1];
+      rest = rest.slice(0, -1);
+    }
+    var text = rest.join(' ').trim();
+    if (!text) { _tmL('ter', 'გამოყენება: /ფოთოლი ტექსტი <ტექსტი> [ემოჯი]'); return; }
     if (!node.items) node.items = [];
-    node.items.push({ type: 'text', emoji: '•', label: text });
-    _tmL('tok', '+ [' + (node.items.length - 1) + '] ტექსტი დაემატა');
+    node.items.push({ type: 'text', emoji: emoji, label: text });
+    _tmL('tok', '+ [' + (node.items.length - 1) + '] ' + emoji + ' ტექსტი დაემატა');
     await _tmMenuSaveNode(node.id, { items_json: node.items });
   } else if (sub === 'ინდიკატორი') {
-    var rest   = args.slice(1);
-    var pct    = parseInt(rest[rest.length - 1]);
-    var hasPct = !isNaN(pct) && rest.length > 1;
-    var label  = (hasPct ? rest.slice(0, -1) : rest).join(' ').trim();
-    if (!label) { _tmL('ter', 'გამოყენება: /ფოთოლი ინდიკატორი <სახელი> <%>'); return; }
+    var rest2  = args.slice(1);
+    var emoji2 = '📊';
+    if (rest2.length > 1 && _tmIsIconToken(rest2[rest2.length - 1])) {
+      emoji2 = rest2[rest2.length - 1];
+      rest2 = rest2.slice(0, -1);
+    }
+    var pct    = parseInt(rest2[rest2.length - 1]);
+    var hasPct = !isNaN(pct) && rest2.length > 1;
+    var label  = (hasPct ? rest2.slice(0, -1) : rest2).join(' ').trim();
+    if (!label) { _tmL('ter', 'გამოყენება: /ფოთოლი ინდიკატორი <სახელი> <%> [ემოჯი]'); return; }
     var val = hasPct ? Math.max(0, Math.min(100, pct)) : 100;
     if (!node.items) node.items = [];
-    node.items.push({ type: 'progress', emoji: '📊', label: label, value: val });
-    _tmL('tok', '+ [' + (node.items.length - 1) + '] ინდიკატორი დაემატა (' + val + '%)');
+    node.items.push({ type: 'progress', emoji: emoji2, label: label, value: val });
+    _tmL('tok', '+ [' + (node.items.length - 1) + '] ' + emoji2 + ' ინდიკატორი დაემატა (' + val + '%)');
     await _tmMenuSaveNode(node.id, { items_json: node.items });
   } else {
     _tmL('tdm', _SEP);
     _tmL('tsy', '/ფოთოლი ბრძანებები:');
-    _tmL('tnf', '  ტექსტი <ტექსტი>         — ტექსტური item');
-    _tmL('tnf', '  ინდიკატორი <სახელი> <%> — progress item');
+    _tmL('tnf', '  ტექსტი <ტექსტი> [ემოჯი]         — ტექსტური item (default •)');
+    _tmL('tnf', '  ინდიკატორი <სახელი> <%> [ემოჯი] — progress item (default 📊)');
     _tmL('tdm', _SEP);
   }
 }
