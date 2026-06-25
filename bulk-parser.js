@@ -15,12 +15,7 @@
 //   {atmosphere text}        — atmosphere / effect line
 //   [[label|url]]            — external link (inline)
 //   [[object name]]          — map object link (inline)
-//   -> text =>N              — choice button, no notification
-//   ->* text =>N             — choice + info notification
-//   ->! text =>N             — choice + warning notification
-//   ->~ text =>N             — choice + danger notification
-//   ->+ text =>N             — choice + project notification
-//   ->. text =>N             — choice + done notification
+//   -> text =>N              — choice button
 //   [$name]                  — button-level: run saved macro "name" on click
 //                               (resolved via window.runMacro — local scope wins
 //                               over საერთო on a name clash, same as /macro)
@@ -167,7 +162,6 @@ function parseBulkDSL(raw) {
 }
 
 // ── choice line parser ──────────────────────────────────────
-// notify type chars: * info  ! warning  ~ danger  + project  . done
 //
 // Full button DSL syntax:
 //   -> label                     — close popup (or go to =>N)
@@ -175,31 +169,16 @@ function parseBulkDSL(raw) {
 //   -> label |https://url        — open URL in new tab
 //   -> label @@ზონის სახელი      — navigate map to area (fitAreas)
 //   -> label [$macro_name]      — run saved macro (window.runMacro) on click —
-//                                  the only action-token; anything that used to
-//                                  be a [^marker]/[+flag] token is now done by
-//                                  the macro itself (e.g. a macro body that
-//                                  runs /flag set or /marker set)
-//   ->* label :: notify text    — sends "notify text" to the notification feed
-//                                  instead of "label" (label stays on the button;
-//                                  falls back to label if :: isn't used)
-//   ->* label @@area |url =>N   — all modifiers can combine
-//   notify prefix: ->* ->!  ->~  ->+  ->.
+//                                  the only action-token. Anything that used
+//                                  to be a [^marker]/[+flag] token, or a
+//                                  ->*/->!/->~/->+/->. notification, is now
+//                                  done by the macro itself (e.g. a macro
+//                                  body that runs /flag set, /marker set, or
+//                                  /შეტყობინება)
+//   -> label @@area |url =>N    — all modifiers can combine
 //
-const _NOTIFY_TYPES = { '*': 'info', '!': 'warning', '~': 'danger', '+': 'project', '.': 'done' };
-
 function _parseBtn(line) {
-  let rest = line;
-  let notify = false;
-  let notifyType = '';
-
-  // detect ->X where X is a notify type char
-  if (rest.length > 2 && _NOTIFY_TYPES[rest[2]]) {
-    notify     = true;
-    notifyType = _NOTIFY_TYPES[rest[2]];
-    rest       = rest.slice(3).trim();
-  } else {
-    rest = rest.slice(2).trim();
-  }
+  let rest = line.slice(2).trim();
 
   // extract =>N at end
   let nextNode = '';
@@ -237,15 +216,8 @@ function _parseBtn(line) {
   const areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
   if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
 
-  // "label :: notify text" — separates the button's own caption from a
-  // different message sent to the notification feed (runtime.js falls back
-  // to the label itself when notifyText isn't set)
-  let notifyText = '';
-  const ntM = rest.match(/^(.*?)\s*::\s*(.+)$/);
-  if (ntM) { rest = ntM[1].trim(); notifyText = ntM[2].trim(); }
-
   if (!rest) return null;
-  return { label: rest, nextNode, notify, notifyType, link, area, cmds, notifyText };
+  return { label: rest, nextNode, link, area, cmds };
 }
 
 // ── minimal HTML escape ─────────────────────────────────────
@@ -313,7 +285,6 @@ function unparseDialogue(o) {
     }
 
     // buttons
-    const _TYPE_CHARS = { info: '*', warning: '!', danger: '~', project: '+', done: '.' };
     (node.buttons || []).forEach(btn => {
       if (!btn.label) return;
       const next     = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
@@ -327,17 +298,8 @@ function unparseDialogue(o) {
       // would splice the rest of the HTML template into the middle of this
       // script and corrupt the export.
       const cmdPart  = (btn.cmds || []).map(c => ' [' + String.fromCharCode(36) + c + ']').join('');
-      // "label :: notify text" — must sit between the label and the
-      // area/link/bracket/=>N suffix, since _parseBtn strips those first and
-      // only then splits whatever remains on '::'
-      const ntPart   = btn.notifyText ? ' :: ' + btn.notifyText : '';
       const suffix   = areaPart + linkPart + cmdPart + next;
-      if (btn.notify) {
-        const tc = _TYPE_CHARS[btn.notifyType] || '*';
-        lines.push('->' + tc + ' ' + btn.label + ntPart + suffix);
-      } else {
-        lines.push('-> ' + btn.label + ntPart + suffix);
-      }
+      lines.push('-> ' + btn.label + suffix);
     });
 
     if (ni < nodes.length - 1) lines.push('');
