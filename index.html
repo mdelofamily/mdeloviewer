@@ -2551,6 +2551,59 @@ document.addEventListener('keydown', function (e) {
 
 var _SEP = '────────────────────────────────';
 
+// ── command registry (incremental migration target) ──────────────────────
+// Schema per top-level entry:
+//   {
+//     params: [...], desc: "...", handler: fn   // no sub-actions
+//   }
+//   OR
+//   {
+//     subs: {
+//       <subName>: { params: [...], desc: "...", handler: fn },
+//       ...
+//     }
+//   }
+// `handler` is always called as handler(args) — args is the same space-split
+// array the old `map[cmd](args)` dispatch already passed. Commands that
+// delegate to another module with a different signature (e.g. /flag →
+// unlockHandleCmd) get a thin wrapper here so every registry handler shares
+// one calling convention, regardless of what runs underneath.
+//
+// MIGRATION STATE: registry intentionally starts EMPTY. Nothing has been
+// moved out of the legacy `map` object inside _tmRun yet — this commit only
+// wires up the registry data structure + lookup + dispatcher fallback so the
+// pattern can be verified before any real command moves. See
+// COMMAND_REGISTRY_SCOPE_INSTRUCTION.md for the full migration plan.
+var COMMAND_REGISTRY = {
+  // /flag set|clear|del|check|list|ls|reset <სახელი?> — fully delegates to
+  // unlock.js's unlockHandleCmd, which already does its own sub-action
+  // switch + arg-join internally (parts[1]=sub, parts.slice(2)=arg). Registry
+  // intentionally does NOT expose sub-actions here (see Step 2 design
+  // decision: single source of truth stays in unlock.js, matching its own
+  // header comment). The wrapper only re-prepends the literal "flag" head
+  // unlockHandleCmd expects, exactly as the old _tmFlagDelegate did.
+  flag: {
+    params: [], // unlockHandleCmd parses its own sub-action + arg from the array
+    desc: 'flag სისტემა — set/clear/check/list/reset',
+    handler: function (args) {
+      if (typeof unlockHandleCmd !== 'function') {
+        _tmL('ter', '/flag: unlock.js არ არის ჩატვირთული'); return;
+      }
+      return unlockHandleCmd(['flag'].concat(args));
+    }
+  }
+};
+
+// Looks up a command (and optional sub-action) in the registry.
+// Returns the entry { params, desc, handler } or null if not found there
+// (which tells the caller to fall back to the legacy `map` dispatch).
+function _tmRegistryFind(name, sub) {
+  var entry = COMMAND_REGISTRY[name];
+  if (!entry) return null;
+  if (entry.subs) return sub ? (entry.subs[sub] || null) : null;
+  return entry;
+}
+
 function tmInsertSlash() {
   var inp = document.getElementById('tmIn');
   if (inp.value.charAt(0) !== '/') inp.value = '/' + inp.value;
@@ -2592,6 +2645,17 @@ async function _tmRun(raw) {
   if (menuPathM) { _tmMenuOpenPath(menuPathM[1].split('/').map(function (s) { return s.trim(); }).filter(Boolean)); return; }
 
   var parts = full.split(/\s+/), cmd = parts[0], args = parts.slice(1);
+
+  // ── registry-first dispatch (incremental migration) ──
+  // Sub-action commands pass their first arg as `sub` for the lookup, then
+  // drop it from the args the handler actually receives (matches how the
+  // legacy map-based handlers already split head/rest themselves below).
+  var regEntry = _tmRegistryFind(cmd, args[0]);
+  var regArgs = args;
+  if (regEntry && COMMAND_REGISTRY[cmd] && COMMAND_REGISTRY[cmd].subs) regArgs = args.slice(1);
+  if (regEntry) { await regEntry.handler(regArgs); return; }
+
+  // ── legacy map dispatch (commands not yet migrated to COMMAND_REGISTRY) ──
   var map = {
     'დახმარება':   _tmHelp,
     'გასუფთავება': tmClear,
@@ -2610,7 +2674,6 @@ async function _tmRun(raw) {
     'ვადა':        _tmVada,
     'ტექსტი':      tmToggleMulti,
     'დახურვა':     closeTerm,
-    'flag':        _tmFlagDelegate,
     'pwd':         _tmMenuPwd,
     'ls':          _tmMenuLs,
     'cd':          _tmMenuCd,
@@ -3109,8 +3172,11 @@ async function _tmSaveDlg(dsl) {
 }
 
 // ── /flag command ──
-// Delegates entirely to unlock.js's unlockHandleCmd (set/clear/check/list/reset).
-// terminal.js no longer reimplements flag logic — single source of truth in unlock.js.
+// DEAD CODE as of Step 2 migration — superseded by COMMAND_REGISTRY.flag.handler
+// (same logic, same delegation to unlockHandleCmd). Left in place rather than
+// deleted, consistent with the low-priority dead-code-cleanup convention used
+// elsewhere (e.g. runtime.js's btn.markers/btn.flags/btn.notify blocks).
+// Safe to remove in a future cleanup pass once all migrations are verified.
 function _tmFlagDelegate(args) {
   if (typeof unlockHandleCmd !== 'function') {
     _tmL('ter', '/flag: unlock.js არ არის ჩატვირთული'); return;
