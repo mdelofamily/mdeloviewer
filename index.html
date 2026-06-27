@@ -2591,6 +2591,67 @@ var COMMAND_REGISTRY = {
       }
       return unlockHandleCmd(['flag'].concat(args));
     }
+  },
+
+  // ── Step 3: filesystem-style menu navigation (pwd/ls/cd/md/rm/edit/ფოთოლი) ──
+  // All seven are thin pass-throughs to their existing _tmMenu* handlers —
+  // same args array shape the old map[cmd](args) dispatch already used.
+  // No behavior change; this step only moves the lookup, not the logic.
+
+  pwd: {
+    params: [],
+    desc: 'მიმდინარე მენიუ-მდებარეობის გამოტანა',
+    handler: function (args) { return _tmMenuPwd(); } // takes no args itself
+  },
+
+  ls: {
+    params: [],
+    desc: 'მიმდინარე მდებარეობის შემცველობის ჩამონათვალი',
+    handler: function (args) { return _tmMenuLs(); } // takes no args itself
+  },
+
+  cd: {
+    params: [
+      { name: 'path', type: 'text', desc: 'სექციის სახელი, ".." ან slash-path ("/a/b", "a/b")' }
+    ],
+    desc: 'მენიუში გადასვლა — სახელით, ".."-ით root-ზე/მშობელზე ასასვლელად, ან slash-path-ით',
+    handler: function (args) { return _tmMenuCd(args); }
+  },
+
+  md: {
+    params: [
+      { name: 'name', type: 'text', desc: 'ახალი სექციის სახელი' },
+      { name: 'icon', type: 'text', optional: true, desc: 'ემოჯი (default 📁)' }
+    ],
+    desc: 'ახალი ქვე-სექციის შექმნა მიმდინარე მდებარეობაში',
+    handler: function (args) { return _tmMenuMd(args); }
+  },
+
+  rm: {
+    params: [
+      { name: 'target', type: 'text', desc: 'სექციის სახელი ან item-ის რიცხვითი ინდექსი' }
+    ],
+    desc: 'სექციის ან item-ის წაშლა (სახელით ან ინდექსით)',
+    handler: function (args) { return _tmMenuRm(args); }
+  },
+
+  edit: {
+    params: [
+      { name: 'index', type: 'number', desc: 'item-ის ინდექსი (/ls-ში ნანახი)' },
+      { name: 'content', type: 'text', optional: true, multiline: true,
+        desc: 'ახალი ტექსტი/% — თუ გამოტოვებული, იხსნება multiline editor' }
+    ],
+    desc: 'item-ის შემცველობის რედაქტირება ინდექსით — inline ან multiline editor-ით',
+    handler: function (args) { return _tmMenuEdit(args); }
+  },
+
+  // /ფოთოლი keeps its own internal sub-action switch (ტექსტი/ინდიკატორი),
+  // exactly mirroring the /flag → unlockHandleCmd pattern (Variant A):
+  // a single registry entry, no `subs` block, internal dispatch untouched.
+  'ფოთოლი': {
+    params: [], // _tmMenuLeaf parses its own sub-action (ტექსტი/ინდიკატორი) + args
+    desc: 'item-ის დამატება მიმდინარე სექციაში — ტექსტი/ინდიკატორი',
+    handler: function (args) { return _tmMenuLeaf(args); }
   }
 };
 
@@ -2674,13 +2735,6 @@ async function _tmRun(raw) {
     'ვადა':        _tmVada,
     'ტექსტი':      tmToggleMulti,
     'დახურვა':     closeTerm,
-    'pwd':         _tmMenuPwd,
-    'ls':          _tmMenuLs,
-    'cd':          _tmMenuCd,
-    'md':          _tmMenuMd,
-    'rm':          _tmMenuRm,
-    'edit':        _tmMenuEdit,
-    'ფოთოლი':      _tmMenuLeaf,
     'macro':       _tmMacro,
     'marker':      _tmMarkerCmd
   };
