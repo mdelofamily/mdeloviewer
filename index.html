@@ -2652,6 +2652,19 @@ var COMMAND_REGISTRY = {
     params: [], // _tmMenuLeaf parses its own sub-action (ტექსტი/ინდიკატორი) + args
     desc: 'item-ის დამატება მიმდინარე სექციაში — ტექსტი/ინდიკატორი',
     handler: function (args) { return _tmMenuLeaf(args); }
+  },
+
+  // ── Step 4: დახმარება ──
+  // NOTE: _tmHelp's command list is still a hardcoded static array at this
+  // point — auto-generating it FROM the registry is a separate, later step
+  // (scope item 5) that only makes sense once migration is complete and the
+  // registry actually contains every command. This step only moves the
+  // *lookup* for /დახმარება itself into the registry; the list contents are
+  // untouched.
+  'დახმარება': {
+    params: [],
+    desc: 'ბრძანების სია',
+    handler: function (args) { return _tmHelp(); } // takes no args itself
   }
 };
 
@@ -2718,7 +2731,6 @@ async function _tmRun(raw) {
 
   // ── legacy map dispatch (commands not yet migrated to COMMAND_REGISTRY) ──
   var map = {
-    'დახმარება':   _tmHelp,
     'გასუფთავება': tmClear,
     'ინფო':        _tmInfo,
     'მასშტაბი':    _tmZoom,
