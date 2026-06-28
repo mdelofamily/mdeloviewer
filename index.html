@@ -2810,13 +2810,43 @@ var COMMAND_REGISTRY = {
   //      to split on — it's one token. That branch opens a leaf as a
   //      standalone overlay (no menu panel underneath), a genuinely
   //      different UI state from the plain toggle. It stays a permanent
-  //      regex special-case in _tmRun, same as /შეტყობინება — see scope
-  //      discussion: literal-syntax commands don't fit a space-split args
-  //      registry model, structurally, not as a migration-ordering choice.
+  //      regex special-case in _tmRun — literal-path syntax doesn't fit a
+  //      space-split args registry model, structurally (unlike /შეტყობინება,
+  //      whose suffix-glued syntax WAS changed to fit the registry below).
   'მენიუ': {
     params: [],
     desc: 'მენიუ-პანელის გახსნა/დახურვა (deep-link: /მენიუ/სექცია/.../N)',
     handler: function (args) { return _tmMenu(); } // takes no args itself
+  },
+
+  // ── Step 10: შეტყობინება — syntax changed to fit the registry ──
+  // OLD syntax (pre-migration): "/შეტყობინება!" — type-char glued directly
+  // onto the command name, no space. That could never resolve via a plain
+  // name-keyed registry lookup (cmd=parts[0] would be "შეტყობინება!", a
+  // different literal string per type-char).
+  // NEW syntax: "/შეტყობინება ! ტექსტი @@ზონა" — type-char is now its own
+  // space-separated token (args[0]), exactly like any other param. This is
+  // an intentional, user-approved breaking change (old "/შეტყობინება!"
+  // glued form no longer works — must now write "/შეტყობინება !").
+  // _tmNotify(typeChar, rest) itself is untouched; only how its two
+  // arguments get extracted from the command line has changed.
+  'შეტყობინება': {
+    params: [
+      { name: 'typeChar', type: 'select', options: ['*', '!', '~', '+', '.'], optional: true,
+        desc: '*ინფო  !გაფრთხ.  ~საფრთხე  +პროექტი  .მზადაა (default: ინფო)' },
+      { name: 'text', type: 'text', multiline: true, desc: 'შეტყობინების ტექსტი' },
+      { name: 'area', type: 'text', optional: true, prefix: '@@', desc: 'დაკავშირებული ზონა' }
+    ],
+    desc: 'პირდაპირი შეტყობინების გაგზავნა (Supabase + PWA push)',
+    handler: function (args) {
+      var typeChars = ['*', '!', '~', '+', '.'];
+      var typeChar = '', rest = args;
+      if (args.length && typeChars.indexOf(args[0]) >= 0) {
+        typeChar = args[0];
+        rest = args.slice(1);
+      }
+      return _tmNotify(typeChar, rest.join(' '));
+    }
   }
 };
 
@@ -2861,10 +2891,6 @@ async function _tmRun(raw) {
     var chainParts = _tmSplitChain(full);
     if (chainParts.length > 1) { await _tmRunChain(chainParts); return; }
   }
-
-  // ── /შეტყობინება[*!~+.] text [@@area] — direct notification send ──
-  var notifM = full.match(/^შეტყობინება([*!~+.]?)(?:\s+([\s\S]*))?$/);
-  if (notifM) { await _tmNotify(notifM[1], notifM[2] || ''); return; }
 
   // /მენიუ/<სექცია>/<სექცია>/.../<ფოთოლი_index?> — deep-link straight to a menu panel/leaf
   var menuPathM = full.match(/^მენიუ\/(.+)$/);
@@ -3206,7 +3232,7 @@ var _TM_NOTIFY_SYMS  = { info: '💬', warning: '⚠', danger: '❗', done: '✅
 async function _tmNotify(typeChar, rest) {
   rest = (rest || '').trim();
   if (!rest) {
-    _tmL('tnf', 'გამოყენება: /შეტყობინება[*!~+.] ტექსტი [@@ზონა]');
+    _tmL('tnf', 'გამოყენება: /შეტყობინება [*!~+.] ტექსტი [@@ზონა]');
     _tmL('tdm', '*ინფო  !გაფრთხ.  ~საფრთხე  +პროექტი  .მზადაა');
     return;
   }
