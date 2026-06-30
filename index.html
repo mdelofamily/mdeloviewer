@@ -148,12 +148,17 @@ body{background:#111;overflow:hidden;width:100vw;height:100dvh;}
 #consensusPopup{display:none;position:fixed;inset:0;z-index:90;background:rgba(13,17,23,0.86);backdrop-filter:blur(4px);flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;opacity:0;transition:opacity .2s;}
 #consensusPopup.show{opacity:1;}
 #consensusPopup #cpClose{position:absolute;top:18px;right:18px;background:none;border:1px solid #30363d;color:#e6edf3;border-radius:8px;width:32px;height:32px;font-size:14px;cursor:pointer;}
-#consensusPopup .cp-logo{width:56px;height:56px;border-radius:14px;object-fit:cover;}
+#consensusPopup .cp-logo{width:112px;height:112px;border-radius:20px;object-fit:cover;}
+#consensusPopup .cp-vote-row{display:flex;gap:18px;}
+#consensusPopup .cp-vote-btn{min-width:104px;height:44px;padding:0 16px;border-radius:22px;border:2px solid #30363d;background:#161b22;font-size:14px;font-weight:600;color:#8b949e;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:transform .15s,border-color .15s,background .15s,color .15s;opacity:0.7;}
+#consensusPopup .cp-vote-btn:active{transform:scale(0.95);}
+#consensusPopup .cp-vote-btn.sel{opacity:1;transform:scale(1.05);}
+#consensusPopup .cp-vote-btn#cpYes.sel{border-color:#4ade80;background:rgba(74,222,128,0.12);color:#4ade80;}
+#consensusPopup .cp-vote-btn#cpNo.sel{border-color:#f85149;background:rgba(248,81,73,0.12);color:#f85149;}
 #consensusPopup .cp-question{font-size:16px;font-weight:700;color:#fff;text-align:center;max-width:340px;}
 #consensusPopup .cp-detail{font-size:12px;color:#8b949e;text-align:center;max-width:340px;margin-top:-6px;}
-#consensusPopup .cp-toggle{width:88px;height:88px;border-radius:50%;border:3px solid #2dd4bf;background:#161b22;font-size:36px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform .15s;}
-#consensusPopup .cp-toggle:active{transform:scale(0.92);}
 #consensusPopup .cp-status{font-size:12px;color:#2dd4bf;font-weight:600;}
+#consensusPopup .cp-locked{font-size:11px;color:#8b949e;}
 #consensusPopup .cp-feed{width:100%;max-width:320px;max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;}
 #consensusPopup .cp-feed-row{display:flex;align-items:center;gap:8px;font-size:12px;color:#e6edf3;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:6px 10px;}
 #consensusPopup .cp-feed-empty{font-size:11px;color:#8b949e;text-align:center;}
@@ -264,7 +269,10 @@ have nice shit!" data-oi="7" data-dialog-id="dlg_7" style="left:832px;top:736px;
   <img class="cp-logo" src="logo.png" alt="" onerror="this.style.display='none'">
   <div class="cp-question" id="cpQuestion"></div>
   <div class="cp-detail" id="cpDetail" style="display:none"></div>
-  <button class="cp-toggle" id="cpToggle" onclick="castConsensusVote()">⚪</button>
+  <div class="cp-vote-row">
+    <button class="cp-vote-btn" id="cpYes" onclick="castConsensusVote(true)">🔘 თანხმობა</button>
+    <button class="cp-vote-btn" id="cpNo" onclick="castConsensusVote(false)">❌ უარყოფა</button>
+  </div>
   <div class="cp-status" id="cpStatus"></div>
   <div class="cp-feed" id="cpFeed"></div>
 </div>
@@ -1857,7 +1865,21 @@ function renderNotifBar() {
   }
 }
 
-function _ncardDeleteConfirm(card, n) {
+async function _ncardDeleteConfirm(card, n) {
+  if (n.type === 'consensus' && n.quorum_count) {
+    const total = await _consensusVoteCount(n.id);
+    if (total < n.quorum_count) {
+      const ov = _ncardOverlay(card, '🔒', '#8b949e');
+      ov.style.flexDirection = 'column'; ov.style.gap = '2px'; ov.innerHTML = '';
+      const lockIcon = document.createElement('div'); lockIcon.textContent = '🔒'; lockIcon.style.fontSize = '16px';
+      const lockMsg = document.createElement('div');
+      lockMsg.style.cssText = 'font-size:9px;color:#fff;text-align:center;padding:0 4px;';
+      lockMsg.textContent = 'ხმის მიცემა არ დასრულებულა (' + total + '/' + n.quorum_count + ')';
+      ov.appendChild(lockIcon); ov.appendChild(lockMsg);
+      setTimeout(() => ov.remove(), 1600);
+      return;
+    }
+  }
   const type = n.type || 'info';
   if (type === 'emergency') {
     const ov = _ncardOverlay(card, '🔒', '#8b949e');
@@ -1913,6 +1935,16 @@ async function _ncardDoDelete(ov, n) {
     if (r.ok) await loadNotifs();
     else ov.remove();
   } catch (e) { ov.remove(); }
+}
+
+async function _consensusVoteCount(notifId) {
+  try {
+    const r = await fetch(SUPA_URL + '/rest/v1/consensus_votes?notification_id=eq.' + notifId + '&select=id',
+      { headers: { apikey: SUPA_KEY, Authorization: 'Bearer ' + SUPA_KEY } });
+    if (!r.ok) return 0;
+    const rows = await r.json();
+    return rows.length;
+  } catch (e) { return 0; }
 }
 
 function _startRealtime() {
@@ -1999,10 +2031,9 @@ function closeConsensusPopup() {
 }
 
 function _setConsensusToggle(vote) {
-  const t = document.getElementById('cpToggle');
-  if (vote === true) t.textContent = '🔘';
-  else if (vote === false) t.textContent = '⚫';
-  else t.textContent = '⚪';
+  const yes = document.getElementById('cpYes'), no = document.getElementById('cpNo');
+  yes.classList.toggle('sel', vote === true);
+  no.classList.toggle('sel', vote === false);
 }
 
 async function loadConsensusVotes(notifId) {
@@ -2025,7 +2056,7 @@ function _renderConsensusFeed() {
     _consensusVotes.forEach(v => {
       const row = document.createElement('div');
       row.className = 'cp-feed-row';
-      row.innerHTML = '<span>' + (v.vote ? '🔘' : '⚫') + '</span><span>' + (v.voter_name || '') + '</span>';
+      row.innerHTML = '<span>' + (v.vote ? '🔘' : '❌') + '</span><span>' + (v.voter_name || '') + '</span>';
       feed.appendChild(row);
     });
   }
@@ -2034,18 +2065,15 @@ function _renderConsensusFeed() {
   _setConsensusToggle(mine ? mine.vote : null);
 }
 
-async function castConsensusVote() {
+async function castConsensusVote(vote) {
   if (!_curConsensusNotif) return;
-  if (document.getElementById('cpToggle').style.pointerEvents === 'none') return;
   let name = localStorage.getItem('mdelo_sender');
   if (!name) {
     name = prompt('შენი სახელი?');
     if (!name) return;
     localStorage.setItem('mdelo_sender', name);
   }
-  const current = _consensusVotes.find(v => v.voter_name === name);
-  const newVote = current ? !current.vote : true;
-  _setConsensusToggle(newVote); // optimistic
+  _setConsensusToggle(vote); // optimistic
   try {
     await fetch(SUPA_URL + '/rest/v1/consensus_votes', {
       method: 'POST',
@@ -2057,7 +2085,7 @@ async function castConsensusVote() {
       body: JSON.stringify({
         notification_id: _curConsensusNotif.id,
         voter_name: name,
-        vote: newVote,
+        vote: vote,
         voted_at: new Date().toISOString()
       })
     });
@@ -2069,25 +2097,14 @@ function _evaluateConsensusState() {
   const n = _curConsensusNotif;
   if (!n) return;
   const statusEl = document.getElementById('cpStatus');
-  const toggleEl = document.getElementById('cpToggle');
   const total = _consensusVotes.length;
   const quorum = n.quorum_count || 0;
-  const deadline = n.deadline ? new Date(n.deadline) : null;
-  const expired = !!(deadline && Date.now() > deadline.getTime());
-  const quorumMet = !quorum || total >= quorum;
+  const quorumMet = !!quorum && total >= quorum;
+  n._allVoted = quorumMet; // used by delete-guard on the notif card
 
-  let status = 'open';
-  if (total > 0 && quorumMet && _consensusVotes.every(v => v.vote === true)) status = 'approved';
-  else if (total > 0 && quorumMet && _consensusVotes.every(v => v.vote === false)) status = 'rejected';
-  else if (expired && !quorumMet) status = 'expired';
-
-  const labels = { open: '🟡 ღიაა', approved: '✅ მიღებულია', rejected: '❌ უარყოფილია', expired: '⌛ ვადაგასულია' };
-  let extra = quorum ? (' · ' + total + '/' + quorum + ' ხმა') : (' · ' + total + ' ხმა');
-  statusEl.textContent = labels[status] + extra;
-
-  const open = status === 'open';
-  toggleEl.style.pointerEvents = open ? 'auto' : 'none';
-  toggleEl.style.opacity = open ? '1' : '0.4';
+  let extra = quorum ? (total + '/' + quorum + ' ხმა') : (total + ' ხმა');
+  let label = quorumMet ? '✅ ყველამ მისცა ხმა' : '📜 განხილვა მიმდინარეობს';
+  statusEl.textContent = label + ' · ' + extra;
 }
 
 function _subscribeConsensusVotes(notifId) {
