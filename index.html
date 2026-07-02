@@ -3007,7 +3007,7 @@ function _tmHelp() {
     ['/ისტორია',          'ჩატის ისტორიის წაშლა'],
     ['/ვადა [N]',         'ისტ. შენახვა N დღე'],
     ['/ტექსტი',           'ჩატ ↔ ბრძანება mode'],
-    ['/შეტყობინება[*!~+.^] ტექსტი [@@ზონა]', 'შეტყობინების გაგზავნა  (^=კონსენსუსი ::დეტ ##N)'],
+    ['/შეტყობინება[*!~+.^] ტექსტი [@@ზონა]', 'შეტყობინების გაგზავნა  (^=კონსენსუსი ::დეტ ##N {ბრძანება})'],
     ['/marker set <სახელი> ?/!/~/-', 'მარკერი — ლოკალური (მხ. შენ)'],
     ['/marker reset [სახელი]', 'მარკერი → საწყისზე (ერთი ან ყველა)'],
     ['/დახურვა',          'დახურვა  [Esc]'],
@@ -3323,8 +3323,20 @@ async function _tmNotify(typeChar, rest) {
   if (!rest) {
     _tmL('tnf', 'გამოყენება: /შეტყობინება[*!~+.^] ტექსტი [@@ზონა]');
     _tmL('tdm', '*ინფო  !გაფრთხ.  ~საფრთხე  +პროექტი  .მზადაა');
-    _tmL('tdm', '^კონსენსუსი: /შეტყობინება^ კითხვა [::დეტალი] [##N] [@@ზონა]');
+    _tmL('tdm', '^კონსენსუსი: /შეტყობინება^ კითხვა [::დეტალი] [##N] [@@ზონა] [{ბრძანება}]');
+    _tmL('tdm', '  {ბრძანება} — quorum-ის მიღწევისას (ერთსულოვანი "თანხმობა") გაეშვება window.tmRun()-ით');
     return;
+  }
+
+  // optional {terminal_cmd} field — consensus-only, but stripped for every type so the
+  // braces never leak into the notification text. MUST be extracted before @@area, since
+  // area's trailing match is greedy to end-of-string and would otherwise swallow "{...}".
+  var cmdField = '';
+  var cmdM = rest.match(/\{([^}]*)\}/);
+  if (cmdM) {
+    cmdField = cmdM[1].trim();
+    rest = rest.replace(/\s*\{[^}]*\}/, '').trim();
+    if (cmdField && cmdField.charAt(0) !== '/') cmdField = '/' + cmdField; // tmRun requires leading "/"
   }
 
   // optional trailing @@area
@@ -3338,8 +3350,9 @@ async function _tmNotify(typeChar, rest) {
 
   // ── consensus branch ──
   if (type === 'consensus') {
-    // /შეტყობინება^ კითხვა [::დეტალი] [##N] [@@ზონა]
-    // Parse order: ##N first (from full rest), then ::detail, so neither swallows the other.
+    // /შეტყობინება^ კითხვა [::დეტალი] [##N] [@@ზონა] [{ბრძანება}]
+    // {ბრძანება} already stripped above (before @@area extraction) into cmdField.
+    // Parse order here: ##N first (from full rest), then ::detail, so neither swallows the other.
     var detail = '', quorum = null;
 
     // 1. Extract ##N from anywhere in rest
@@ -3353,8 +3366,9 @@ async function _tmNotify(typeChar, rest) {
     if (!rest) { _tmL('ter', 'კონსენსუსი: კითხვა ცარიელია'); return; }
 
     var body = { type: 'consensus', symbol: sym, text: rest, sender: sender, linked_area: area };
-    if (detail)  body.detail       = detail;
-    if (quorum)  body.quorum_count = quorum;
+    if (detail)   body.detail       = detail;
+    if (quorum)   body.quorum_count = quorum;
+    if (cmdField) body.terminal_cmd = cmdField;
 
     try {
       var r = await fetch(SUPA_URL + '/rest/v1/notifications', {
@@ -3363,7 +3377,7 @@ async function _tmNotify(typeChar, rest) {
         body: JSON.stringify(body)
       });
       if (r.ok) {
-        _tmL('tok', sym + ' კონსენსუსი გაიხსნა: ' + rest + (quorum ? '  (quorum: ' + quorum + ')' : ''));
+        _tmL('tok', sym + ' კონსენსუსი გაიხსნა: ' + rest + (quorum ? '  (quorum: ' + quorum + ')' : '') + (cmdField ? '  ⚙ ' + cmdField : ''));
         if (typeof loadNotifs === 'function') loadNotifs();
       } else { _tmL('ter', 'შეცდომა: ' + r.status); }
     } catch (e) { _tmL('ter', 'კავშირის შეცდომა'); }
@@ -3372,6 +3386,7 @@ async function _tmNotify(typeChar, rest) {
 
   // ── standard notification branch ──
   if (!rest) { _tmL('ter', 'ტექსტი ცარიელია'); return; }
+  if (cmdField) _tmL('tdm', '{ბრძანება} მხოლოდ ^კონსენსუსზე მუშაობს — იგნორირებულია');
   try {
     var r2 = await fetch(SUPA_URL + '/rest/v1/notifications', {
       method: 'POST',
