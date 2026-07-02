@@ -148,7 +148,7 @@ body{background:#111;overflow:hidden;width:100vw;height:100dvh;}
 #consensusPopup{display:none;position:fixed;inset:0;z-index:90;background:rgba(13,17,23,0.86);backdrop-filter:blur(4px);flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;opacity:0;transition:opacity .2s;}
 #consensusPopup.show{opacity:1;}
 #consensusPopup #cpClose{position:absolute;top:18px;right:18px;background:none;border:1px solid #30363d;color:#e6edf3;border-radius:8px;width:32px;height:32px;font-size:14px;cursor:pointer;}
-#consensusPopup .cp-logo{width:112px;height:112px;border-radius:20px;object-fit:cover;}
+#consensusPopup .cp-logo{width:112px;height:112px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:56px;background:rgba(255,255,255,0.04);border:1px solid #30363d;}
 #consensusPopup .cp-vote-row{display:flex;gap:18px;}
 #consensusPopup .cp-vote-btn{min-width:104px;height:44px;padding:0 16px;border-radius:22px;border:2px solid #30363d;background:#161b22;font-size:14px;font-weight:600;color:#8b949e;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:transform .15s,border-color .15s,background .15s,color .15s;opacity:0.7;}
 #consensusPopup .cp-vote-btn:active{transform:scale(0.95);}
@@ -266,7 +266,7 @@ have nice shit!" data-oi="7" data-dialog-id="dlg_7" style="left:832px;top:736px;
 </div>
 <div id="consensusPopup">
   <button id="cpClose" onclick="closeConsensusPopup()">✕</button>
-  <img class="cp-logo" src="logo.png" alt="" onerror="this.style.display='none'">
+  <div class="cp-logo" id="cpLogo"></div>
   <div class="cp-question" id="cpQuestion"></div>
   <div class="cp-detail" id="cpDetail" style="display:none"></div>
   <div class="cp-vote-row">
@@ -1845,7 +1845,7 @@ function renderNotifBar() {
     const c = document.createElement('div');
     c.className = 'ncard' + (n.type === 'emergency' ? ' pulse' : '');
     c.dataset.type = n.type || 'info'; c.title = n.text || ''; c.textContent = n.symbol || '💬';
-    c.onclick = () => { if (n.type === 'consensus') openConsensusPopup(n); else openNotifPopup(n); };
+    c.onclick = () => { if (['consensus','project','done'].includes(n.type) && n.quorum_count) openConsensusPopup(n); else openNotifPopup(n); };
     let _lt = null;
     c.addEventListener('touchstart', e => {
       _lt = setTimeout(() => {
@@ -2020,7 +2020,7 @@ function openNotifList() {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(48,54,61,0.4);cursor:pointer;';
     row.innerHTML = '<span style="font-size:16px;">' + (n.symbol || '💬') + '</span><span style="font-size:12px;color:#e6edf3;flex:1;">' + (n.text || '') + '</span>';
-    row.onclick = () => { if (n.type === 'consensus') openConsensusPopup(n); else openNotifPopup(n); }; body.appendChild(row);
+    row.onclick = () => { if (['consensus','project','done'].includes(n.type) && n.quorum_count) openConsensusPopup(n); else openNotifPopup(n); }; body.appendChild(row);
   });
   document.getElementById('npDetail').textContent = ''; document.getElementById('npDetail').style.display = 'none';
   document.getElementById('npArea').style.display = 'none';
@@ -2038,6 +2038,7 @@ function openConsensusPopup(n) {
   _curConsensusNotif = n;
   _consensusVotes = [];
   const p = document.getElementById('consensusPopup');
+  document.getElementById('cpLogo').textContent = n.symbol || '🗳️';
   document.getElementById('cpQuestion').textContent = n.text || '';
   const detEl = document.getElementById('cpDetail');
   if (n.detail) { detEl.textContent = n.detail; detEl.style.display = 'block'; }
@@ -2148,11 +2149,16 @@ function _evaluateConsensusState() {
   const quorumMet = !!quorum && total >= quorum;
   n._allVoted = quorumMet;
 
-  let extra = quorum ? (total + '/' + quorum + ' ხმა') : (total + ' ხმა');
+  const extra = quorum ? (total + '/' + quorum + ' ხმა') : (total + ' ხმა');
   let label, color;
   if (quorumMet) {
     const allAgree = _consensusVotes.every(v => v.vote === true);
-    label = allAgree ? '✅ კონსენსუსი შედგა!' : '🚫 კონსენსუსი არ შედგა!';
+    const RESULTS = {
+      project: ['✅ პროექტი მხარდაჭერილია!', '🚫 პროექტი უარყოფილია!'],
+      done:    ['✅ პროექტი შესრულდა!',       '🚫 პროექტი შეჩერდა!'],
+    };
+    const pair = RESULTS[n.type] || ['✅ კონსენსუსი შედგა!', '🚫 კონსენსუსი არ შედგა!'];
+    label = allAgree ? pair[0] : pair[1];
     color = allAgree ? '#4ade80' : '#f85149';
   } else {
     label = '📜 განხილვა მიმდინარეობს';
@@ -3359,14 +3365,27 @@ async function _tmNotify(typeChar, rest) {
 
   // ── standard notification branch ──
   if (!rest) { _tmL('ter', 'ტექსტი ცარიელია'); return; }
+
+  // Optional ::detail and ##N (same parse order as consensus branch)
+  var stdDetail = '', stdQuorum = null;
+  var sqM = rest.match(/##(\d+)/);
+  if (sqM) { stdQuorum = parseInt(sqM[1]); rest = rest.replace(/\s*##\d+/, '').trim(); }
+  var sdIdx = rest.indexOf('::');
+  if (sdIdx !== -1) { stdDetail = rest.slice(sdIdx + 2).trim(); rest = rest.slice(0, sdIdx).trim(); }
+  if (!rest) { _tmL('ter', 'ტექსტი ცარიელია'); return; }
+
+  var body2 = { type: type, symbol: sym, text: rest, sender: sender, linked_area: area };
+  if (stdDetail) body2.detail       = stdDetail;
+  if (stdQuorum) body2.quorum_count = stdQuorum;
+
   try {
     var r2 = await fetch(SUPA_URL + '/rest/v1/notifications', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY, 'Prefer': 'return=minimal' },
-      body: JSON.stringify({ type: type, symbol: sym, text: rest, sender: sender, linked_area: area })
+      body: JSON.stringify(body2)
     });
     if (r2.ok) {
-      _tmL('tok', sym + ' შეტყობინება გაიგზავნა');
+      _tmL('tok', sym + ' შეტყობინება გაიგზავნა' + (stdQuorum ? '  (quorum: ' + stdQuorum + ')' : ''));
       if (typeof loadNotifs === 'function') loadNotifs();
     } else { _tmL('ter', 'შეცდომა: ' + r2.status); }
   } catch (e) { _tmL('ter', 'კავშირის შეცდომა'); }
