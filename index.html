@@ -2039,7 +2039,7 @@ function openConsensusPopup(n) {
   _curConsensusNotif = n;
   _consensusVotes = [];
   const p = document.getElementById('consensusPopup');
-  document.getElementById('cpLogo').textContent = n.symbol || '🗳️';
+  document.getElementById('cpLogo').innerHTML = '<img src="logo.png" alt="Logo" style="width: 48px; height: 48px; object-fit: contain; vertical-align: middle;">';
   document.getElementById('cpQuestion').textContent = n.text || '';
   const detEl = document.getElementById('cpDetail');
   if (n.detail) { detEl.textContent = n.detail; detEl.style.display = 'block'; }
