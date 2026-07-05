@@ -1849,6 +1849,48 @@ function _dlgShowNode(nodeId, selectedLabel) {
       b.textContent = btn.label;
       b.style.cssText = 'width:100%;height:32px;background:rgba(22,27,34,0.2);border:1px solid rgba(88,166,255,0.4);color:#e6edf3;font-size:13px;border-radius:8px;cursor:pointer;text-align:center;';
       b.onclick = () => {
+        if (btn.applyTier) {
+          // self-nomination: caretaker or resident. Creates a normal-looking
+          // consensus (~) notification, tagged with subject_type/subject_data
+          // so resolve_tier_change (SQL) knows what it's for — and a
+          // terminal_cmd that references the notification's OWN id, set in a
+          // second PATCH once the insert returns it.
+          const targetTier = btn.applyTier;
+          if (!window.isLoggedIn || !window.isLoggedIn()) {
+            if (typeof toast === 'function') toast('⚠️ განაცხადისთვის საჭიროა შესვლა — სცადე /ლოგინი');
+          } else {
+            const uid = window.myUserId();
+            const name = window.myDisplayName();
+            const label = targetTier === 'caretaker' ? 'ქეართეიქერი' : 'რეზიდენტი';
+            const text = name + ' განაცხადებს, რომ მზადაა გახდეს ' + label;
+            fetch(SUPA_URL + '/rest/v1/user_tiers?tier=eq.resident&select=user_id', { headers: _authHeaders() })
+              .then(r => r.ok ? r.json() : [])
+              .then(residents => {
+                const quorum = residents.length > 0 ? residents.length : 1; // bootstrap: 1 (shadow_admin)
+                return fetch(SUPA_URL + '/rest/v1/notifications', {
+                  method: 'POST',
+                  headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, _authHeaders()),
+                  body: JSON.stringify({
+                    type: 'consensus', symbol: '🌱', text: text, sender: name, quorum_count: quorum,
+                    subject_type: 'tier_change',
+                    subject_data: { user_id: uid, from: window.myTier(), to: targetTier }
+                  })
+                });
+              })
+              .then(r => r.ok ? r.json() : null).then(rows => {
+              const row = rows && rows[0];
+              if (!row) throw new Error('no row returned');
+              return fetch(SUPA_URL + '/rest/v1/notifications?id=eq.' + row.id, {
+                method: 'PATCH',
+                headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, _authHeaders()),
+                body: JSON.stringify({ terminal_cmd: '/სტატუსი ' + row.id })
+              });
+            }).then(() => {
+              if (typeof toast === 'function') toast('✓ განაცხადი გაგზავნილია — ხმის მიცემა იწყება');
+              if (typeof loadNotifs === 'function') loadNotifs();
+            }).catch(() => { if (typeof toast === 'function') toast('✗ განაცხადი ვერ გაიგზავნა'); });
+          }
+        }
         if (btn.notify) {
           const sender = localStorage.getItem('mdelo_sender') || 'ანონიმი';
           const notifyTxt = btn.notifyText || (sender + ' — ' + btn.label);
@@ -2285,6 +2327,12 @@ function openConsensusPopup(n) {
   document.getElementById('cpStatus').textContent = '';
   _setConsensusToggle(null);
   document.getElementById('cpFeed').innerHTML = '';
+  // voting itself is resident+ only — caretaker/visitor see the topic and
+  // the live feed, but the yes/no buttons simply aren't there for them
+  const canVote = typeof window._tierAtLeast === 'function' && window._tierAtLeast('resident');
+  const yesBtn = document.getElementById('cpYes'), noBtn = document.getElementById('cpNo');
+  if (yesBtn) yesBtn.style.display = canVote ? '' : 'none';
+  if (noBtn) noBtn.style.display = canVote ? '' : 'none';
   p.style.display = 'flex';
   requestAnimationFrame(() => p.classList.add('show'));
   loadConsensusVotes(n.id);
@@ -2357,6 +2405,10 @@ async function castConsensusVote(vote) {
   if (!_curConsensusNotif) return;
   if (typeof window.isLoggedIn !== 'function' || !window.isLoggedIn()) {
     if (typeof toast === 'function') toast('⚠️ ხმის მისაცემად საჭიროა შესვლა — სცადე /ლოგინი');
+    return;
+  }
+  if (typeof window._tierAtLeast !== 'function' || !window._tierAtLeast('resident')) {
+    if (typeof toast === 'function') toast('⚠️ ხმის მიცემა resident-ის და უფრო მაღალი tier-ისთვისაა');
     return;
   }
   const uid = window.myUserId();
@@ -2927,7 +2979,7 @@ var _tmEditMode = null;    // 'dlg' | 'menuItem' | null
 var _tmEditMenuCtx = null; // { node, idx, type } — set only when _tmEditMode === 'menuItem'
 var _tmEditLabel = null;   // human-readable label shown in cancel/header messages
 var _tmEditBuf = null;     // raw content buffered from a chain segment, consumed by /შეყვანა
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/marker','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/edit','/ფოთოლი','/macro','/ლოგინი','/ლოგაუთი'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/marker','/დახურვა','/flag','/nick','/me','/who','/color','/help','/pwd','/ls','/cd','/md','/rm','/edit','/ფოთოლი','/macro','/ლოგინი','/ლოგაუთი','/სახელი'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -3266,7 +3318,9 @@ async function _tmRun(raw) {
     'macro':       _tmMacro,
     'marker':      _tmMarkerCmd,
     'ლოგინი':      _tmLogin,
-    'ლოგაუთი':     _tmLogout
+    'ლოგაუთი':     _tmLogout,
+    'სახელი':      _tmSetName,
+    'სტატუსი':     _tmResolveStatus
   };
   var fn = map[cmd];
   if (fn) {
@@ -3322,7 +3376,8 @@ function _tmHelp() {
     ['/macro rm local|საერთო <სახელი>', 'შორთკატის წაშლა'],
     ['/ლოგინი ელფოსტა@მაგ.com', 'magic link — შესვლა/რეგისტრაცია'],
     ['/ლოგინი',           '(არგუმენტის გარეშე) — მაჩვენე ჩემი სტატუსი'],
-    ['/ლოგაუთი',          'გამოსვლა სისტემიდან']
+    ['/ლოგაუთი',          'გამოსვლა სისტემიდან'],
+    ['/სახელი <ახალი სახელი>', 'display_name-ის შეცვლა (დიალოგებში ჩანს)']
   ];
   _tmL('tdm', _SEP); _tmL('tsy', '--- ბრძანები ---');
   for (var i = 0; i < list.length; i++) {
@@ -3406,6 +3461,50 @@ async function _tmLogin(args) {
   var lres = await window.requestMagicLink(email);
   if (lres === true) _tmL('tok', '✓ შეამოწმე ელფოსტა — login ბმული გამოგზავნილია');
   else _tmL('ter', '✗ ვერ გაიგზავნა: ' + (lres && lres.msg ? lres.msg : 'უცნობი შეცდომა'));
+}
+
+// /სტატუსი <notification_id> — HIDDEN deliberately: not in _TMCMDS, not in
+// _tmHelp, no autocomplete. Only ever meant to run as a notification's own
+// terminal_cmd (auto-attached by btn.applyTier in runtime.js), auto-executed
+// once the existing consensus-quorum UI detects unanimity. It is still safe
+// to type by hand or forge, though — resolve_tier_change() (SQL, security
+// definer) re-counts votes itself and no-ops unless real quorum is met, so
+// hiding this command is a courtesy, not the actual protection.
+async function _tmResolveStatus(args) {
+  var notifId = (args || [])[0];
+  if (!notifId) return; // silent — this should never be invoked by a person directly
+  try {
+    var r = await fetch(SUPA_URL + '/rest/v1/rpc/resolve_tier_change', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, _authHeaders()),
+      body: JSON.stringify({ notif_id: notifId })
+    });
+    var data = r.ok ? await r.json() : null;
+    if (data && data.ok) {
+      _tmL('tok', '✓ tier შეიცვალა — ' + data.tier);
+      if (typeof loadNotifs === 'function') loadNotifs();
+    } else {
+      _tmL('tdm', 'tier ცვლილება ჯერ არ დამტკიცებულა (' + (data && data.reason ? data.reason : 'უცნობი') + ')');
+    }
+  } catch (e) { /* silent — this is a background auto-command */ }
+}
+
+// /სახელი <ახალი სახელი> — შეცვლის display_name-ს ნებისმიერ დროს (არა მხოლოდ
+// პირველ login-ზე). სასარგებლოა ზუსტად იმ შემთხვევისთვის, თუ პირველი login-ის
+// popup-ში სახელი ცარიელი დარჩა (ძველი ბაგი — Enter email-ის ველში აგზავნიდა
+// ფორმას სახელის ველამდე მისვლის გარეშე; ეს ახლა სავალდებულოა, მაგრამ ვინც
+// ადრე დარეგისტრირდა ცარიელი სახელით, ამ ბრძანებით გაასწორებს, ლოგაუთის გარეშე).
+async function _tmSetName(args) {
+  if (typeof window.isLoggedIn !== 'function' || !window.isLoggedIn()) {
+    _tmL('tdm', 'ჯერ არ ხარ ავტორიზებული — /ლოგინი.');
+    return;
+  }
+  var name = (args || []).join(' ').trim();
+  if (!name) { _tmL('ter', 'გამოყენება: /სახელი ახალი სახელი'); return; }
+  if (typeof window.setDisplayName !== 'function') { _tmL('ter', '✗ auth engine ვერ მოიძებნა (runtime.js?)'); return; }
+  var ok = await window.setDisplayName(name);
+  if (ok) _tmL('tok', '✓ სახელი შეიცვალა: ' + name);
+  else _tmL('ter', '✗ ვერ განახლდა');
 }
 
 function _tmLogout() {
