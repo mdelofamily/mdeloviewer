@@ -1133,7 +1133,6 @@ window.SUPABASE_URL = SUPA_URL; window.SUPABASE_ANON_KEY = SUPA_KEY; window.MDEL
 // ══════════════════════════════════════════════════════════════
 const AUTH_URL = SUPA_URL + '/auth/v1';
 const _AUTH_SESSION_KEY  = 'mdelo_auth_session';   // {access_token, refresh_token, expires_at, user}
-const _AUTH_VERIFIER_KEY = 'mdelo_pkce_verifier';  // transient, cleared once exchanged
 const _TIER_RANK = { visitor: 0, caretaker: 1, resident: 2, shadow_admin: 3 };
 
 function _authGetSession() {
@@ -1158,26 +1157,15 @@ function _authHeaders() {
 }
 window._authHeaders = _authHeaders;
 
-function _b64url(bytes) {
-  return btoa(String.fromCharCode.apply(null, bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-function _randVerifier() {
-  const arr = new Uint8Array(64);
-  crypto.getRandomValues(arr);
-  return _b64url(arr);
-}
-async function _codeChallenge(verifier) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-  return _b64url(new Uint8Array(digest));
-}
-
-// Sends the magic-link email. Redirect target = current page (origin + path,
-// no query/hash) so the person lands back exactly where they clicked from.
+// Sends the magic-link email. redirectTo = current page (origin + path, no
+// query/hash) so the person lands back exactly where they clicked from.
+// NOTE: the Supabase "Magic Link" email template must be edited (Dashboard →
+// Authentication → Email Templates) to point to {{ .RedirectTo }}?token_hash=
+// {{ .TokenHash }}&type=email — the *default* template uses Supabase's own
+// hosted /verify redirect, which never lands back on our page with a usable
+// query param at all, so none of this works until that template is changed.
 window.requestMagicLink = async function (email) {
   try {
-    const verifier = _randVerifier();
-    localStorage.setItem(_AUTH_VERIFIER_KEY, verifier);
-    const challenge = await _codeChallenge(verifier);
     const redirectTo = window.location.origin + window.location.pathname;
     const r = await fetch(AUTH_URL + '/otp', {
       method: 'POST',
@@ -1185,8 +1173,6 @@ window.requestMagicLink = async function (email) {
       body: JSON.stringify({
         email: email,
         create_user: true,
-        code_challenge: challenge,
-        code_challenge_method: 'S256',
         options: { email_redirect_to: redirectTo }
       })
     });
@@ -1196,16 +1182,16 @@ window.requestMagicLink = async function (email) {
   } catch (e) { return { ok: false, status: 0, msg: e.message }; }
 };
 
-async function _authExchangeCode(code) {
-  const verifier = localStorage.getItem(_AUTH_VERIFIER_KEY);
-  if (!verifier) return null;
+// Exchanges the token_hash (from the magic-link redirect, once the email
+// template points back here) for a real session — POST /verify returns the
+// session directly in the response body, no separate code/verifier step.
+async function _authVerifyTokenHash(token_hash, type) {
   try {
-    const r = await fetch(AUTH_URL + '/token?grant_type=pkce', {
+    const r = await fetch(AUTH_URL + '/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'apikey': SUPA_KEY },
-      body: JSON.stringify({ auth_code: code, code_verifier: verifier })
+      body: JSON.stringify({ type: type || 'email', token_hash: token_hash })
     });
-    localStorage.removeItem(_AUTH_VERIFIER_KEY);
     return r.ok ? await r.json() : null;
   } catch (e) { return null; }
 }
@@ -1237,6 +1223,45 @@ window.signOut = function () {
   _authSetSession(null);
   window._myTier = null;
   if (typeof toast === 'function') toast('გამოხვედი სისტემიდან');
+};
+
+// Small custom modal — email + name together in one form (prompt() only
+// supports a single field, so a real DOM popup is needed for both at once).
+// Resolves { email, name } on submit, or null if the person cancels/closes.
+window.showLoginModal = function (prefillEmail) {
+  return new Promise((resolve) => {
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
+    wrap.innerHTML =
+      '<div style="background:#161b22;border:1px solid rgba(88,166,255,0.4);border-radius:12px;padding:20px;width:min(90vw,320px);color:#e6edf3;font-family:inherit;">' +
+        '<div style="font-size:15px;font-weight:600;margin-bottom:14px;">შესვლა</div>' +
+        '<input id="_loginEmail" type="email" placeholder="ელფოსტა" style="width:100%;box-sizing:border-box;height:36px;margin-bottom:10px;padding:0 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#e6edf3;font-size:14px;" />' +
+        '<input id="_loginName" type="text" placeholder="სახელი (გამოჩნდება დიალოგებში)" style="width:100%;box-sizing:border-box;height:36px;margin-bottom:14px;padding:0 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#e6edf3;font-size:14px;" />' +
+        '<div style="display:flex;gap:8px;">' +
+          '<button id="_loginCancel" style="flex:1;height:36px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:#e6edf3;border-radius:8px;font-size:13px;cursor:pointer;">გაუქმება</button>' +
+          '<button id="_loginSubmit" style="flex:1;height:36px;background:rgba(88,166,255,0.25);border:1px solid rgba(88,166,255,0.6);color:#e6edf3;border-radius:8px;font-size:13px;cursor:pointer;">გაგზავნა</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(wrap);
+
+    var emailEl = wrap.querySelector('#_loginEmail');
+    var nameEl  = wrap.querySelector('#_loginName');
+    if (prefillEmail) { emailEl.value = prefillEmail; nameEl.focus(); } else { emailEl.focus(); }
+
+    function done(result) { wrap.remove(); resolve(result); }
+    wrap.querySelector('#_loginCancel').onclick = () => done(null);
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) done(null); });
+    function trySubmit() {
+      var email = emailEl.value.trim();
+      var name = nameEl.value.trim();
+      if (!email) { emailEl.focus(); return; }
+      done({ email: email, name: name });
+    }
+    wrap.querySelector('#_loginSubmit').onclick = trySubmit;
+    [emailEl, nameEl].forEach((el) => {
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter') trySubmit(); });
+    });
+  });
 };
 
 // ── tier cache (one row per user in user_tiers) ──
@@ -1285,20 +1310,22 @@ window.setDisplayName = async function (name) {
   } catch (e) { return false; }
 };
 
-// Handles the ?code=... redirect on load, or silently refreshes/restores an
-// existing session. Awaited from window.addEventListener('load', ...) below,
-// before anything that might want to know the person's tier.
+// Handles the ?token_hash=...&type=... redirect on load, or silently
+// refreshes/restores an existing session. Awaited from
+// window.addEventListener('load', ...) below, before anything that might
+// want to know the person's tier.
 async function _authBoot() {
   const params = new URLSearchParams(window.location.search);
-  const code = params.get('code');
+  const tokenHash = params.get('token_hash');
   let data = null;
-  if (code) {
-    data = await _authExchangeCode(code);
+  if (tokenHash) {
+    data = await _authVerifyTokenHash(tokenHash, params.get('type'));
     if (data) _authStoreFromTokenResponse(data);
-    params.delete('code');
+    params.delete('token_hash');
+    params.delete('type');
     const clean = window.location.pathname + (params.toString() ? '?' + params.toString() : '') + window.location.hash;
     history.replaceState(null, '', clean);
-    if (data && typeof toast === 'function') toast('✓ ავტორიზებული ხარ');
+    if (typeof toast === 'function') toast(data ? '✓ ავტორიზებული ხარ' : '✗ login ბმული აღარ არის ვალიდური');
   } else {
     const s = _authGetSession();
     if (s && s.refresh_token && s.expires_at < Date.now() + 60000) {
@@ -1308,9 +1335,9 @@ async function _authBoot() {
   }
   if (window.isLoggedIn()) {
     await _authLoadTier();
-    // fresh login (code just exchanged) + no name yet → apply the name that was
-    // collected up-front at /ლოგინი time; only ask again if it's not there
-    // (e.g. the magic link was opened on a different device/browser)
+    // fresh login (token_hash just verified) + no name yet → apply the name
+    // that was collected up-front at /ლოგინი time; only ask again if it's
+    // not there (e.g. the magic link was opened on a different device)
     if (data && window._myTier && !window._myTier.display_name) {
       let name = null;
       try { name = localStorage.getItem('mdelo_pending_name'); } catch (e) {}
@@ -3352,39 +3379,38 @@ function _tmObjects() {
   _tmL('tdm', _SEP);
 }
 
-// /ლოგინი                — მაჩვენე ჩემი სტატუსი, ან (თუ არ ხარ login) გამოითხოვე
-//                           email + სახელი ერთდროულად, სანამ magic link გაიგზავნება —
-//                           ეს ბრძანება, რომელსაც ღილაკი (parser-ით მიბმული) რეალურად
-//                           უშვებს, ამიტომ თავად უნდა მოითხოვოს ორივე.
-//                           სახელი დროებით ინახება localStorage-ში (mdelo_pending_name)
-//                           და გამოიყენება redirect-ის შემდეგ, _authBoot-ში (runtime.js) —
-//                           თუ ბმული სხვა მოწყობილობაზე გაიხსნა, სადაც ეს localStorage
-//                           მიუწვდომელია, იქ უბრალოდ ხელახლა ჰკითხავს.
+// /ლოგინი                — მაჩვენე ჩემი სტატუსი, ან (თუ არ ხარ login) გახსენი
+//                           ერთი პატარა popup (runtime.js: showLoginModal) email-ისა
+//                           და სახელისთვის ერთდროულად, სანამ magic link გაიგზავნება.
 // /ლოგინი ელფოსტა@მაგ.com — direct, ტერმინალიდან ხელით — email-ს აღარ ითხოვს
+//                           (popup მხოლოდ სახელს სთხოვს ამ შემთხვევაში)
 async function _tmLogin(args) {
   if (typeof window.isLoggedIn === 'function' && window.isLoggedIn()) {
     _tmL('tok', '✓ ავტორიზებული ხარ, როგორც ' + window.myDisplayName() + '  (tier: ' + window.myTier() + ')');
     return;
   }
   var email = (args || []).join(' ').trim();
-  if (!email) {
-    email = prompt('შენი ელფოსტა (login ბმულს გამოგიგზავნით):');
-    if (!email) return;
-  }
-  var name = prompt('რა გქვია? (ეს სახელი გამოჩნდება დიალოგებში)');
-  if (name && name.trim()) { try { localStorage.setItem('mdelo_pending_name', name.trim()); } catch (e) {} }
+  var name = '';
+
+  if (typeof window.showLoginModal !== 'function') { _tmL('ter', '✗ auth engine ვერ მოიძებნა (runtime.js?)'); return; }
+  var res = await window.showLoginModal(email || null);
+  if (!res) return; // გააუქმა
+  email = res.email;
+  name = res.name;
+
+  if (name) { try { localStorage.setItem('mdelo_pending_name', name); } catch (e) {} }
 
   if (typeof window.requestMagicLink !== 'function') { _tmL('ter', '✗ auth engine ვერ მოიძებნა (runtime.js?)'); return; }
   _tmL('ti', '/ლოგინი ' + email);
   _tmL('tdm', 'იგზავნება login ბმული "' + email + '"-ზე...');
-  var res = await window.requestMagicLink(email);
-  if (res === true) _tmL('tok', '✓ შეამოწმე ელფოსტა — login ბმული გამოგზავნილია');
-  else _tmL('ter', '✗ ვერ გაიგზავნა: ' + (res && res.msg ? res.msg : 'უცნობი შეცდომა'));
+  var lres = await window.requestMagicLink(email);
+  if (lres === true) _tmL('tok', '✓ შეამოწმე ელფოსტა — login ბმული გამოგზავნილია');
+  else _tmL('ter', '✗ ვერ გაიგზავნა: ' + (lres && lres.msg ? lres.msg : 'უცნობი შეცდომა'));
 }
 
 function _tmLogout() {
   if (typeof window.isLoggedIn !== 'function' || !window.isLoggedIn()) {
-    _tmL('tdm', 'უკვეც არ ხარ ავტორიზებული.');
+    _tmL('tdm', 'ჯერ არ ხარ ავტორიზებული.');
     return;
   }
   if (typeof window.signOut !== 'function') { _tmL('ter', '✗ auth engine ვერ მოიძებნა (runtime.js?)'); return; }
