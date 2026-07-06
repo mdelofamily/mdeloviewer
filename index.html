@@ -52,11 +52,17 @@ body{background:#111;overflow:hidden;width:100vw;height:100dvh;}
 #tmSlashBtn:hover{background:rgba(0,255,136,.09);border-color:rgba(0,255,136,.45);color:#00ff88;}
 #tmSlashBtn:active{background:rgba(0,255,136,.18);}
 .tm-ir{position:relative;z-index:1;display:flex;flex-direction:column;border-top:1px solid rgba(0,255,136,.09);background:rgba(0,0,0,.2);flex-shrink:0;}
-.tm-ir-row{display:flex;align-items:center;padding:7px 13px;}
-.tm-pr{color:#00ff88;font-family:'Courier New',monospace;font-size:13px;margin-right:7px;opacity:.45;white-space:nowrap;}
-#tmIn{flex:1;background:transparent;border:none;outline:none;color:#00ff88;font-family:'Courier New',Consolas,monospace;font-size:13px;caret-color:#00ff88;}
+.tm-ir-row{display:flex;align-items:center;flex-wrap:nowrap;padding:7px 13px;}
+.tm-pr{color:#00ff88;font-family:'Courier New',monospace;font-size:13px;margin-right:7px;opacity:.45;white-space:nowrap;flex-shrink:0;}
+#tmIn{flex:1 1 auto;min-width:0;background:transparent;border:none;outline:none;color:#00ff88;font-family:'Courier New',Consolas,monospace;font-size:13px;caret-color:#00ff88;}
 #tmIn::placeholder{color:rgba(0,255,136,.2);}
-#tmHint{color:rgba(0,255,136,.2);font-family:'Courier New',monospace;font-size:13px;pointer-events:none;user-select:none;}
+#tmHint{flex:0 1 auto;min-width:0;max-width:40%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:rgba(0,255,136,.2);font-family:'Courier New',monospace;font-size:13px;pointer-events:none;user-select:none;}
+.tm-hist-pop{display:none;position:absolute;left:13px;right:13px;bottom:100%;margin-bottom:4px;background:rgba(8,14,10,.97);border:1px solid rgba(0,255,136,.25);border-radius:4px;overflow:hidden;z-index:5;box-shadow:0 4px 14px rgba(0,0,0,.4);}
+.tm-hist-pop.open{display:block;}
+.tm-hist-item{padding:6px 10px;font-family:'Courier New',monospace;font-size:13px;color:rgba(0,255,136,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border-bottom:1px solid rgba(0,255,136,.08);}
+.tm-hist-item:last-child{border-bottom:none;}
+.tm-hist-item:active,.tm-hist-item:hover{background:rgba(0,255,136,.1);color:#00ff88;}
+.tm-hist-item .thi-ix{opacity:.4;margin-right:6px;}
 #tmTa{display:none;background:transparent;border:none;border-bottom:1px solid rgba(0,255,136,.09);outline:none;color:#00ff88;font-family:'Courier New',Consolas,monospace;font-size:13px;caret-color:#00ff88;resize:none;padding:8px 13px;line-height:1.55;min-height:64px;max-height:120px;overflow-y:auto;}
 #tmTa::placeholder{color:rgba(0,255,136,.2);}
 #tmMlBtn{background:transparent;border:1px solid rgba(0,255,136,.18);color:rgba(0,255,136,.65);font-family:'Courier New',monospace;font-size:13px;font-weight:bold;padding:1px 7px;cursor:pointer;border-radius:2px;transition:all .12s;flex-shrink:0;line-height:1.5;margin-right:5px;}
@@ -193,6 +199,7 @@ body{background:#111;overflow:hidden;width:100vw;height:100dvh;}
   </div>
   <div id="tmOut"></div>
   <div class="tm-ir">
+    <div id="tmHistPop" class="tm-hist-pop"></div>
     <textarea id="tmTa" autocomplete="off" spellcheck="false" placeholder="..."></textarea>
     <div class="tm-ir-row">
       <span class="tm-pr">~/mdelo $</span>
@@ -3011,6 +3018,7 @@ function _tmOpen_() {
 function closeTerm() {
   // cancel edit mode silently on close
   if (_tmEditObj) { _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; document.getElementById('tmTa').value = ''; if (_tmMulti) tmToggleMulti(); }
+  if (typeof _tmHistPopHide === 'function') _tmHistPopHide();
   _tmOpen = false; _tmFull = false;
   var t = document.getElementById('mdlTerm');
   t.classList.remove('open', 'tmfull');
@@ -3073,6 +3081,7 @@ function tmToggleMulti() {
   var hint  = document.getElementById('tmHint');
   var slash = document.getElementById('tmSlashBtn');
   var send  = document.getElementById('tmSendBtn');
+  _tmHistPopHide();
   btn.textContent = _tmMulti ? '■' : '□';
   btn.classList.toggle('on', _tmMulti);
   inp.style.display   = _tmMulti ? 'none'  : '';
@@ -3162,25 +3171,61 @@ function _tmBoot() {
   setTimeout(_histLoad, lines.length * 55 + 80);
 }
 
+// ── inline history popup (backspace on empty input) ──
+var _TM_HPOP_N = 5; // how many recent commands to show
+
+function _tmHistPopBuild() {
+  var pop = document.getElementById('tmHistPop');
+  if (!pop || !_tmHist.length) return;
+  var items = _tmHist.slice(0, _TM_HPOP_N);
+  pop.innerHTML = items.map(function (h, i) {
+    var esc = String(h).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<div class="tm-hist-item" data-ix="' + i + '">'
+         +   '<span class="thi-ix">' + (i + 1) + '</span>' + esc
+         + '</div>';
+  }).join('');
+  pop.classList.add('open');
+}
+function _tmHistPopHide() {
+  var pop = document.getElementById('tmHistPop');
+  if (pop) pop.classList.remove('open');
+}
+window._tmHistPopHide = _tmHistPopHide;
+
 // ── keyboard input ──
 (function () {
   var inp = document.getElementById('tmIn');
   var hint = document.getElementById('tmHint');
+  var pop  = document.getElementById('tmHistPop');
+
   inp.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
-      var v = inp.value.trim(); if (!v) return;
+      var v = inp.value.trim();
+      if (!v) {
+        // empty input + Enter/Go → run the most recent command directly
+        if (_tmHist.length) {
+          var last = _tmHist[0];
+          _tmHistPopHide();
+          _tmL('ti', last);
+          _tmRun(last);
+        }
+        return;
+      }
       _tmHist.unshift(v); _tmHIdx = -1; _tmHCur = '';
       var _isChat = v.charAt(0) !== '/' && typeof chatHandleInput === 'function';
       if (!_isChat) _tmL('ti', v);
       inp.value = ''; hint.textContent = '';
+      _tmHistPopHide();
       _tmRun(v);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      _tmHistPopHide();
       if (_tmHIdx === -1) _tmHCur = inp.value;
       _tmHIdx = Math.min(_tmHIdx + 1, _tmHist.length - 1);
       inp.value = _tmHist[_tmHIdx] || '';
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
+      _tmHistPopHide();
       _tmHIdx = Math.max(_tmHIdx - 1, -1);
       inp.value = _tmHIdx === -1 ? _tmHCur : _tmHist[_tmHIdx];
     } else if (e.key === 'Tab') {
@@ -3189,13 +3234,40 @@ function _tmBoot() {
       var m = _TMCMDS.find(function (c) { return c.startsWith(v2) && c !== v2; });
       if (m) { inp.value = m; hint.textContent = ''; }
     } else if (e.key === 'Backspace' && inp.value === '' && _tmHist.length) {
-      e.preventDefault(); inp.value = _tmHist[0]; _tmHIdx = 0;
-    } else if (e.key === 'Escape') { closeTerm(); }
+      e.preventDefault();
+      _tmHistPopBuild();
+    } else if (e.key === 'Escape') {
+      if (pop && pop.classList.contains('open')) { _tmHistPopHide(); }
+      else { closeTerm(); }
+    } else {
+      _tmHistPopHide();
+    }
   });
   inp.addEventListener('input', function () {
     var v = inp.value.trim();
     var m = _TMCMDS.find(function (c) { return c.startsWith(v) && c !== v; });
     hint.textContent = m ? m.slice(v.length) : '';
+    if (v !== '') _tmHistPopHide();
+  });
+
+  // tap an item in the popup → fill it into the input (no auto-run)
+  if (pop) {
+    pop.addEventListener('click', function (e) {
+      var item = e.target.closest('.tm-hist-item');
+      if (!item) return;
+      var ix = +item.dataset.ix;
+      inp.value = _tmHist[ix] || '';
+      _tmHIdx = ix;
+      _tmHistPopHide();
+      inp.focus();
+    });
+  }
+
+  // tap anywhere outside the popup/input → close it
+  document.addEventListener('pointerdown', function (e) {
+    if (!pop || !pop.classList.contains('open')) return;
+    if (pop.contains(e.target) || e.target === inp) return;
+    _tmHistPopHide();
   });
 })();
 
