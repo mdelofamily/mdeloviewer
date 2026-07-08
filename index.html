@@ -3836,7 +3836,13 @@ async function _tmResolveStatus(args) {
       headers: Object.assign({ 'Content-Type': 'application/json' }, _authHeaders()),
       body: JSON.stringify({ notif_id: notifId })
     });
-    var data = r.ok ? await r.json() : null;
+    if (!r.ok) {
+      var errBody = await r.text().catch(function () { return ''; });
+      _tmL('tdm', 'tier ცვლილება ჯერ არ დამტკიცებულა (HTTP ' + r.status + ')');
+      _tmL('ter', 'Supabase: ' + errBody.slice(0, 200));
+      return;
+    }
+    var data = await r.json();
     if (data && data.ok) {
       _tmL('tok', '✓ tier შეიცვალა — ' + data.tier);
       if (typeof loadNotifs === 'function') loadNotifs();
@@ -3844,7 +3850,7 @@ async function _tmResolveStatus(args) {
     } else {
       _tmL('tdm', 'tier ცვლილება ჯერ არ დამტკიცებულა (' + (data && data.reason ? data.reason : 'უცნობი') + ')');
     }
-  } catch (e) { /* silent — this is a background auto-command */ }
+  } catch (e) { _tmL('ter', 'გამონაკლისი: ' + e.message); }
 }
 
 // /სახელი <ახალი სახელი> — შეცვლის display_name-ს ნებისმიერ დროს (არა მხოლოდ
