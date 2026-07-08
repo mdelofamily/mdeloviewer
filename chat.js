@@ -27,10 +27,10 @@
 
   // ── Slash-command help strings ────────────────────────────────────────────
   var CMD_HELP = [
-    '/nick &lt;სახელი&gt;   — nickname-ის შეცვლა',
-    '/me &lt;action&gt;    — action message (*nick does something*)',
-    '/color &lt;#hex&gt;   — nickname-ის ფერი',
-    '/who              — ონლაინ მომხმარებლები',
+    '/მეტსახელი &lt;სახელი&gt;   — nickname-ის შეცვლა',
+    '/მე &lt;action&gt;    — action message (*nick does something*)',
+    '/ფერი &lt;#hex&gt;   — nickname-ის ფერი',
+    '/ვინ              — ონლაინ მომხმარებლები',
     '/clear            — ეკრანის გასუფთავება',
     '/help             — ეს სია',
   ];
@@ -115,7 +115,7 @@ var _nick = {
 
   // ── Slash commands ────────────────────────────────────────────────────────
   function _cmdNick(args) {
-    if (!args[0]) { _err('გამოყენება: /nick <სახელი>'); return; }
+    if (!args[0]) { _err('გამოყენება: /მეტსახელი <სახელი>'); return; }
     // Allow Georgian + latin + digits + underscore, max 24 chars
     var val = args[0].replace(/[^a-zA-Z0-9_\u10d0-\u10ff]/g, '').slice(0, 24);
     if (!val) { _err('არასწორი სახელი (latin/ქართული/_ ნებადართულია)'); return; }
@@ -195,10 +195,10 @@ var _nick = {
       var args  = parts.slice(1);
 
       switch (cmd) {
-        case 'nick':  _cmdNick(args);  return true;
-        case 'color': _cmdColor(args); return true;
-        case 'me':    _cmdMe(args);    return true;
-        case 'who':   _cmdWho();       return true;
+        case 'nick':  case 'მეტსახელი': _cmdNick(args);  return true;
+        case 'color': case 'ფერი':      _cmdColor(args); return true;
+        case 'me':    case 'მე':        _cmdMe(args);    return true;
+        case 'who':   case 'ვინ':       _cmdWho();       return true;
         case 'debug':
           _sys('=== chat debug ===');
           _sys('url: ' + (CFG.url ? CFG.url.slice(0,30)+'...' : 'EMPTY'));
