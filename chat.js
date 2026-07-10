@@ -42,21 +42,14 @@
   var _online     = {};     // nick → { color }  (others only)
 
   // ── Nickname (persisted in localStorage) ─────────────────────────────────
+  var _sessionId = 'visitor_' + (Math.random() * 9000 + 1000 | 0);
+
   var _nick = {
-    get name()  { return localStorage.getItem('mdelo_nick')  || _makeGuest(); },
+    get name()  { return localStorage.getItem('mdelo_nick') || _sessionId; },
     set name(v) { localStorage.setItem('mdelo_nick', v); },
     get color() { return localStorage.getItem('mdelo_color') || _hashColor(this.name); },
     set color(c){ localStorage.setItem('mdelo_color', c); },
   };
-
-var _sessionId = 'visitor_' + (Math.random() * 9000 + 1000 | 0);
-
-var _nick = {
-  get name()  { return localStorage.getItem('mdelo_nick') || _sessionId; },
-  set name(v) { localStorage.setItem('mdelo_nick', v); },
-  get color() { return localStorage.getItem('mdelo_color') || _hashColor(this.name); },
-  set color(c){ localStorage.setItem('mdelo_color', c); },
-};
 
   // ── Utilities ─────────────────────────────────────────────────────────────
   function _hash(s) {

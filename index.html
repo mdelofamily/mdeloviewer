@@ -2896,34 +2896,6 @@ async function _gmSaveTodoState(todoId, checked) {
   } catch (e) {}
 }
 
-// ── menu todo checkbox state (persisted in Supabase, table: menu_todo_state) ──
-var _gmTodoState = new Map(); // todo_id -> checked (bool)
-
-async function loadTodoState() {
-  try {
-    var r = await fetch(
-      SUPA_URL + '/rest/v1/menu_todo_state?map_id=eq.' + encodeURIComponent(_MAP_ID),
-      { headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY } }
-    );
-    if (!r.ok) return;
-    var rows = await r.json();
-    rows.forEach(function(row) { _gmTodoState.set(row.todo_id, !!row.checked); });
-  } catch (e) {}
-}
-
-async function _gmSaveTodoState(todoId, checked) {
-  try {
-    await fetch(SUPA_URL + '/rest/v1/menu_todo_state', {
-      method: 'POST',
-      headers: Object.assign({
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=minimal'
-      }, _authHeaders()),
-      body: JSON.stringify({ map_id: _MAP_ID, todo_id: todoId, checked: checked, updated_at: new Date().toISOString() })
-    });
-  } catch (e) {}
-}
-
 async function loadDialogueOverrides() {
   try {
     var r = await fetch(
@@ -3191,7 +3163,6 @@ window.addEventListener('load', async () => {
   _renderDevViewBanner();
   loadNotifs();
   loadDialogueOverrides().then(_markerRestore);
-  loadTodoState();
   loadTodoState();
   loadMenuOverrides();
   loadMacroOverrides();
