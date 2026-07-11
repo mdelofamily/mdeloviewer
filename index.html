@@ -3240,14 +3240,23 @@ function _mdThrottleOk() {
   return _mdUploadTimes.length < _MD_MAX_PER_MIN;
 }
 
-// Storage keys are a lot pickier than a display name — strip everything but
-// alnum + Georgian + a few safe separators so the path never needs encoding.
+// Storage keys reject non-ASCII outright (confirmed: a Georgian nick in the
+// path 400'd with "InvalidKey") — so unlike a display name, this strips
+// EVERYTHING but plain ASCII alnum + a few safe separators. Non-ASCII input
+// collapses toward "_" — fine, since this is only ever used for the
+// filename part; the folder segment uses a UUID instead, see _mdNick().
 function _mdSanitizePathPart(s) {
-  return String(s || '').replace(/[^a-zA-Z0-9ა-ჿ._-]/g, '_').replace(/_+/g, '_').slice(0, 80) || 'x';
+  return String(s || '').replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').slice(0, 80) || 'x';
 }
 
+// The folder segment of the path. Prefers the real auth UUID (window.myUserId())
+// over the caretaker's display name — always ASCII (no key-rejection risk for
+// Georgian names) and collision-proof (two caretakers can share a display name).
+// Falls back to a sanitized display name only if no session is available yet.
 function _mdNick() {
-  var raw = (typeof window.myDisplayName === 'function') ? window.myDisplayName() : (localStorage.getItem('mdelo_nick') || 'მოგზაური');
+  var uid = (typeof window.myUserId === 'function') ? window.myUserId() : null;
+  if (uid) return uid;
+  var raw = (typeof window.myDisplayName === 'function') ? window.myDisplayName() : (localStorage.getItem('mdelo_nick') || 'x');
   return _mdSanitizePathPart(raw);
 }
 
