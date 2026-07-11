@@ -3199,6 +3199,9 @@ var _tmEditMode = null;    // 'dlg' | 'menuItem' | null
 var _tmEditMenuCtx = null; // { node, idx, type } — set only when _tmEditMode === 'menuItem'
 var _tmEditLabel = null;   // human-readable label shown in cancel/header messages
 var _tmEditBuf = null;     // raw content buffered from a chain segment, consumed by /შეყვანა
+var _tmEditMediaBuf = [];  // [{items:[{type,url,name}...]}...] — files-segments captured via /მედია
+                            // during the current 'text' menuItem session; [[მედია:N]] tokens in tmTa
+                            // point into this by index. Cleared on every session open/close/save/cancel.
 var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/მარკერი','/დახურვა','/დროშა','/მეტსახელი','/მე','/ვინ','/ფერი','/help','/გზა','/ჩვ','/გად','/md','/წაშ','/რედ','/ფოთოლი','/მაკრო','/ლოგინი','/ლოგაუთი','/სახელი','/სესია','/სია','/სურვილი','/რეჟიმი','/შესრულება'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
@@ -3210,7 +3213,7 @@ function _tmOpen_() {
 }
 function closeTerm() {
   // cancel edit mode silently on close
-  if (_tmEditObj) { _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; document.getElementById('tmTa').value = ''; if (_tmMulti) tmToggleMulti(); }
+  if (_tmEditObj) { _tmMediaCleanupOnCancel(); _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; _tmEditMediaBuf = []; document.getElementById('tmTa').value = ''; if (_tmMulti) tmToggleMulti(); }
   if (typeof _tmHistPopHide === 'function') _tmHistPopHide();
   _tmOpen = false; _tmFull = false;
   var t = document.getElementById('mdlTerm');
@@ -3267,6 +3270,12 @@ function _histClear() {
 
 // ── multiline (chat/edit) mode ──
 function tmToggleMulti() {
+  // Session-lock: while an edit session is open (/რედ, /დიალოგი, /ლეგენდა),
+  // _tmMenuEditOpen (etc.) already force multiline ON — the toggle button
+  // has no legitimate job to do mid-session, and letting it fire would swap
+  // to the single-line box, silently dropping the in-progress textarea
+  // content while leaving _tmEditObj open underneath (orphaned session).
+  if (_tmEditObj) return;
   _tmMulti = !_tmMulti;
   var btn   = document.getElementById('tmMlBtn');
   var inp   = document.getElementById('tmIn');
@@ -3327,7 +3336,10 @@ function tmSend() {
       else { closeTerm(); }
     }
   });
-  ta.addEventListener('input', function () { if (_tmMulti) _tmTaResize(ta); });
+  ta.addEventListener('input', function () {
+    if (_tmMulti) _tmTaResize(ta);
+    if (_tmEditMode === 'menuItem' && _tmEditMenuCtx && _tmEditMenuCtx.type === 'text') _tmMediaCheckTrigger(ta);
+  });
 })();
 
 
@@ -4051,7 +4063,7 @@ async function _tmSaveLegend(text) {
   }
 
   var label = _tmEditLabel;
-  _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null;
+  _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; _tmEditMediaBuf = [];
   document.getElementById('tmTa').value = '';
   if (_tmMulti) tmToggleMulti();
 
@@ -4429,11 +4441,12 @@ function _tmDlgEdit(args) {
 // Cancel edit mode without saving
 function _tmEditCancel() {
   var label = _tmEditLabel || _tmEditObj;
+  _tmMediaCleanupOnCancel();
   _tmEditObj = null;
   _tmEditMode = null;
   _tmEditMenuCtx = null;
   _tmEditLabel = null;
-  _tmEditBuf = null;
+  _tmEditBuf = null; _tmEditMediaBuf = [];
   document.getElementById('tmTa').value = '';
   if (_tmMulti) tmToggleMulti();
   _tmL('tdm', label + ' — გაუქმდა');
@@ -4485,7 +4498,7 @@ async function _tmSaveDlg(dsl) {
     _tmEditObj = null;
     _tmEditMode = null;
     _tmEditLabel = null;
-    _tmEditBuf = null;
+    _tmEditBuf = null; _tmEditMediaBuf = [];
     document.getElementById('tmTa').value = '';
     if (_tmMulti) tmToggleMulti();
     _tmL('tok', title + ' — შენახულია ✓  (ყველა viewer განახლდება)');
@@ -4727,6 +4740,11 @@ async function _tmMenuRm(args) {
     var idx = parseInt(arg);
     if (!node) { _tmL('ter', 'root-ში items არ არსებობს'); return; }
     if (!node.items || !node.items[idx]) { _tmL('ter', 'item [' + idx + '] ვერ მოიძებნა — /ls'); return; }
+    var removedIt = node.items[idx];
+    if (removedIt && typeof removedIt === 'object' && removedIt.segments && typeof window.mdMediaDelete === 'function') {
+      var itUrls = _tmSegmentFileUrls(removedIt.segments);
+      if (itUrls.length) window.mdMediaDelete(itUrls);
+    }
     node.items.splice(idx, 1);
     _tmL('tok', '✗ item [' + idx + '] წაიშალა');
     await _tmMenuSaveNode(node.id, { items_json: node.items });
@@ -4735,6 +4753,10 @@ async function _tmMenuRm(args) {
     var fIdx = list.findIndex(function (n) { return (n.title || '').trim() === arg; });
     if (fIdx < 0) { _tmL('ter', 'ვერ მოიძებნა: "' + arg + '" — /ls'); return; }
     var removed = list[fIdx];
+    if (typeof window.mdMediaDelete === 'function') {
+      var subtreeUrls = _tmCollectMediaUrls(removed);
+      if (subtreeUrls.length) window.mdMediaDelete(subtreeUrls);
+    }
     list.splice(fIdx, 1);
     _tmL('tok', '✗ "' + arg + '" — სექცია წაიშალა (ქვე-შემცველობასთან ერთად)');
     await _tmMenuSaveNode(removed.id, { deleted: true });
@@ -4773,22 +4795,105 @@ async function _tmMenuEdit(args) {
   await _tmMenuSaveNode(node.id, { items_json: node.items });
 }
 
+// Placeholder token for a files-segment inside the plain-text editor buffer.
+// Points into _tmEditMediaBuf[n] by index — never carries the file data
+// itself inline, keeps the textarea readable.
+function _tmSegmentFileUrls(segments) {
+  var urls = [];
+  (segments || []).forEach(function (seg) {
+    if (seg.type === 'files') (seg.items || []).forEach(function (f) { if (f && f.url) urls.push(f.url); });
+  });
+  return urls;
+}
+
+// Walks a node and every descendant child, collecting every media URL any
+// text-item in the subtree is carrying — used by section-level /rm so a
+// whole-branch delete doesn't orphan the illustrations of everything nested inside it.
+function _tmCollectMediaUrls(node) {
+  var urls = [];
+  (node.items || []).forEach(function (it) {
+    if (it && typeof it === 'object' && it.segments) urls = urls.concat(_tmSegmentFileUrls(it.segments));
+  });
+  (node.children || []).forEach(function (child) { urls = urls.concat(_tmCollectMediaUrls(child)); });
+  return urls;
+}
+
+function _tmMediaToken(n) { return '[[მედია:' + n + ']]'; }
+
+// Fire-and-forget cleanup for a cancelled session: only touches buffer
+// entries uploaded THIS session (_preexisting:false) — media rehydrated from
+// an item's already-saved segments[] is never deleted just because the
+// caretaker hit Esc.
+function _tmMediaCleanupOnCancel() {
+  if (typeof window.mdMediaDelete !== 'function') return;
+  var urls = [];
+  (_tmEditMediaBuf || []).forEach(function (buf) {
+    if (buf._preexisting) return;
+    (buf.items || []).forEach(function (f) { if (f && f.url) urls.push(f.url); });
+  });
+  if (urls.length) window.mdMediaDelete(urls);
+}
+
 // Serialize an item into editable plain text for the multiline textarea.
 // Line 1 is a tagged "[emoji: X]" line so it can't be confused with real
 // label content — progress items also keep their value on a trailing "NN%" line.
+// For text items carrying segments[], each files-segment is rehydrated into
+// _tmEditMediaBuf and represented inline as a [[მედია:N]] token, so re-editing
+// an already-illustrated item doesn't lose its images.
 function _tmMenuItemToEditText(itObj) {
   var emoji = itObj.emoji || (itObj.type === 'progress' ? '📊' : '•');
   var head  = '[emoji: ' + emoji + ']';
   if (itObj.type === 'progress') {
     return head + '\n' + (itObj.label || '') + '\n\n' + (itObj.value != null ? itObj.value : 0) + '%';
   }
+  if (itObj.type === 'text' && itObj.segments && itObj.segments.length) {
+    var body = itObj.segments.map(function (seg) {
+      if (seg.type === 'files') {
+        var n = _tmEditMediaBuf.length;
+        _tmEditMediaBuf.push({ items: seg.items || [], _preexisting: true });
+        return _tmMediaToken(n);
+      }
+      return seg.value || '';
+    }).join('\n');
+    return head + '\n' + body;
+  }
   return head + '\n' + (itObj.label || '');
 }
 
-// Parse the textarea content back into { emoji, label, value } on save.
-// If line 1 isn't a valid "[emoji: X]" tag (e.g. accidentally edited away),
-// `fallbackEmoji` (the item's current emoji) is kept instead of guessing —
-// nothing gets silently swallowed into the label.
+// Parse text-editor lines (emoji tag already stripped) into segments[] + a
+// flattened plain-text label fallback (for old render code, and for search/
+// display anywhere segments aren't understood yet). [[მედია:N]] tokens
+// resolve against _tmEditMediaBuf, populated live during this session by
+// /მედია (or rehydrated on open, see above). A token pointing past the
+// buffer's end is left as literal text rather than silently dropped —
+// should never happen in normal use, but a visible stray bracket beats a
+// vanished upload.
+function _tmParseTextSegments(rest) {
+  var raw = rest.join('\n');
+  var segments = [];
+  var re = /\[\[მედია:(\d+)\]\]/g;
+  var lastIdx = 0, m;
+  function pushText(s) {
+    var v = s.replace(/^\n+|\n+$/g, '');
+    if (v.trim()) segments.push({ type: 'text', value: v });
+  }
+  while ((m = re.exec(raw))) {
+    var n = +m[1];
+    pushText(raw.slice(lastIdx, m.index));
+    if (_tmEditMediaBuf[n]) segments.push({ type: 'files', items: _tmEditMediaBuf[n].items || [] });
+    else pushText(m[0]);
+    lastIdx = re.lastIndex;
+  }
+  pushText(raw.slice(lastIdx));
+
+  var label = segments.map(function (s) { return s.type === 'text' ? s.value : '📎'; }).join(' ').trim();
+  return { segments: segments, label: label };
+}
+
+// Parse the textarea content back into { emoji, label, value, segments } on
+// save. If line 1 isn't a valid "[emoji: X]" tag (e.g. accidentally edited
+// away), `fallbackEmoji` (the item's current emoji) is kept instead of
+// guessing — nothing gets silently swallowed into the label.
 function _tmParseMenuEditText(text, type, fallbackEmoji) {
   var lines = text.split('\n');
   var emoji = fallbackEmoji || (type === 'progress' ? '📊' : '•');
@@ -4805,11 +4910,18 @@ function _tmParseMenuEditText(text, type, fallbackEmoji) {
     while (labelLines.length && labelLines[labelLines.length - 1].trim() === '') labelLines.pop();
     return { emoji: emoji, label: labelLines.join('\n').trim(), value: value };
   }
+
+  if (type === 'text') {
+    var ts = _tmParseTextSegments(rest);
+    return { emoji: emoji, label: ts.label, value: null, segments: ts.segments };
+  }
+
   return { emoji: emoji, label: rest.join('\n').trim(), value: null };
 }
 
 // Open the multiline editor for item [idx] of `node`.
 function _tmMenuEditOpen(node, idx, itObj) {
+  _tmEditMediaBuf = []; // fresh scope for this session — _tmMenuItemToEditText repopulates from existing segments, if any
   if (!_tmMulti) tmToggleMulti();
   document.getElementById('tmTa').value = _tmMenuItemToEditText(itObj);
   _tmTaResize();
@@ -4820,7 +4932,60 @@ function _tmMenuEditOpen(node, idx, itObj) {
 
   _tmL('tsy', '─── [' + idx + '] ' + (node.title || '') + ' ──────────────');
   _tmL('tdm', 'ხაზი 1 — [emoji: X], მხოლოდ X გამოცვალე');
+  if (itObj.type === 'text' || !itObj.type) _tmL('tdm', 'ახალ ხაზზე დაწერე "/მედია" — სურათი/mp3/txt ატვირთვისთვის');
   _tmL('tdm', 'Ctrl+Enter — შენახვა · Esc — გაუქმება');
+}
+
+// Detects a freshly-typed "/მედია" trigger line inside the multiline textarea
+// (the ONLY "/"-command recognized while a menuItem/text edit-session is
+// open — everything else about the terminal is locked to this session by
+// this point, see tmToggleMulti's guard) and opens the upload modal. Only
+// wired up for text-type menuItem sessions — see the input listener below.
+function _tmMediaCheckTrigger(ta) {
+  var pos = ta.selectionStart;
+  var before = ta.value.slice(0, pos);
+  if (!/(^|\n)\/მედია$/.test(before)) return;
+  var cut = before.replace(/\/მედია$/, '');
+  ta.value = cut + ta.value.slice(pos);
+  ta.setSelectionRange(cut.length, cut.length);
+  _tmTaResize(ta);
+  _tmMediaOpen(ta, cut.length);
+}
+
+// Opens upload.js's modal (mdMediaOpen, reused as-is — no index.html change),
+// and on a successful upload inserts a [[მედია:N]] token at `insertAt`,
+// pushing the returned file descriptors onto _tmEditMediaBuf[N]. A cancelled
+// upload (falsy/empty return) inserts nothing — the trigger text is already
+// gone by this point, so cancelling just leaves the cursor where it was.
+// ⚠️ ASSUMED contract: window.mdMediaOpen() returns a Promise resolving to
+// an array of {type, url, name} (or null/[] on cancel) — unconfirmed against
+// the actual upload.js, which hasn't been reviewed in this chat yet.
+async function _tmMediaOpen(ta, insertAt) {
+  if (typeof window.mdMediaOpen !== 'function') {
+    _tmL('ter', '✗ mdMediaOpen ვერ მოიძებნა (upload.js ჩატვირთულია?)');
+    return;
+  }
+  var files;
+  try {
+    files = await window.mdMediaOpen();
+  } catch (e) {
+    _tmL('ter', '✗ ატვირთვა ჩავარდა: ' + e.message);
+    return;
+  }
+  if (!files || !files.length) return;
+
+  var n = _tmEditMediaBuf.length;
+  _tmEditMediaBuf.push({ items: files, _preexisting: false });
+  var v     = ta.value;
+  var pad   = (insertAt > 0 && v.charAt(insertAt - 1) !== '\n') ? '\n' : '';
+  var padAf = (v.charAt(insertAt) !== '\n' && v.charAt(insertAt) !== '') ? '\n' : '';
+  var chunk = pad + _tmMediaToken(n) + padAf;
+  ta.value = v.slice(0, insertAt) + chunk + v.slice(insertAt);
+  var caretAt = insertAt + chunk.length;
+  ta.focus();
+  ta.setSelectionRange(caretAt, caretAt);
+  _tmTaResize(ta);
+  _tmL('tok', '📎 მედია დაემატა (' + files.length + ' ფაილი)');
 }
 
 // Save the multiline editor content back into the item + push to Supabase.
@@ -4830,7 +4995,8 @@ async function _tmSaveMenuItem(text) {
   var node = ctx.node, idx = ctx.idx;
   if (!node.items || !node.items[idx]) {
     _tmL('ter', '✗ item [' + idx + '] აღარ არსებობს');
-    _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null;
+    _tmMediaCleanupOnCancel();
+    _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; _tmEditMediaBuf = [];
     document.getElementById('tmTa').value = '';
     if (_tmMulti) tmToggleMulti();
     return;
@@ -4843,11 +5009,27 @@ async function _tmSaveMenuItem(text) {
   itObj.type  = ctx.type;
   itObj.emoji = parsed.emoji;
   itObj.label = parsed.label;
+  if (ctx.type === 'text') {
+    if (parsed.segments && parsed.segments.length) itObj.segments = parsed.segments;
+    else delete itObj.segments; // nothing left but plain text — label-only fallback
+  }
   if (ctx.type === 'progress' && parsed.value != null) itObj.value = parsed.value;
   node.items[idx] = itObj;
 
+  // Orphan cleanup: covers both a token deleted from an already-saved item's
+  // text AND a file uploaded-then-deleted again within this same session
+  // before ever being saved — either way, if a URL the session ever held
+  // isn't in the final saved segments, it's not referenced anywhere anymore.
+  if (ctx.type === 'text' && typeof window.mdMediaDelete === 'function') {
+    var everUrls = [];
+    (_tmEditMediaBuf || []).forEach(function (buf) { (buf.items || []).forEach(function (f) { if (f && f.url) everUrls.push(f.url); }); });
+    var finalUrls   = _tmSegmentFileUrls(itObj.segments);
+    var removedUrls = everUrls.filter(function (u) { return finalUrls.indexOf(u) === -1; });
+    if (removedUrls.length) window.mdMediaDelete(removedUrls);
+  }
+
   var label = _tmEditLabel;
-  _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null;
+  _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; _tmEditMediaBuf = [];
   document.getElementById('tmTa').value = '';
   if (_tmMulti) tmToggleMulti();
 
