@@ -3194,7 +3194,7 @@ window.addEventListener('hashchange', () => { applySpotHash(); applyAreaHash(); 
 // policies first, not this file.
 //
 // window.mdMediaOpen() → Promise<Array<{type,url,name}> | null>
-//   resolves with the uploaded file descriptors (type: 'image'|'audio'|'text'),
+//   resolves with the uploaded file descriptors (type: 'image'|'audio'|'text'|'video'|'epub'|'pdf'),
 //   or null if the person cancels / picks nothing. Never rejects — every
 //   failure path resolves null after reporting the error in the modal itself,
 //   so callers (terminal.js) never need a .catch().
@@ -3208,23 +3208,29 @@ var _mdUploadTimes   = []; // in-memory sliding window, per page load
 var _MD_TYPES = {
   'image/jpeg': 'image', 'image/jpg': 'image', 'image/png': 'image', 'image/webp': 'image',
   'audio/mpeg': 'audio', 'audio/mp3': 'audio',
-  'text/plain': 'text'
+  'text/plain': 'text',
+  'video/mp4': 'video',
+  'application/epub+zip': 'epub',
+  'application/pdf': 'pdf'
 };
 var _MD_ACCEPT = Object.keys(_MD_TYPES).join(',');
 
 function _mdDetectType(file) {
   if (_MD_TYPES[file.type]) return _MD_TYPES[file.type];
-  // Some browsers/OSes send an empty/wrong .type for mp3/txt — fall back to extension.
+  // Some browsers/OSes send an empty/wrong .type (esp. mp3/txt/epub) — fall back to extension.
   var ext = (file.name.split('.').pop() || '').toLowerCase();
   if (ext === 'jpg' || ext === 'jpeg' || ext === 'png' || ext === 'webp') return 'image';
   if (ext === 'mp3') return 'audio';
   if (ext === 'txt') return 'text';
+  if (ext === 'mp4') return 'video';
+  if (ext === 'epub') return 'epub';
+  if (ext === 'pdf') return 'pdf';
   return null;
 }
 
 function _mdValidateFile(file) {
   if (file.size > _MD_MAX_BYTES) return { ok: false, msg: 'ფაილი > 5MB: ' + file.name };
-  if (!_mdDetectType(file)) return { ok: false, msg: 'მხარდაუჭერელი ტიპი: ' + file.name + ' (jpg/png/webp/mp3/txt)' };
+  if (!_mdDetectType(file)) return { ok: false, msg: 'მხარდაუჭერელი ტიპი: ' + file.name + ' (jpg/png/webp/mp3/txt/mp4/epub/pdf)' };
   return { ok: true };
 }
 
@@ -3277,7 +3283,7 @@ function _mdBuildModal(resolve) {
   title.style.cssText = 'font-size:14px;font-weight:600;color:var(--text);';
 
   var hint = document.createElement('div');
-  hint.textContent = 'jpg / png / webp / mp3 / txt — მაქს. 5MB თითო ფაილზე';
+  hint.textContent = 'jpg / png / webp / mp3 / txt / mp4 / epub / pdf — მაქს. 5MB თითო ფაილზე';
   hint.style.cssText = 'font-size:11px;color:var(--muted);';
 
   var fileI = document.createElement('input');
@@ -5162,7 +5168,7 @@ function _tmMenuEditOpen(node, idx, itObj) {
 
   _tmL('tsy', '─── [' + idx + '] ' + (node.title || '') + ' ──────────────');
   _tmL('tdm', 'ხაზი 1 — [emoji: X], მხოლოდ X გამოცვალე');
-  if (itObj.type === 'text' || !itObj.type) _tmL('tdm', 'ახალ ხაზზე დაწერე "/მედია" — სურათი/mp3/txt ატვირთვისთვის');
+  if (itObj.type === 'text' || !itObj.type) _tmL('tdm', 'ახალ ხაზზე დაწერე "/მედია" — jpg/png/webp/mp3/txt/mp4/epub/pdf ატვირთვისთვის');
   _tmL('tdm', 'Ctrl+Enter — შენახვა · Esc — გაუქმება');
 }
 
