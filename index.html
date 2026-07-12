@@ -3360,7 +3360,7 @@ window.addEventListener('hashchange', () => { applySpotHash(); applyAreaHash(); 
 //   so callers (terminal.js) never need a .catch().
 
 var _MD_BUCKET       = 'illustrations';
-var _MD_MAX_BYTES    = 5 * 1024 * 1024; // 5MB/file
+var _MD_MAX_BYTES    = 40 * 1024 * 1024; // 40MB/file — matches the bucket's Dashboard file-size limit
 var _MD_MAX_PER_MIN  = 5;               // client-side throttle only — NOT a security boundary,
                                          // the real backstop (if any) has to be a Storage/RLS-side limit
 var _mdUploadTimes   = []; // in-memory sliding window, per page load
@@ -3389,7 +3389,7 @@ function _mdDetectType(file) {
 }
 
 function _mdValidateFile(file) {
-  if (file.size > _MD_MAX_BYTES) return { ok: false, msg: 'ფაილი > 5MB: ' + file.name };
+  if (file.size > _MD_MAX_BYTES) return { ok: false, msg: 'ფაილი > 40MB: ' + file.name };
   if (!_mdDetectType(file)) return { ok: false, msg: 'მხარდაუჭერელი ტიპი: ' + file.name + ' (jpg/png/webp/mp3/txt/mp4/epub/pdf)' };
   return { ok: true };
 }
@@ -3452,7 +3452,7 @@ function _mdBuildModal(resolve) {
   title.style.cssText = 'font-size:14px;font-weight:600;color:var(--text, #eee);';
 
   var hint = document.createElement('div');
-  hint.textContent = 'jpg / png / webp / mp3 / txt / mp4 / epub / pdf — მაქს. 5MB თითო ფაილზე';
+  hint.textContent = 'jpg / png / webp / mp3 / txt / mp4 / epub / pdf — მაქს. 40MB თითო ფაილზე';
   hint.style.cssText = 'font-size:11px;color:var(--muted, #9aa0a6);';
 
   var fileI = document.createElement('input');
@@ -3594,6 +3594,47 @@ window.mdMediaDelete = async function (urls) {
   } catch (e) { return false; }
 };
 
+// Lists the most recent files in the bucket, newest first. Storage's list
+// API is non-recursive (like `ls` in a single directory) and every file
+// lives under a per-user UUID folder (see _mdNick()), so this lists the
+// folder level first, then each folder's contents, and merges + sorts the
+// result. Fine for a small caretaker team; would need pagination for a
+// bucket with many hundreds of uploaders.
+async function _mdListOne(prefix) {
+  try {
+    var r = await fetch(SUPA_URL + '/storage/v1/object/list/' + _MD_BUCKET, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, _authHeaders()),
+      body: JSON.stringify({ prefix: prefix, limit: 1000, sortBy: { column: 'created_at', order: 'desc' } })
+    });
+    if (!r.ok) return [];
+    return await r.json();
+  } catch (e) { return []; }
+}
+
+window.mdMediaList = async function (limit) {
+  limit = limit || 20;
+  var folders = await _mdListOne('');
+  var all = [];
+  for (var i = 0; i < folders.length; i++) {
+    if (folders[i].id !== null) continue; // a stray root-level file, not a user folder — skip
+    var files = await _mdListOne(folders[i].name + '/');
+    files.forEach(function (file) {
+      if (file.id === null) return; // nested folder — not expected, skip
+      var path = folders[i].name + '/' + file.name;
+      all.push({
+        path: path,
+        url: SUPA_URL + '/storage/v1/object/public/' + _MD_BUCKET + '/' + path,
+        name: file.name,
+        size: file.metadata && file.metadata.size,
+        created_at: file.created_at
+      });
+    });
+  }
+  all.sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); });
+  return all.slice(0, limit);
+};
+
 window.mdMediaOpen = function () {
   // Defensive only — the real gate is the Storage bucket's own INSERT policy.
   // Fails open if the auth engine isn't loaded yet, same philosophy as
@@ -3625,7 +3666,7 @@ var _tmEditBuf = null;     // raw content buffered from a chain segment, consume
 var _tmEditMediaBuf = [];  // [{items:[{type,url,name}...]}...] — files-segments captured via /მედია
                             // during the current 'text' menuItem session; [[მედია:N]] tokens in tmTa
                             // point into this by index. Cleared on every session open/close/save/cancel.
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/მარკერი','/დახურვა','/დროშა','/მეტსახელი','/მე','/ვინ','/ფერი','/help','/გზა','/ჩვ','/გად','/md','/წაშ','/რედ','/ფოთოლი','/მაკრო','/ლოგინი','/ლოგაუთი','/სახელი','/სესია','/სია','/სურვილი','/რეჟიმი','/შესრულება','/play','/მუსიკა'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/მარკერი','/დახურვა','/დროშა','/მეტსახელი','/მე','/ვინ','/ფერი','/help','/გზა','/ჩვ','/გად','/md','/წაშ','/რედ','/ფოთოლი','/მაკრო','/ლოგინი','/ლოგაუთი','/სახელი','/სესია','/სია','/სურვილი','/რეჟიმი','/შესრულება','/play','/მუსიკა','/ფაილები'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -3949,6 +3990,8 @@ var _TM_MIN_TIER = {
   'play':        'caretaker', // one-shot fullscreen video trigger
   'მუსიკა':      'caretaker', // background music playlist control
   'music':       'caretaker', // = მუსიკა, new name
+  'ფაილები':     'caretaker', // list uploaded bucket files
+  'files':       'caretaker', // = ფაილები, new name
   'სია':         'shadow_admin' // list logged-in users (nickname/name/email/tier)
 };
 
@@ -4080,6 +4123,8 @@ async function _tmRun(raw) {
     'play':        _tmPlay,
     'მუსიკა':      _tmMusic,
     'music':       _tmMusic,
+    'ფაილები':     _tmFiles,
+    'files':       _tmFiles,
     'marker':      _tmMarkerCmd,
     'მარკერი':     _tmMarkerCmd,
     'ლოგინი':      _tmLogin,
@@ -4147,6 +4192,7 @@ function _tmHelp() {
     ['/play [url]', 'ვიდეო fullscreen-ში — url-ის გარეშე ხსნის ატვირთვის მოდალს'],
     ['/მუსიკა play <url1,url2,...>', 'ფონური playlist, loop — url-ების გარეშე ხსნის მოდალს'],
     ['/მუსიკა stop | skip | volume <0-100>', 'მუსიკის კონტროლი'],
+    ['/ფაილები [N]', 'bucket-ში ბოლო N ატვირთული ფაილის URL (default 20)'],
     ['/სია', 'დალოგინებული იუზერების სია (მხოლოდ shadow_admin)'],
     ['/სურვილი', 'შემდეგი ტიერის თხოვნა კონსენსუსით (სტუმარი→მეურვე, მეურვე→მაცხოვრებელი)'],
     ['/რეჟიმი <tier>', 'ტესტ რეჟიმი — UI ხედავს სხვა ტიერად (მხოლოდ shadow_admin, /რეჟიმი გამორთვა-ით იხურება)'],
@@ -4751,6 +4797,22 @@ async function _tmMusic(args) {
   if (typeof window._gmMusicPlay !== 'function') { _tmL('ter', '✗ _gmMusicPlay ვერ მოიძებნა (runtime.js ჩატვირთულია?)'); return; }
   window._gmMusicPlay(urls);
   _tmL('tok', '🎵 playlist დაიწყო (' + urls.length + ' ტრეკი)');
+}
+
+// /ფაილები [N] — lists the N most recent uploads in the bucket (default 20),
+// newest first, each with a copyable public URL — for finding a URL to feed
+// into /play or /მუსიკა without leaving the app.
+async function _tmFiles(args) {
+  var n = parseInt(args[0], 10); if (isNaN(n) || n <= 0) n = 20;
+  if (typeof window.mdMediaList !== 'function') { _tmL('ter', '✗ mdMediaList ვერ მოიძებნა (upload.js ჩატვირთულია?)'); return; }
+  _tmL('tdm', 'ფაილები იტვირთება...');
+  var files = await window.mdMediaList(n);
+  if (!files.length) { _tmL('ter', 'ფაილები ვერ მოიძებნა (ან ცარიელია bucket)'); return; }
+  files.forEach(function (f, i) {
+    var kb = f.size ? Math.round(f.size / 1024) + 'KB' : '';
+    _tmL('tdm', '[' + i + '] ' + f.name + (kb ? ' — ' + kb : ''));
+    _tmL('tdm', '    ' + f.url);
+  });
 }
 
 async function _tmNotify(typeChar, rest) {
@@ -5547,7 +5609,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 //   საერთო  — Supabase (terminal_macros table), every viewer sees it on next load
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
-var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music',
+var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files',
   'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','ობიექტები','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','დაწინაურება','სურვილი','რეჟიმი','შესრულება'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
