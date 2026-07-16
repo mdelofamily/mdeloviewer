@@ -41,6 +41,7 @@ function parseBulkDSL(raw) {
   let cur     = null;   // node being built
   let speaker = null;   // null=narrator | ""=player | "\x01name"=object | "name"=named
   let textBuf = [];     // accumulated lines for current text block
+  let paraBreakPending = false; // true = a blank line preceded the next flushed block
 
   let rootTitle  = '';
   let rootMarker = '';
@@ -68,7 +69,12 @@ function parseBulkDSL(raw) {
       html = '<b class="spk-named">' + _esc(speaker) + '</b> ' + _esc(block);
     }
 
-    cur.text += (cur.text ? '<br>' : '') + html;
+    // a blank line in the source means "paragraph break" — encode it as a
+    // double <br> so unparseDialogue can tell it apart from an ordinary
+    // line-wrap (single <br>) and restore the blank line on save.
+    const sep = cur.text ? (paraBreakPending ? '<br><br>' : '<br>') : '';
+    cur.text += sep + html;
+    paraBreakPending = false;
     textBuf = [];
   }
 
@@ -92,6 +98,7 @@ function parseBulkDSL(raw) {
       cur     = { id: 'node_' + idx, text: '', buttons: [] };
       speaker = null;
       textBuf = [];
+      paraBreakPending = false;
       continue;
     }
 
@@ -144,10 +151,11 @@ function parseBulkDSL(raw) {
       continue;
     }
 
-    // ── empty line → flush block, reset speaker ──────────────
+    // ── empty line → flush block, reset speaker, mark paragraph break ──
     if (!line.trim()) {
       flush();
       speaker = null;
+      paraBreakPending = true;
       continue;
     }
 
@@ -253,6 +261,10 @@ function unparseDialogue(o) {
     // text — strip HTML back to DSL
     if (node.text) {
       const plain = node.text
+        // double <br> = paragraph break (blank line in source) — must be
+        // converted before the single-<br> pass below, or the blank line
+        // silently collapses into an ordinary line-wrap on save.
+        .replace(/<br>\s*<br>/gi, '\n\n')
         .replace(/<br>/gi, '\n')
         // [] player placeholder
         .replace(/<b[^>]*class="spk-player"[^>]*>\[\]<\/b>\s*/gi, '[] ')
@@ -274,8 +286,8 @@ function unparseDialogue(o) {
         .replace(/&lt;/g,  '<')
         .replace(/&gt;/g,  '>');
       plain.split('\n').forEach(l => {
-        if (!l.trim()) return;
         const t = l.trim();
+        if (!t) { lines.push(''); return; }  // preserve paragraph break
         if (t.startsWith('✦ ')) {
           lines.push('{' + t.slice(2) + '}');  // restore atmosphere syntax
         } else {
