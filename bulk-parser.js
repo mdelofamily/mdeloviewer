@@ -104,10 +104,13 @@ function parseBulkDSL(raw) {
 
     if (!cur) continue;
 
-    // ── #if flag =>N conditional redirect ───────────────────────
+    // ── #if flag =>N conditional redirect (multiple allowed per node) ──
     if (/^>>\s/.test(line)) {
       const ifM = line.match(/^>>\s+(\S+)\s*=>(\d+)/);
-      if (ifM) cur.condition = { flag: ifM[1], target: 'node_' + ifM[2] };
+      if (ifM) {
+        if (!cur.conditions) cur.conditions = [];
+        cur.conditions.push({ flag: ifM[1], target: 'node_' + ifM[2] });
+      }
       continue;
     }
 
@@ -247,16 +250,23 @@ function unparseDialogue(o) {
   const lines  = [];
 
   nodes.forEach((node, ni) => {
-    // node header
-    const hdr = '@' + ni +
+    // node header — use the node's OWN id number, not its array position.
+    // Writing '@' + ni here would silently renumber every node on save
+    // (e.g. a hand-picked @1000 becomes @4 just because it's 5th in the
+    // array), breaking any =>N reference elsewhere that still points at
+    // the original number.
+    const idNum = (node.id && /^node_(\d+)$/.test(node.id)) ? node.id.replace('node_', '') : String(ni);
+    const hdr = '@' + idNum +
       (mrkSym && ni === 0 ? ' ' + mrkSym : '') +
       (title  && ni === 0 ? ' ' + title  : '');
     lines.push(hdr);
 
-    // >> flag =>N condition
-    if (node.condition) {
-      lines.push('>> ' + node.condition.flag + ' =>' + node.condition.target.replace('node_', ''));
-    }
+    // >> flag =>N conditions (a node may have several; conditions[] is the
+    // current shape, condition{} is kept as a fallback for old saved data)
+    const conds = node.conditions || (node.condition ? [node.condition] : []);
+    conds.forEach(c => {
+      lines.push('>> ' + c.flag + ' =>' + c.target.replace('node_', ''));
+    });
 
     // text — strip HTML back to DSL
     if (node.text) {
