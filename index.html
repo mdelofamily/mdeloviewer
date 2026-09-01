@@ -1556,24 +1556,40 @@ window.listUsers = async function () {
 // Called once at boot, and then on a recurring timer (see the 'load'
 // listener at the bottom of this file) so a long-lived tab never goes stale.
 //
-// CRITICAL: only a genuine server rejection wipes the session. A network
+// CRITICAL #1: only a genuine server rejection wipes the session. A network
 // failure while trying to refresh (offline, or just a bad moment to be
 // reaching Supabase) must NOT sign the person out — the refresh_token
 // itself is still perfectly valid, sitting untouched in localStorage; the
 // only thing that failed was reaching the network just now. Wiping the
 // session here would silently and permanently log someone out over a
-// transient connectivity blip they may never even have noticed (the exact
-// "logged out the next day" bug — the token's own timer had already run
-// out overnight, so the very next refresh attempt after reopening the tab
-// was also the very first time the failure got noticed and acted on).
+// transient connectivity blip they may never even have noticed.
+//
+// CRITICAL #2: this function has FIVE independent call sites (boot, the
+// 4-min timer, the boot-time pending-flush check, the burger-menu sync
+// row's click handler, and the 'online' listener) — on a flaky/roaming
+// connection it's entirely plausible for two of these to fire within
+// milliseconds of each other, both reading the SAME refresh_token from
+// localStorage. Supabase rotates refresh tokens on every use (single-use):
+// whichever request completes first gets a new token pair and overwrites
+// localStorage; the second request — already in flight with the now-
+// stale token — comes back with a genuine "already used" rejection. That
+// used to look identical to an actually-expired session and would wipe a
+// perfectly good, just-renewed one moments after it was stored. The
+// in-flight guard below collapses concurrent callers onto the SAME
+// promise instead of each firing their own request.
+let _authRefreshInFlight = null;
 async function _authMaybeRefresh() {
+  if (_authRefreshInFlight) return _authRefreshInFlight;
   const s = _authGetSession();
-  if (s && s.refresh_token && s.expires_at < Date.now() + 60000) {
+  if (!(s && s.refresh_token && s.expires_at < Date.now() + 60000)) return;
+  _authRefreshInFlight = (async () => {
     const res = await _authRefresh(s.refresh_token);
     if (res.ok) _authStoreFromTokenResponse(res.data);
     else if (!res.network) _authSetSession(null); // real rejection (expired/revoked/reused) — only now sign out
     // res.network === true: leave the session untouched, try again next time
-  }
+  })();
+  try { await _authRefreshInFlight; }
+  finally { _authRefreshInFlight = null; }
 }
 
 // Handles the ?token_hash=...&type=... redirect on load, or silently
@@ -1595,7 +1611,21 @@ async function _authBoot() {
   } else {
     await _authMaybeRefresh();
   }
-  if (window.isLoggedIn()) {
+  // Load tier whenever a session EXISTS at all — not just when the access
+  // token happens to still be time-valid right now. If we're offline and
+  // the token expired since the last time this tab ran, _authMaybeRefresh()
+  // above correctly left the refresh_token untouched (network failure ≠
+  // real logout — see the comment on that function), but isLoggedIn()
+  // will still (correctly) report false until a refresh actually succeeds.
+  // Gating _authLoadTier() on isLoggedIn() here would mean its own
+  // tier-cache fallback never even gets a chance to run — exactly the
+  // "was shadow_admin earlier, offline a few hours later, back to being
+  // asked to log in" symptom. _authLoadTier() itself still won't do
+  // anything unsafe offline: its fetch either fails on the network (falls
+  // back to the cached tier) or, if we're secretly online after all,
+  // succeeds/fails on its own honest terms.
+  const sess = _authGetSession();
+  if (sess && sess.user) {
     await _authLoadTier();
     _applyTierFlag();
     // fresh login (token_hash just verified) + no name yet → apply the name
