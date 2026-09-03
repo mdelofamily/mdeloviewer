@@ -1258,12 +1258,17 @@ async function _authVerifyTokenHash(token_hash, type) {
   } catch (e) { return null; }
 }
 
-// Returns { ok:true, data } on success, { ok:false, network:true } for a
-// genuine connectivity failure (fetch threw — DNS blip, dropped wifi mid-
-// request, timeout), or { ok:false, network:false, status } when the
-// server actually answered and rejected the refresh_token (400 invalid_
-// grant — token expired/revoked/already-used). This distinction matters:
-// see the caller below.
+// Returns { ok:true, data } on success, { ok:false, network:true } for
+// anything that ISN'T a confirmed Supabase rejection — a genuine
+// connectivity failure (fetch threw), OR a captive-portal / proxy
+// intercepting the request and answering with its own unrelated status
+// code (seen in the wild: "Tbilisi Loves You" free wifi silently
+// swallows the POST and returns something that isn't Supabase's actual
+// response). Only { ok:false, network:false, status:400 } — Supabase's own
+// invalid_grant status for a genuinely expired/revoked/already-used
+// refresh_token — counts as a confirmed rejection. Any other non-2xx
+// status is treated the same as a network failure: we simply don't know
+// what answered, so we don't trust it enough to sign someone out over it.
 async function _authRefresh(refresh_token) {
   try {
     const r = await fetch(AUTH_URL + '/token?grant_type=refresh_token', {
@@ -1272,7 +1277,8 @@ async function _authRefresh(refresh_token) {
       body: JSON.stringify({ refresh_token: refresh_token })
     });
     if (r.ok) return { ok: true, data: await r.json() };
-    return { ok: false, network: false, status: r.status };
+    if (r.status === 400) return { ok: false, network: false, status: r.status }; // Supabase's real invalid_grant
+    return { ok: false, network: true, status: r.status }; // anything else — untrusted responder
   } catch (e) { return { ok: false, network: true }; }
 }
 
@@ -1432,6 +1438,17 @@ async function _authLoadTier() {
   try {
     const r = await fetch(SUPA_URL + '/rest/v1/user_tiers?user_id=eq.' + s.user.id + '&select=*', { headers: _authHeaders() });
     if (!r.ok) {
+      // Same captive-portal risk as _authRefresh above — only 401/403 are
+      // Supabase itself confirming this token can't read this row. Any
+      // other status (0, 500, 502, 511, a portal's own login-redirect
+      // page, etc.) means we can't trust what answered, so fall back to
+      // the cache exactly like a network failure instead of demoting to
+      // visitor and locking someone out of their own admin commands over
+      // a wifi login wall.
+      if (r.status !== 401 && r.status !== 403) {
+        const cachedOnBadStatus = _tierCacheLoad(s.user.id);
+        if (cachedOnBadStatus) { window._myTier = cachedOnBadStatus; return cachedOnBadStatus; }
+      }
       const errBody = await r.text().catch(() => '');
       if (typeof toast === 'function') toast('✗ tier GET ჩავარდა (' + r.status + '): ' + errBody.slice(0, 100));
       window._myTier = null;
@@ -1439,22 +1456,59 @@ async function _authLoadTier() {
     }
     const rows = await r.json();
     if (rows[0]) { window._myTier = rows[0]; _tierCacheSave(s.user.id, rows[0]); return rows[0]; }
-    // first login for this account — create the row; DB default tier='visitor'
-    const c = await fetch(SUPA_URL + '/rest/v1/user_tiers', {
+    // Empty result — either a genuine first login for this account (DB
+    // default tier='visitor'), OR a captive portal/proxy answering with a
+    // fake, well-formed "200 OK, []" that never actually reached Supabase
+    // (this is real — "Tbilisi Loves You" free wifi has been observed
+    // doing exactly this to REST calls it doesn't recognize). A blind POST
+    // here used to be able to create a genuine DUPLICATE user_tiers row
+    // for an already-provisioned account, silently reverting someone from
+    // shadow_admin to a fresh visitor row.
+    //
+    // ignore-duplicates makes this safe regardless of which case it is: if
+    // a row already exists (real duplicate risk), Postgres's own ON
+    // CONFLICT no-ops and returns nothing — we then re-fetch to find out
+    // what's actually there instead of assuming 'visitor'. This requires a
+    // UNIQUE constraint on user_tiers.user_id — if the Tbilisi incident
+    // did create a duplicate row, check the table directly and add that
+    // constraint (after removing the duplicate) so this can't recur even
+    // on a POST that isn't gated this carefully.
+    const c = await fetch(SUPA_URL + '/rest/v1/user_tiers?on_conflict=user_id', {
       method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, _authHeaders()),
+      headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=representation,resolution=ignore-duplicates' }, _authHeaders()),
       body: JSON.stringify({ user_id: s.user.id })
     });
     if (!c.ok) {
+      if (c.status !== 401 && c.status !== 403) {
+        const cachedOnBadStatus2 = _tierCacheLoad(s.user.id);
+        if (cachedOnBadStatus2) { window._myTier = cachedOnBadStatus2; return cachedOnBadStatus2; }
+      }
       const errBody = await c.text().catch(() => '');
       if (typeof toast === 'function') toast('✗ tier POST ჩავარდა (' + c.status + '): ' + errBody.slice(0, 100));
       window._myTier = null;
       return null;
     }
     const created = await c.json();
-    window._myTier = created[0] || null;
-    if (window._myTier) _tierCacheSave(s.user.id, window._myTier);
-    return window._myTier;
+    if (created[0]) {
+      // Genuinely brand new row — real first login.
+      window._myTier = created[0];
+      _tierCacheSave(s.user.id, created[0]);
+      return created[0];
+    }
+    // ignore-duplicates fired: a row already existed server-side (exactly
+    // the scenario this whole guard is for). Fetch it for real instead of
+    // reporting 'visitor'.
+    try {
+      const r2 = await fetch(SUPA_URL + '/rest/v1/user_tiers?user_id=eq.' + s.user.id + '&select=*', { headers: _authHeaders() });
+      if (r2.ok) {
+        const rows2 = await r2.json();
+        if (rows2[0]) { window._myTier = rows2[0]; _tierCacheSave(s.user.id, rows2[0]); return rows2[0]; }
+      }
+    } catch (e2) {}
+    const cachedAfterConflict = _tierCacheLoad(s.user.id);
+    if (cachedAfterConflict) { window._myTier = cachedAfterConflict; return cachedAfterConflict; }
+    window._myTier = null;
+    return null;
   } catch (e) {
     // No network at all (offline page load/reload) — distinct from the
     // `!r.ok` branch above, which is a real server-confirmed rejection and
