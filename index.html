@@ -4809,13 +4809,28 @@ function _tmObjects() {
   _tmL('tdm', _SEP);
 }
 
-// /ლოგინი — თუ უკვე ხარ ავტორიზებული, სტატუსს აჩვენებს. თუ არა — ხსნის
-// combined popup-ს (email + სახელი, runtime.js: showLoginModal). ცალკე
-// "/ლოგინი email@x.com" ვარიანტი ამოღებულია — არაფერს ამარტივებდა, popup
-// ისედაც ყოველთვის იხსნებოდა.
+// /ლოგინი — თუ უკვე ხარ ავტორიზებული (access token ახლახან დამოწმებული),
+// სტატუსს აჩვენებს. თუ session საერთოდ არ არსებობს, ხსნის combined popup-ს
+// (email + სახელი, runtime.js: showLoginModal). ცალკე "/ლოგინი email@x.com"
+// ვარიანტი ამოღებულია — არაფერს ამარტივებდა, popup ისედაც ყოველთვის იხსნებოდა.
+//
+// შუალედური მდგომარეობა — session (refresh_token) არსებობს, მაგრამ
+// isLoggedIn() მაინც false-ია — განზრახ ცალკეა გატარებული, არა
+// შემთხვევით. ეს ზუსტად ის ვითარებაა, როცა ვინმე ხანგრძლივად ოფლაინაა და
+// access token დროულად ამოეწურა: refresh_token ჯერ კიდევ სავსებით
+// მართებულია, ონლაინზე დაბრუნებისთანავე ავტომატურად აღდგება — ანუ
+// signup-popup-ის ჩვენება აქ არასწორი და შემაშფოთებელია (ისეთი შთაბეჭდილება
+// იქმნება, თითქოს ანგარიში დაიკარგა, სინამდვილეში კი არაფერი შეცვლილა).
 async function _tmLogin() {
   if (typeof window.isLoggedIn === 'function' && window.isLoggedIn()) {
     _tmL('tok', '✓ ავტორიზებული ხარ, როგორც ' + window.myDisplayName() + '  (tier: ' + window.myTier() + ')');
+    return;
+  }
+  var sess = null;
+  try { sess = JSON.parse(localStorage.getItem('mdelo_auth_session') || 'null'); } catch (e) {}
+  if (sess && sess.user) {
+    _tmL('tdm', '⏳ სესია არსებობს (' + (sess.user.email || sess.user.id) + '), მაგრამ token-ი ამჟამად ვერ დადასტურდა — სავარაუდოდ ოფლაინ ხარ. Refresh_token ხელუხლებელია, ონლაინზე დაბრუნებისთანავე ავტომატურად აღდგება, ახალი login არ სჭირდება.');
+    _tmL('tdm', 'tier ლოკალურად კვლავ ' + (typeof window.myTier === 'function' ? window.myTier() : '?') + '-ია — ედიტ-ბრძანებები ჯერ კიდევ უნდა მუშაობდეს.');
     return;
   }
   if (typeof window.showLoginModal !== 'function' || typeof window.requestMagicLink !== 'function') {
