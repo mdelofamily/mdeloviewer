@@ -4959,6 +4959,16 @@ async function _tmDebug() {
   _tmL('tdm', 'myTier(): ' + (typeof window.myTier === 'function' ? window.myTier() : '?') +
     '   myDisplayName(): ' + (typeof window.myDisplayName === 'function' ? window.myDisplayName() : '?'));
 
+  // Separate from window._myTier (in-memory, reset on every reload) — this
+  // is what's actually sitting in localStorage as the offline-fallback
+  // copy. Printing it directly is the fastest way to tell apart "cache was
+  // never written" from "cache is fine, restore logic didn't fire".
+  if (sess && sess.user) {
+    var tcRaw = null;
+    try { tcRaw = localStorage.getItem('mdelo_tier_cache_' + sess.user.id); } catch (e) {}
+    _tmL('tdm', 'tier-cache (localStorage): ' + (tcRaw || '(ცარიელია — არასდროს ჩაწერილა)'));
+  }
+
   // if the tier row never loaded, retry it right here and print the *exact*
   // failure into the terminal — not a toast, so it doesn't disappear before
   // you can read it
