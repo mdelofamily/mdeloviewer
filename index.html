@@ -4944,7 +4944,23 @@ async function _tmResolveStatus(args) {
 // /სესია — mobile-friendly stand-in for devtools console; prints the raw
 // auth state (session presence, tier row, etc.) straight into the terminal.
 // (named /სესია, not /debug — chat.js already owns /debug for its own diagnostics)
-async function _tmDebug() {
+// /სესია — debug status dump. /სესია ამოწურვა (testing only, shadow_admin
+// affects only their own device) artificially backdates the LOCAL
+// session's expires_at, so isLoggedIn()===false can be reproduced on
+// demand instead of waiting ~1h for the access token to genuinely expire
+// before testing an offline reload — refresh_token/session content itself
+// is untouched, only the timestamp used for the local time-check.
+async function _tmDebug(args) {
+  if (args && (args[0] === 'ამოწურვა' || args[0] === 'expire')) {
+    try {
+      var s = JSON.parse(localStorage.getItem('mdelo_auth_session') || 'null');
+      if (!s) { _tmL('ter', '✗ session ვერ მოიძებნა'); return; }
+      s.expires_at = Date.now() - 1000;
+      localStorage.setItem('mdelo_auth_session', JSON.stringify(s));
+      _tmL('tok', '✓ access token ხელოვნურად "ვადაგასულად" მოინიშნა (testing) — refresh_token უცვლელია. ახლა დახურე/დარელოუდე გვერდი (ონლაინ ან ოფლაინ) და გაუშვი /სესია ისევ.');
+    } catch (e) { _tmL('ter', '✗ ' + e.message); }
+    return;
+  }
   var loggedIn = typeof window.isLoggedIn === 'function' ? window.isLoggedIn() : '(isLoggedIn ვერ მოიძებნა)';
   _tmL('ti', 'isLoggedIn(): ' + loggedIn);
   var sess = null;
