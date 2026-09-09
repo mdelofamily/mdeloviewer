@@ -2994,6 +2994,16 @@ window.requestTierUp = async function (targetTier, requestText, detail) {
     });
 
     if (typeof loadNotifs === 'function') loadNotifs();
+
+    // OS-level push (Scope C) — was missing here, unlike the regular
+    // notify-button path. Without it, anyone whose app is closed never
+    // finds out a tier-change request is waiting for their vote.
+    fetch(SUPA_URL + '/functions/v1/send-push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': 'sb_publishable_soE_2V-VW_fIu0DyM6QdzQ_TOvYNxF2' },
+      body: JSON.stringify({ map_id: _MAP_ID, title: 'მდელო', body: text, url: '/' })
+    }).catch(() => {});
+
     return { ok: true, id: row.id };
   } catch (e) { return { ok: false, reason: 'exception', msg: e.message }; }
 };
@@ -5680,6 +5690,13 @@ async function _tmNotify(typeChar, rest) {
         var vl = _TM_NOTIFY_VOTE_LABEL[type] || _TM_NOTIFY_VOTE_LABEL.consensus;
         _tmL('tok', sym + ' ' + vl.open + ': ' + rest + (quorum ? '  (quorum: ' + quorum + ')' : '') + (cmdField ? '  ⚙ ' + cmdField : ''));
         if (typeof loadNotifs === 'function') loadNotifs();
+        // OS-level push (Scope C) — same gap as /სურვილი had: without this,
+        // anyone whose app is closed never finds out until they reopen it.
+        fetch(SUPA_URL + '/functions/v1/send-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': 'sb_publishable_soE_2V-VW_fIu0DyM6QdzQ_TOvYNxF2' },
+          body: JSON.stringify({ map_id: _MAP_ID, title: 'მდელო', body: rest, url: area ? ('#area=' + encodeURIComponent(area)) : '/' })
+        }).catch(() => {});
       } else { _tmL('ter', 'შეცდომა: ' + r.status); }
     } catch (e) { _tmL('ter', 'კავშირის შეცდომა'); }
     return;
@@ -5699,6 +5716,12 @@ async function _tmNotify(typeChar, rest) {
     if (r2.ok) {
       _tmL('tok', sym + ' შეტყობინება გაიგზავნა');
       if (typeof loadNotifs === 'function') loadNotifs();
+      // OS-level push (Scope C) — same gap as the consensus branch above.
+      fetch(SUPA_URL + '/functions/v1/send-push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': 'sb_publishable_soE_2V-VW_fIu0DyM6QdzQ_TOvYNxF2' },
+        body: JSON.stringify({ map_id: _MAP_ID, title: 'მდელო', body: rest, url: area ? ('#area=' + encodeURIComponent(area)) : '/' })
+      }).catch(() => {});
     } else { _tmL('ter', 'შეცდომა: ' + r2.status); }
   } catch (e) { _tmL('ter', 'კავშირის შეცდომა'); }
 }
