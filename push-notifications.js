@@ -46,11 +46,27 @@ function _arrayBufferToBase64(buffer) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function _updatePushBtnVisibility() {
+// Hides the button only when a subscription genuinely exists — checking
+// Notification.permission alone was wrong: permission stays 'granted'
+// forever once given, even after the underlying subscription goes stale
+// (PWA reinstall, browser update, SW re-registration, endpoint expiry).
+// That silently hid the only way to re-subscribe, with no error shown —
+// exactly the "used to work, don't know when it stopped" failure mode.
+async function _updatePushBtnVisibility() {
   const btn = document.getElementById('pushBtn');
   if (!btn) return;
-  if (!('Notification' in window)) { btn.style.display = 'none'; return; }
-  btn.style.display = (Notification.permission === 'granted') ? 'none' : '';
+  if (!('Notification' in window) || !('serviceWorker' in navigator)) { btn.style.display = 'none'; return; }
+  if (Notification.permission !== 'granted') { btn.style.display = ''; return; }
+  try {
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('sw-timeout')), 8000))
+    ]);
+    const sub = await reg.pushManager.getSubscription();
+    btn.style.display = sub ? 'none' : ''; // permission granted but no live subscription → show button, let them re-subscribe
+  } catch (e) {
+    btn.style.display = ''; // couldn't verify — err toward showing the button rather than hiding a possibly-broken state
+  }
 }
 
 // Public hook — called by the "ჩართე ნოტიფიკაციები" button (#pushBtn).
@@ -76,7 +92,7 @@ window.initPushNotifications = async function () {
 
     await _idbSetMapId(_MAP_ID);
 
-    await fetch(SUPA_URL + '/rest/v1/push_subscriptions', {
+    const saveRes = await fetch(SUPA_URL + '/rest/v1/push_subscriptions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -91,6 +107,17 @@ window.initPushNotifications = async function () {
         auth: _arrayBufferToBase64(sub.getKey('auth'))
       })
     });
+    if (!saveRes.ok) {
+      // Browser-side subscribe succeeded but Supabase rejected the save —
+      // was previously swallowed silently, leaving a subscription that
+      // exists on-device but was never recorded server-side, so send-push
+      // would never reach it.
+      const errText = await saveRes.text().catch(() => '');
+      console.error('[push] failed to save subscription:', saveRes.status, errText);
+      if (typeof toast === 'function') toast('⚠️ subscription ვერ შეინახა სერვერზე (' + saveRes.status + ')');
+      return;
+    }
+    _updatePushBtnVisibility();
   } catch (e) {
     if (typeof toast === 'function') toast('⚠️ ნოტიფიკაციების ჩართვა ვერ მოხერხდა');
   }
