@@ -179,7 +179,14 @@ Deno.serve(async (req: Request) => {
       };
 
       try {
-        await webpush.sendNotification(pushSubscription, notificationPayload);
+        // urgency: 'high' asks the push service (FCM/etc.) to prioritize
+        // this over lower-urgency traffic and hold it less readily under
+        // battery-saver/Doze constraints on the receiving device. This is
+        // still best-effort, not a delivery guarantee — web push has no
+        // such guarantee — but it's the one lever we have server-side for
+        // the "sent 200 OK but arrived late/never/generic-icon" pattern
+        // seen on weak mobile connections.
+        await webpush.sendNotification(pushSubscription, notificationPayload, { urgency: 'high' });
         sent++;
       } catch (err) {
         failed++;
