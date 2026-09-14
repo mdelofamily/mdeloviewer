@@ -1128,6 +1128,37 @@ window.unparseDialogue = unparseDialogue;
 // injected inline by export-html.js assembler
 // depends on: _CFG, _OBJS, _W, _H, _TS (set in viewer.html data block)
 
+// ── i18n resolver — visitor-facing language for dialogue/menu/legend text ──
+// Content fields (node.text, button.label, legend raw text, menu title/segments)
+// are moving from plain strings to { ka, en } objects, ka authoritative, en
+// optional. This resolver is the single read-path for that migration:
+//   - plain string  → returned as-is (pre-migration data, language-agnostic)
+//   - { ka, en }    → returns the field for _mdeloLang, falling back to the
+//                     other language if the chosen one is empty/missing
+// _mdeloLang itself is the VISITOR's display language — separate from the
+// editor-side _tmEditLang in terminal.js, which controls which field an
+// editor is writing into during an edit session. No switcher UI wires into
+// this yet (still to be placed); it defaults to 'ka' and persists via
+// localStorage so a visitor's choice survives reload once a switcher exists.
+var _mdeloLang = (function () {
+  try { return localStorage.getItem('mdelo_lang') === 'en' ? 'en' : 'ka'; } catch (e) { return 'ka'; }
+})();
+
+function _mdeloSetLang(lang) {
+  _mdeloLang = (lang === 'en') ? 'en' : 'ka';
+  try { localStorage.setItem('mdelo_lang', _mdeloLang); } catch (e) {}
+}
+
+function _i18n(field) {
+  if (field == null) return '';
+  if (typeof field === 'string') return field;
+  if (_mdeloLang === 'en') return field.en || field.ka || '';
+  return field.ka || field.en || '';
+}
+
+window._mdeloSetLang = _mdeloSetLang;
+window._i18n = _i18n;
+
 // ── zoom / pan ──
 const wrap = document.getElementById('mapWrap'),
       inner = document.getElementById('mapInner'),
@@ -2439,7 +2470,7 @@ function _dlgShowNode(nodeId, selectedLabel) {
 
   const objTitle = (_dlgObj && (_dlgObj.title || _dlgObj.lb)) || '';
   const _he = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const txt = (node.text || '')
+  const txt = (_i18n(node.text) || '')
     .replace(/\[\]/g, (window.myDisplayName ? window.myDisplayName() : (localStorage.getItem('mdelo_nick') || 'მოგზაური')) + ':')
     .replace(/__OBJ__([^<"]*)/g, (_, name) => (name.trim() || _he(objTitle)) + ':')
     .replace(/&lt;([^&<\n]*)&gt;/g, (_, name) => '<b>' + (name.trim() || _he(objTitle)) + ':</b>');
@@ -2451,12 +2482,13 @@ function _dlgShowNode(nodeId, selectedLabel) {
   _typewriterHTML(nodeEl, parseLinks(txt), 35, () => {
     if (!btnWrap) return;
     (node.buttons || []).forEach(btn => {
-      if (!btn.label) return;
+      var btnLabel = _i18n(btn.label);
+      if (!btnLabel) return;
       // tier-gated visibility: a button past the person's authorization
       // simply never renders — no disabled/greyed state, per the UI-gating model
       if (btn.minTier && !window._tierAtLeast(btn.minTier)) return;
       const b = document.createElement('button');
-      b.textContent = btn.label;
+      b.textContent = btnLabel;
       b.style.cssText = 'width:100%;height:32px;background:rgba(22,27,34,0.2);border:1px solid rgba(88,166,255,0.4);color:#e6edf3;font-size:13px;border-radius:8px;cursor:pointer;text-align:center;';
       b.onclick = () => {
         if (btn.applyTier) {
@@ -2473,7 +2505,7 @@ function _dlgShowNode(nodeId, selectedLabel) {
         }
         if (btn.notify) {
           const sender = window.myDisplayName ? window.myDisplayName() : (localStorage.getItem('mdelo_sender') || 'ანონიმი');
-          const notifyTxt = btn.notifyText || (sender + ' — ' + btn.label);
+          const notifyTxt = btn.notifyText || (sender + ' — ' + btnLabel);
           const nType = btn.notifyType || 'info';
           const nSymbol = { info: '💬', warning: '⚠️', danger: '🔴', project: '🚀', done: '✅' }[nType] || '💬';
           fetch(SUPA_URL + '/rest/v1/notifications', {
@@ -2518,7 +2550,7 @@ function _dlgShowNode(nodeId, selectedLabel) {
             else if (typeof window.runMacro === 'function') window.runMacro(c);
           });
         }
-        if (btn.nextNode && _dlgNodes[btn.nextNode]) { _dlgShowNode(btn.nextNode, btn.label); }
+        if (btn.nextNode && _dlgNodes[btn.nextNode]) { _dlgShowNode(btn.nextNode, btnLabel); }
         else {
           if (_dlgActive && typeof completeDialog === 'function') completeDialog(_dlgActive);
           _dlgActive = null;
@@ -2600,17 +2632,19 @@ function toggleQuest() {
   if (p.style.display === 'block') { p.style.display = 'none'; }
   else {
     p.style.display = 'block';
-    var raw = p.dataset.fullRaw;
-    if (raw == null) {
+    if (p.dataset.fullRawKa == null) {
       // Nothing from Supabase yet (or an older export baked raw text in) —
-      // derive the raw source from what's baked in the DOM. innerHTML→\n
-      // keeps any baked <br> line breaks intact for the splitter.
-      raw = p.innerHTML.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
-      p.dataset.fullRaw = raw;
+      // derive the raw source from what's baked in the DOM (always Georgian,
+      // export time). innerHTML→\n keeps any baked <br> line breaks intact
+      // for the splitter.
+      var derivedRaw = p.innerHTML.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
+      p.dataset.fullRawKa = derivedRaw;
+      p.dataset.fullRawEn = '';
     }
     // Always re-resolve against the *current* flag state — flags can change
     // mid-session (/flag commands), so a cached resolution from an earlier
     // open would show a stale block instead of what the viewer's flags say now.
+    var raw = _i18n({ ka: p.dataset.fullRawKa, en: p.dataset.fullRawEn });
     var full = (typeof _legendResolveText === 'function') ? _legendResolveText(raw) : raw;
     p.dataset.full = full;
     p.textContent = ''; _typewriter(p, full, 60);
@@ -3305,9 +3339,13 @@ function _applyDlgOverride(row) {
   var oi = _findOiByTitle(row.obj_title);
   if (oi < 0 || typeof _OBJS === 'undefined' || !_OBJS[oi]) return;
 
+  var _dedupeObjPrefix = function (s) { return typeof s === 'string' ? s.replace(/__OBJ___OBJ__/g, '__OBJ__') : s; };
   var nodes = (Array.isArray(row.nodes_json) ? row.nodes_json : []).map(function(node) {
     if (!node || !node.text) return node;
-    return Object.assign({}, node, { text: node.text.replace(/__OBJ___OBJ__/g, '__OBJ__') });
+    var fixedText = (typeof node.text === 'string')
+      ? _dedupeObjPrefix(node.text)
+      : { ka: _dedupeObjPrefix(node.text.ka), en: _dedupeObjPrefix(node.text.en) };
+    return Object.assign({}, node, { text: fixedText });
   });
   _OBJS[oi].dialogue = nodes;
 
@@ -3668,8 +3706,10 @@ function _applyLegendOverrideRows(rows) {
   if (rows && rows[0] && rows[0].text != null) {
     var p = document.getElementById('questPopup');
     if (p) {
-      p.dataset.fullRaw = rows[0].text;
-      var resolved = _legendResolveText(rows[0].text);
+      var rawField = rows[0].text;
+      p.dataset.fullRawKa = (typeof rawField === 'string') ? rawField : (rawField.ka || '');
+      p.dataset.fullRawEn = (typeof rawField === 'string') ? '' : (rawField.en || '');
+      var resolved = _legendResolveText(_i18n(rawField));
       p.dataset.full = resolved;
       if (p.style.display === 'block') p.textContent = resolved;
       // Button visibility was frozen at export time (hidden if the map had
