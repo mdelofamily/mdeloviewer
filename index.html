@@ -4521,7 +4521,11 @@ function _tmLangSwitch(args) {
   }
   _tmEditLang = target;
   _tmApplyLangPrompt();
-  _tmL('tok', 'რედაქტირების ენა: ' + (target === 'en' ? 'English' : 'ქართული'));
+  // /ენა doubles as the visitor-facing display switcher — no separate UI —
+  // so switching the edit-target also switches what dialogue/legend/menu
+  // render as for THIS session (console access is the switcher).
+  if (typeof _mdeloSetLang === 'function') _mdeloSetLang(target);
+  _tmL('tok', 'ენა (რედაქტირება + ჩვენება): ' + (target === 'en' ? 'English' : 'ქართული'));
 }
 
 // ── inline history popup (backspace on empty input) ──
