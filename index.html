@@ -5920,10 +5920,12 @@ function _tmMergeDlgNodes(existingNodes, freshNodes, lang) {
     });
 
     var warnings = [];
+    var touched = {};
     for (var i = 0; i < freshNodes.length; i++) {
       var fn = freshNodes[i];
       var target = byId[fn.id];
       if (!target) return { error: 'კვანძი ' + fn.id.replace('node_', '@') + ' არ არსებობს ქართულ ვერსიაში — en-რეჟიმში ახალი კვანძი ვერ იქმნება' };
+      touched[fn.id] = true;
       target.text.en = fn.text || '';
       var fb = fn.buttons || [];
       if (fb.length !== target.buttons.length) {
@@ -5932,6 +5934,13 @@ function _tmMergeDlgNodes(existingNodes, freshNodes, lang) {
       var n2 = Math.min(fb.length, target.buttons.length);
       for (var j = 0; j < n2; j++) target.buttons[j].label.en = fb[j].label || '';
     }
+    // Existing nodes the person didn't include in this en-pass (e.g. deleted
+    // the @N header, or just left it out) are NOT removed — ka structure is
+    // authoritative and en can't delete nodes — but their translation is
+    // also NOT touched, so flag it instead of silently doing nothing.
+    merged.forEach(function (n) {
+      if (!touched[n.id]) warnings.push('კვანძი ' + n.id.replace('node_', '@') + ': ამ პასში არ იყო — თარგმანი უცვლელი დარჩა (structure არ შეცვლილა)');
+    });
     return { nodes: merged, warnings: warnings };
   }
 
