@@ -240,11 +240,23 @@ function _esc(s) {
 }
 
 // ── dialogue[] → DSL serializer ────────────────────────────
-function unparseDialogue(o) {
+function unparseDialogue(o, lang) {
   const nodes  = o.dialogue || [];
   const title  = o.title  || o.lb || '';
   const marker = o.marker || '';
   if (!nodes.length && !title) return '';
+
+  // resolves a { ka, en } field (or a legacy plain string) to one language's
+  // text for display — mirrors runtime.js's _i18n, duplicated here since
+  // bulk-parser.js has no dependency on runtime.js (see file header).
+  // Fallback direction matches the editor's "reference" model: showing the
+  // OTHER language when the target is empty is a placeholder to translate
+  // from, not a silent substitution.
+  const _pick = (field) => {
+    if (field == null) return '';
+    if (typeof field === 'string') return field;
+    return lang === 'en' ? (field.en || field.ka || '') : (field.ka || field.en || '');
+  };
 
   const mrkSym = marker === '!' ? '!' : marker === '?' ? '?' : marker === '💬' ? '...' : '';
   const lines  = [];
@@ -269,8 +281,9 @@ function unparseDialogue(o) {
     });
 
     // text — strip HTML back to DSL
-    if (node.text) {
-      const plain = node.text
+    const nodeText = _pick(node.text);
+    if (nodeText) {
+      const plain = nodeText
         // double <br> = paragraph break (blank line in source) — must be
         // converted before the single-<br> pass below, or the blank line
         // silently collapses into an ordinary line-wrap on save.
@@ -308,7 +321,8 @@ function unparseDialogue(o) {
 
     // buttons
     (node.buttons || []).forEach(btn => {
-      if (!btn.label) return;
+      const btnLabel = _pick(btn.label);
+      if (!btnLabel) return;
       const next     = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
       const areaPart = btn.area ? ' @@' + btn.area : '';
       const linkPart = btn.link ? ' |'  + btn.link : '';
@@ -321,7 +335,7 @@ function unparseDialogue(o) {
       // script and corrupt the export.
       const cmdPart  = (btn.cmds || []).map(c => ' [' + String.fromCharCode(36) + c + ']').join('');
       const suffix   = areaPart + linkPart + cmdPart + next;
-      lines.push('-> ' + btn.label + suffix);
+      lines.push('-> ' + btnLabel + suffix);
     });
 
     if (ni < nodes.length - 1) lines.push('');
