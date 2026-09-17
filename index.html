@@ -273,8 +273,8 @@ have nice shit!" data-oi="7" data-dialog-id="dlg_7" style="left:832px;top:736px;
   <div class="cp-question" id="cpQuestion"></div>
   <div class="cp-detail" id="cpDetail" style="display:none"></div>
   <div class="cp-vote-row">
-    <button class="cp-vote-btn" id="cpYes" onclick="castConsensusVote(true)">🔘 თანხმობა</button>
-    <button class="cp-vote-btn" id="cpNo" onclick="castConsensusVote(false)">❌ უარყოფა</button>
+    <button class="cp-vote-btn" id="cpYes" onclick="castConsensusVote(true)">🔘 <span id="cpYesLbl">თანხმობა</span></button>
+    <button class="cp-vote-btn" id="cpNo" onclick="castConsensusVote(false)">❌ <span id="cpNoLbl">უარყოფა</span></button>
   </div>
   <div class="cp-status" id="cpStatus"></div>
   <div class="cp-feed" id="cpFeed"></div>
@@ -1162,6 +1162,17 @@ var _mdeloLang = (function () {
 function _mdeloSetLang(lang) {
   _mdeloLang = (lang === 'en') ? 'en' : 'ka';
   try { localStorage.setItem('mdelo_lang', _mdeloLang); } catch (e) {}
+  _mdeloSyncStaticUi();
+}
+
+// Static UI chrome (hardcoded button/label text baked into viewer.html,
+// not user-authored content) that needs to reflect a language switch
+// immediately — not just the next time its popup happens to open.
+function _mdeloSyncStaticUi() {
+  var yesLbl = document.getElementById('cpYesLbl');
+  if (yesLbl) yesLbl.textContent = _i18n({ ka: 'თანხმობა', en: 'Agree' });
+  var noLbl = document.getElementById('cpNoLbl');
+  if (noLbl) noLbl.textContent = _i18n({ ka: 'უარყოფა', en: 'Refuse' });
 }
 
 function _i18n(field) {
@@ -1173,6 +1184,11 @@ function _i18n(field) {
 
 window._mdeloSetLang = _mdeloSetLang;
 window._i18n = _i18n;
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _mdeloSyncStaticUi);
+} else {
+  _mdeloSyncStaticUi();
+}
 
 // Resolves an object's display name for the current visitor language,
 // preferring .title over .lb if both are set (mirrors the existing
@@ -1370,12 +1386,12 @@ window.showLoginModal = function (prefillEmail) {
     wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;';
     wrap.innerHTML =
       '<div style="background:#161b22;border:1px solid rgba(88,166,255,0.4);border-radius:12px;padding:20px;width:min(90vw,320px);color:#e6edf3;font-family:inherit;">' +
-        '<div style="font-size:15px;font-weight:600;margin-bottom:14px;">შესვლა</div>' +
-        '<input id="_loginEmail" type="email" placeholder="ელფოსტა" style="width:100%;box-sizing:border-box;height:36px;margin-bottom:10px;padding:0 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#e6edf3;font-size:14px;" />' +
-        '<input id="_loginName" type="text" placeholder="სახელი (გამოჩნდება დიალოგებში)" style="width:100%;box-sizing:border-box;height:36px;margin-bottom:14px;padding:0 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#e6edf3;font-size:14px;" />' +
+        '<div style="font-size:15px;font-weight:600;margin-bottom:14px;">' + _i18n({ ka: 'შესვლა', en: 'Log in' }) + '</div>' +
+        '<input id="_loginEmail" type="email" placeholder="' + _i18n({ ka: 'ელფოსტა', en: 'Email' }) + '" style="width:100%;box-sizing:border-box;height:36px;margin-bottom:10px;padding:0 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#e6edf3;font-size:14px;" />' +
+        '<input id="_loginName" type="text" placeholder="' + _i18n({ ka: 'სახელი (გამოჩნდება დიალოგებში)', en: 'Name (shown in dialogues)' }) + '" style="width:100%;box-sizing:border-box;height:36px;margin-bottom:14px;padding:0 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#e6edf3;font-size:14px;" />' +
         '<div style="display:flex;gap:8px;">' +
-          '<button id="_loginCancel" style="flex:1;height:36px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:#e6edf3;border-radius:8px;font-size:13px;cursor:pointer;">გაუქმება</button>' +
-          '<button id="_loginSubmit" style="flex:1;height:36px;background:rgba(88,166,255,0.25);border:1px solid rgba(88,166,255,0.6);color:#e6edf3;border-radius:8px;font-size:13px;cursor:pointer;">გაგზავნა</button>' +
+          '<button id="_loginCancel" style="flex:1;height:36px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:#e6edf3;border-radius:8px;font-size:13px;cursor:pointer;">' + _i18n({ ka: 'გაუქმება', en: 'Cancel' }) + '</button>' +
+          '<button id="_loginSubmit" style="flex:1;height:36px;background:rgba(88,166,255,0.25);border:1px solid rgba(88,166,255,0.6);color:#e6edf3;border-radius:8px;font-size:13px;cursor:pointer;">' + _i18n({ ka: 'გაგზავნა', en: 'Send' }) + '</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(wrap);
@@ -2770,7 +2786,15 @@ function applyAreaHash() {
 }
 
 // ── notifications ──
-const TYPE_LABELS = { info: 'ინფო', warning: 'გაფრთხილება', danger: 'საფრთხე', emergency: 'განგაში', done: 'მზადაა', project: 'პროექტი', consensus: 'კონსენსუსი' };
+const TYPE_LABELS = {
+  info:      { ka: 'ინფო',           en: 'Info' },
+  warning:   { ka: 'გაფრთხილება',     en: 'Warning' },
+  danger:    { ka: 'საფრთხე',        en: 'Danger' },
+  emergency: { ka: 'განგაში',        en: 'Emergency' },
+  done:      { ka: 'მზადაა',         en: 'Done' },
+  project:   { ka: 'პროექტი',        en: 'Project' },
+  consensus: { ka: 'კონსენსუსი',     en: 'Consensus' }
+};
 let _notifs = [], _curNotif = null;
 
 async function loadNotifs() {
@@ -2942,14 +2966,14 @@ function openNotifPopup(n) {
   _curNotif = n;
   const p = document.getElementById('notifPopup');
   p.style.setProperty('--nc', { info: '#58a6ff', warning: '#f0a500', danger: '#fb8f44', emergency: '#f85149', done: '#4ade80', project: '#c084fc' }[n.type] || '#58a6ff');
-  document.getElementById('npType').textContent = (TYPE_LABELS[n.type] || n.type).toUpperCase();
+  document.getElementById('npType').textContent = (_i18n(TYPE_LABELS[n.type]) || n.type).toUpperCase();
   document.getElementById('npSender').textContent = n.sender ? ('👤 ' + n.sender) : '';
   const textEl = document.getElementById('npText'); textEl.textContent = '';
   const detEl = document.getElementById('npDetail'); detEl.style.display = 'none'; detEl.textContent = '';
   const ar = document.getElementById('npArea'); ar.style.display = 'none';
   const spd = _twSpeed(n.type);
   _typewriter(textEl, n.text || '', spd, () => { if (n.detail) { detEl.style.display = 'block'; _typewriter(detEl, n.detail, spd); } });
-  if (n.linked_area) { ar.style.display = 'block'; ar.textContent = '🗺 ' + n.linked_area + ' — რუკაზე ნახვა →'; }
+  if (n.linked_area) { ar.style.display = 'block'; ar.textContent = '🗺 ' + n.linked_area + _i18n({ ka: ' — რუკაზე ნახვა →', en: ' — view on map →' }); }
   const pw = Math.min(window.innerWidth * 0.9, 360);
   p.style.cssText = 'display:block;left:' + ((window.innerWidth - pw) / 2) + 'px;bottom:72px;max-width:' + pw + 'px;';
   p.classList.add('show');
@@ -2958,7 +2982,7 @@ function openNotifList() {
   closeNotifPopup();
   const p = document.getElementById('notifPopup');
   p.style.setProperty('--nc', '#58a6ff');
-  document.getElementById('npType').textContent = 'ყველა შეტყობინება';
+  document.getElementById('npType').textContent = _i18n({ ka: 'ყველა შეტყობინება', en: 'All notifications' });
   document.getElementById('npSender').textContent = '';
   const body = document.getElementById('npText'); body.innerHTML = '';
   _notifs.forEach(n => {
@@ -3237,16 +3261,25 @@ function _evaluateConsensusState() {
   const quorumMet = !!quorum && total >= quorum;
   n._allVoted = quorumMet;
 
-  const extra = quorum ? (total + '/' + quorum + ' ხმა') : (total + ' ხმა');
+  const extra = quorum ? (total + '/' + quorum + ' ' + _i18n({ ka: 'ხმა', en: 'votes' })) : (total + ' ' + _i18n({ ka: 'ხმა', en: 'votes' }));
   let label, color;
   if (quorumMet) {
     const allAgree = _consensusVotes.every(v => v.vote === true);
     const RESULTS = {
-      project: ['✅ პროექტი მხარდაჭერილია!', '🚫 პროექტი უარყოფილია!'],
-      done:    ['✅ პროექტი შესრულდა!',       '🚫 პროექტი შეჩერდა!'],
+      project: [
+        { ka: '✅ პროექტი მხარდაჭერილია!', en: '✅ Project approved!' },
+        { ka: '🚫 პროექტი უარყოფილია!',    en: '🚫 Project rejected!' }
+      ],
+      done: [
+        { ka: '✅ პროექტი შესრულდა!', en: '✅ Project completed!' },
+        { ka: '🚫 პროექტი შეჩერდა!',  en: '🚫 Project halted!' }
+      ]
     };
-    const pair = RESULTS[n.type] || ['✅ კონსენსუსი შედგა!', '🚫 კონსენსუსი არ შედგა!'];
-    label = allAgree ? pair[0] : pair[1];
+    const pair = RESULTS[n.type] || [
+      { ka: '✅ კონსენსუსი შედგა!',    en: '✅ Consensus reached!' },
+      { ka: '🚫 კონსენსუსი არ შედგა!', en: '🚫 Consensus not reached!' }
+    ];
+    label = _i18n(allAgree ? pair[0] : pair[1]);
     color = allAgree ? '#4ade80' : '#f85149';
     // fire terminal_cmd once on positive outcome
     if (allAgree && n.terminal_cmd && !_executedTerminalCmds.has(n.id)) {
@@ -3255,7 +3288,7 @@ function _evaluateConsensusState() {
       else if (typeof window.runMacro === 'function') window.runMacro(n.terminal_cmd);
     }
   } else {
-    label = '📜 განხილვა მიმდინარეობს';
+    label = _i18n({ ka: '📜 განხილვა მიმდინარეობს', en: '📜 Discussion in progress' });
     color = '#55aa33';
   }
   statusEl.style.color = color;
