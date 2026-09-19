@@ -12,13 +12,20 @@ const CHECK_INTERVAL = 5 * 60 * 1000; // 5 წუთი
 // Paths relative to this file's own scope (mdeloviewer root) — confirmed
 // correct. Precaches the skins (objects.png 164KB, tiles.png 224KB) plus
 // the rest of the app shell so the site is visually usable offline.
-const CACHE_NAME = 'mdelo-shell-v1';
+const CACHE_NAME = 'mdelo-shell-v2'; // bumped: js/ folder restructure — drops the v1 cache with the old root-level paths
 const PRECACHE_URLS = [
   './',
   './index.html',
-  './chat.js',
-  './chat-hud.js',
-  './bulk-parser.js',
+  './data.js',
+  './js/runtime.js',
+  './js/canvas-renderer.js',
+  './js/terminal.js',
+  './js/unlock.js',
+  './js/upload.js',
+  './js/bulk-parser.js',
+  './js/chat.js',
+  './js/chat-hud.js',
+  './js/push-notifications.js',
   './manifest.json',
   './logo.png',
   './skin/tiles.png',
