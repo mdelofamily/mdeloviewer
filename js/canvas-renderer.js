@@ -95,23 +95,18 @@
     renderLayer(cfg.map);
     if (cfg.overlayMap) renderLayer(cfg.overlayMap);
 
-    // draw objects
-    const _oImgs = new Map();
+    // draw objects — straight from their tile definition (sheet crop or
+    // b64 tile image); no per-object image data is stored in data.js
     (cfg.objects || []).forEach(obj => {
-      if (obj.src && !_oImgs.has(obj.src)) {
-        const im = new Image(); im.src = obj.src; _oImgs.set(obj.src, im);
+      const def = tileMap.get(obj.id); if (!def) return;
+      const dx = obj.x * TS, dy = obj.y * TS, w = (obj.cols || 1) * TS, h = (obj.rows || 1) * TS;
+      if (def.sheetUrl) {
+        const sh = sheets.get(def.sheetUrl);
+        if (sh) ctx.drawImage(sh, def.x, def.y, def.w, def.h, dx, dy, w, h);
+      } else {
+        const im = b64imgs.get(def.id);
+        if (im) ctx.drawImage(im, dx, dy, w, h);
       }
-    });
-    Promise.all([..._oImgs.values()].map(im => im.complete ? Promise.resolve() : new Promise(r => { im.onload = r; im.onerror = r; }))).then(() => {
-      (cfg.objects || []).forEach(obj => {
-        const w = (obj.cols || 1) * TS, h = (obj.rows || 1) * TS;
-        if (obj.src && _oImgs.has(obj.src)) {
-          ctx.drawImage(_oImgs.get(obj.src), obj.x * TS, obj.y * TS, w, h);
-        } else {
-          const def = tileMap.get(obj.id); if (!def) return;
-          if (def.sheetUrl) { const sh = sheets.get(def.sheetUrl); if (sh) ctx.drawImage(sh, def.sx, def.sy, def.sw, def.sh, obj.x * TS, obj.y * TS, w, h); }
-        }
-      });
     });
   }
 
