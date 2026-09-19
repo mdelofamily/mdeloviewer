@@ -1,0 +1,350 @@
+// ============================================================
+//  bulk-parser.js — Bulk DSL → dialogue[] converter
+//  Depends on: nothing (pure functions)
+//  Load order: after objects.js, before ui-palette.js
+// ============================================================
+
+//
+// DSL syntax reference:
+//   @N [marker] title        — node start  (marker: ! ? ...)
+//   [speaker] text           — named speaker block
+//   [] text                  — player name placeholder (runtime: mdelo_nick || "მოგზაური")
+//   <> text                  — object speaker (runtime: ობიექტის სახელი = _dlgTitle)
+//   <სახელი> text            — object speaker (კასტომ სახელი)
+//   plain text               — narrator (სახელის გარეშე)
+//   {atmosphere text}        — atmosphere / effect line
+//   [[label|url]]            — external link (inline)
+//   [[object name]]          — map object link (inline)
+//   -> text =>N              — choice button
+//   [$name]                  — button-level: run saved macro "name" on click
+//                               (resolved via window.runMacro — local scope wins
+//                               over საერთო on a name clash, same as /macro)
+//
+// speaker encoding in HTML:
+//   <b class="spk-player">[]</b>        — [] player placeholder
+//   <b class="spk-object">\x01name</b>  — <> object (\x01 = empty = use _dlgTitle)
+//   <b class="spk-named">name</b>       — [name] named speaker
+//
+// Returns: { nodes: Array, title: string, marker: string }
+//   nodes  — dialogue[] ready for _editingDialogue
+//   title  — object title from @0 header (may be "")
+//   marker — object marker from @0 header (! ? 💬 or "")
+//
+
+// ── OBJ_PREFIX: internal marker for object speakers ─────────
+const _OBJ_PREFIX = '__OBJ__';
+
+function parseBulkDSL(raw) {
+  const lines  = raw.replace(/\r\n/g, '\n').split('\n');
+  const result = [];
+
+  let cur     = null;   // node being built
+  let speaker = null;   // null=narrator | ""=player | "\x01name"=object | "name"=named
+  let textBuf = [];     // accumulated lines for current text block
+  let paraBreakPending = false; // true = a blank line preceded the next flushed block
+
+  let rootTitle  = '';
+  let rootMarker = '';
+
+  // flush accumulated text buffer into cur.text as HTML
+  function flush() {
+    if (!cur || !textBuf.length) { textBuf = []; return; }
+    const block = textBuf.join(' ').trim();
+    if (!block) { textBuf = []; return; }
+
+    let html;
+    if (speaker === null) {
+      // narrator — plain text, no speaker label
+      html = _esc(block);
+    } else if (speaker === '') {
+      // [] — player placeholder, resolved at runtime
+      html = '<b class="spk-player">[]</b> ' + _esc(block);
+    } else if (typeof speaker === 'string' && speaker.startsWith(_OBJ_PREFIX)) {
+      // <> or <name> — object speaker
+      // store raw name after prefix; empty = use _dlgTitle at runtime
+      const objName = speaker.slice(_OBJ_PREFIX.length);
+      html = '<b class="spk-object">' + _esc(_OBJ_PREFIX + objName) + '</b> ' + _esc(block);
+    } else {
+      // [name] — named speaker
+      html = '<b class="spk-named">' + _esc(speaker) + '</b> ' + _esc(block);
+    }
+
+    // a blank line in the source means "paragraph break" — encode it as a
+    // double <br> so unparseDialogue can tell it apart from an ordinary
+    // line-wrap (single <br>) and restore the blank line on save.
+    const sep = cur.text ? (paraBreakPending ? '<br><br>' : '<br>') : '';
+    cur.text += sep + html;
+    paraBreakPending = false;
+    textBuf = [];
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+
+    // ── @N node header ──────────────────────────────────────
+    if (/^@\d/.test(line)) {
+      if (cur) { flush(); result.push(cur); }
+
+      const m      = line.match(/^@(\d+)\s*(\.\.\.|[!?])?\s*(.*)/);
+      const idx    = m ? m[1] : '0';
+      const mrkRaw = m ? (m[2] || '').trim() : '';
+      const title  = m ? (m[3] || '').trim() : '';
+      const marker = mrkRaw === '!'   ? '!'   :
+                     mrkRaw === '?'   ? '?'   :
+                     mrkRaw === '...' ? '...' : '';
+
+      if (idx === '0') { rootTitle = title; rootMarker = marker; }
+
+      cur     = { id: 'node_' + idx, text: '', buttons: [] };
+      speaker = null;
+      textBuf = [];
+      paraBreakPending = false;
+      continue;
+    }
+
+    if (!cur) continue;
+
+    // ── #if flag =>N conditional redirect (multiple allowed per node) ──
+    if (/^>>\s/.test(line)) {
+      const ifM = line.match(/^>>\s+(\S+)\s*=>(\d+)/);
+      if (ifM) {
+        if (!cur.conditions) cur.conditions = [];
+        cur.conditions.push({ flag: ifM[1], target: 'node_' + ifM[2] });
+      }
+      continue;
+    }
+
+    // ── choice line ──────────────────────────────────────────
+    if (/^->/.test(line)) {
+      flush();
+      const btn = _parseBtn(line);
+      if (btn) {
+        cur.buttons.push(btn);
+      }
+      continue;
+    }
+
+    // ── atmosphere {text} ────────────────────────────────────
+    const atmM = line.match(/^\{(.+)\}$/);
+    if (atmM) {
+      flush();
+      speaker = null;
+      cur.text += (cur.text ? '<br>' : '') + '✦ ' + _esc(atmM[1].trim());
+      continue;
+    }
+
+    // ── object speaker <> or <name> ──────────────────────────
+    // must be checked BEFORE [] to avoid conflict
+    const objM = line.match(/^<([^>]*)>(.*)/);
+    if (objM) {
+      flush();
+      speaker = _OBJ_PREFIX + objM[1].trim();  // \x01 + name (empty = auto)
+      const rest = objM[2].trim();
+      if (rest) textBuf.push(rest);
+      continue;
+    }
+
+    // ── player/named speaker [] or [name] ────────────────────
+    const spkM = line.match(/^\[([^\]]*)\](.*)/);
+    if (spkM) {
+      flush();
+      speaker    = spkM[1];           // "" = player, "name" = named
+      const rest = spkM[2].trim();
+      if (rest) textBuf.push(rest);
+      continue;
+    }
+
+    // ── empty line → flush block, reset speaker, mark paragraph break ──
+    if (!line.trim()) {
+      flush();
+      speaker = null;
+      paraBreakPending = true;
+      continue;
+    }
+
+    // ── regular text line (narrator) ─────────────────────────
+    textBuf.push(line.trim());
+  }
+
+  // finalize last node
+  if (cur) { flush(); result.push(cur); }
+
+  return { nodes: result, title: rootTitle, marker: rootMarker };
+}
+
+// ── choice line parser ──────────────────────────────────────
+//
+// Full button DSL syntax:
+//   -> label                     — close popup (or go to =>N)
+//   -> label =>N                 — jump to node N
+//   -> label |https://url        — open URL in new tab
+//   -> label @@ზონის სახელი      — navigate map to area (fitAreas)
+//   -> label [$macro_name]      — run saved macro (window.runMacro) on click —
+//                                  the only action-token. Anything that used
+//                                  to be a [^marker]/[+flag] token, or a
+//                                  ->*/->!/->~/->+/->. notification, is now
+//                                  done by the macro itself (e.g. a macro
+//                                  body that runs /flag set, /marker set, or
+//                                  /შეტყობინება)
+//   -> label @@area |url =>N    — all modifiers can combine
+//
+function _parseBtn(line) {
+  let rest = line.slice(2).trim();
+
+  // extract =>N at end
+  let nextNode = '';
+  const nxtM = rest.match(/^(.*?)\s*=>(\d+)\s*$/);
+  if (nxtM) {
+    rest     = nxtM[1].trim();
+    nextNode = 'node_' + nxtM[2];
+  }
+
+  // bracket token [$..] — extracted BEFORE |url and @@area. This regex
+  // matches anywhere in the string regardless of position, so pulling it
+  // out first means it can sit before OR after @@area / |url in the DSL
+  // line without being swallowed by their end-anchored "\s*$" matching
+  // (which previously ate a trailing bracket as part of the area/url
+  // capture). [^marker]/[+flag] tokens are retired — both effects are now
+  // expressed as saved macros (e.g. a macro that runs /flag set or
+  // /marker set internally) and triggered the same way as any other
+  // action: [$macro_name]. See TERMINAL_SCOPE instruction for the macro
+  // side of this migration.
+
+  // [$macro_name] — button-level: run saved macro on click (window.runMacro)
+  const cmds = [];
+  rest = rest.replace(/\[\$([^\]]+)\]/g, function(_, name) {
+    cmds.push(name.trim());
+    return '';
+  }).trim();
+
+  // extract trailing |url  (no spaces in URL)
+  let link = '';
+  const linkM = rest.match(/^(.*?)\s*\|(\S+)\s*$/);
+  if (linkM) { link = linkM[2]; rest = linkM[1].trim(); }
+
+  // extract trailing @@area name  (may contain spaces, must come after |url extraction)
+  let area = '';
+  const areaM = rest.match(/^(.*?)\s*@@(.+?)\s*$/);
+  if (areaM) { area = areaM[2].trim(); rest = areaM[1].trim(); }
+
+  if (!rest) return null;
+  return { label: rest, nextNode, link, area, cmds };
+}
+
+// ── minimal HTML escape ─────────────────────────────────────
+function _esc(s) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// ── dialogue[] → DSL serializer ────────────────────────────
+function unparseDialogue(o, lang) {
+  const nodes  = o.dialogue || [];
+
+  // resolves a { ka, en } field (or a legacy plain string) to one language's
+  // text for display — mirrors runtime.js's _i18n, duplicated here since
+  // bulk-parser.js has no dependency on runtime.js (see file header).
+  // Fallback direction matches the editor's "reference" model: showing the
+  // OTHER language when the target is empty is a placeholder to translate
+  // from, not a silent substitution.
+  const _pick = (field) => {
+    if (field == null) return '';
+    if (typeof field === 'string') return field;
+    return lang === 'en' ? (field.en || field.ka || '') : (field.ka || field.en || '');
+  };
+
+  const title  = _pick(o.title) || _pick(o.lb) || '';
+  const marker = o.marker || '';
+  if (!nodes.length && !title) return '';
+
+  const mrkSym = marker === '!' ? '!' : marker === '?' ? '?' : marker === '💬' ? '...' : '';
+  const lines  = [];
+
+  nodes.forEach((node, ni) => {
+    // node header — use the node's OWN id number, not its array position.
+    // Writing '@' + ni here would silently renumber every node on save
+    // (e.g. a hand-picked @1000 becomes @4 just because it's 5th in the
+    // array), breaking any =>N reference elsewhere that still points at
+    // the original number.
+    const idNum = (node.id && /^node_(\d+)$/.test(node.id)) ? node.id.replace('node_', '') : String(ni);
+    const hdr = '@' + idNum +
+      (mrkSym && ni === 0 ? ' ' + mrkSym : '') +
+      (title  && ni === 0 ? ' ' + title  : '');
+    lines.push(hdr);
+
+    // >> flag =>N conditions (a node may have several; conditions[] is the
+    // current shape, condition{} is kept as a fallback for old saved data)
+    const conds = node.conditions || (node.condition ? [node.condition] : []);
+    conds.forEach(c => {
+      lines.push('>> ' + c.flag + ' =>' + c.target.replace('node_', ''));
+    });
+
+    // text — strip HTML back to DSL
+    const nodeText = _pick(node.text);
+    if (nodeText) {
+      const plain = nodeText
+        // double <br> = paragraph break (blank line in source) — must be
+        // converted before the single-<br> pass below, or the blank line
+        // silently collapses into an ordinary line-wrap on save.
+        .replace(/<br>\s*<br>/gi, '\n\n')
+        .replace(/<br>/gi, '\n')
+        // [] player placeholder
+        .replace(/<b[^>]*class="spk-player"[^>]*>\[\]<\/b>\s*/gi, '[] ')
+        // <> object speaker: extract stored name after \x01
+        .replace(/<b[^>]*class="spk-object"[^>]*>([^<]*)<\/b>\s*/gi, (_, inner) => {
+          // inner is escaped \x01name — unescape &lt; etc then strip \x01
+          const raw = inner
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+          const name = raw.startsWith(_OBJ_PREFIX) ? raw.slice(_OBJ_PREFIX.length) : raw;
+          return '<' + name + '> ';
+        })
+        // [name] named speaker
+        .replace(/<b[^>]*class="spk-named"[^>]*>([^<]*)<\/b>\s*/gi, (_, inner) => {
+          const name = inner
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+          return '[' + name + '] ';
+        })
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g,  '<')
+        .replace(/&gt;/g,  '>');
+      plain.split('\n').forEach(l => {
+        const t = l.trim();
+        if (!t) { lines.push(''); return; }  // preserve paragraph break
+        if (t.startsWith('✦ ')) {
+          lines.push('{' + t.slice(2) + '}');  // restore atmosphere syntax
+        } else {
+          lines.push(t);
+        }
+      });
+    }
+
+    // buttons
+    (node.buttons || []).forEach(btn => {
+      const btnLabel = _pick(btn.label);
+      if (!btnLabel) return;
+      const next     = btn.nextNode ? ' =>' + btn.nextNode.replace('node_', '') : '';
+      const areaPart = btn.area ? ' @@' + btn.area : '';
+      const linkPart = btn.link ? ' |'  + btn.link : '';
+      // NOTE: built via fromCharCode(36), not a literal dollar sign next to a
+      // quote — export-html.js embeds this whole file as a *string*
+      // replacement (tmpl.replace(/{{BULK_PARSER_JS}}/g, bulkParserJS)), and a
+      // dollar sign directly followed by an apostrophe in that string is a
+      // special JS replace-token (inserts the text after the match) — it
+      // would splice the rest of the HTML template into the middle of this
+      // script and corrupt the export.
+      const cmdPart  = (btn.cmds || []).map(c => ' [' + String.fromCharCode(36) + c + ']').join('');
+      const suffix   = areaPart + linkPart + cmdPart + next;
+      lines.push('-> ' + btnLabel + suffix);
+    });
+
+    if (ni < nodes.length - 1) lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
+// ── WINDOW BINDINGS ────────────────────────────────────────
+window.parseBulkDSL    = parseBulkDSL;
+window.unparseDialogue = unparseDialogue;
