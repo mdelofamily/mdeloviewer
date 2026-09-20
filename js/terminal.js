@@ -556,7 +556,7 @@ function _tmHelp() {
     ['/ინფო',             'რუკის ინფორმაცია'],
     ['/მასშტაბი [N]',     'zoom 0.25–6'],
     ['/ზონები',           'ზონების სია'],
-    ['/არე',               'ახალი ზონა: ორი long-tap რუკაზე · /არე გაუქმება'],
+    ['/არე [რედ|ზომა|წაშ]', 'ზონები კონსოლიდან · /არე დახმარება'],
     ['/ობიექტები',        'ობიექტები + dialogue სტატუსი'],
     ['/დიალოგი [სახელი]', 'DSL რედაქტირება · Ctrl+Enter შესანახად'],
     ['/წასვლა [N]',       'ზონაზე ნავიგაცია'],
@@ -1178,15 +1178,76 @@ function _tmOpenCmd() {
   _tmL('tok', 'ტერმინალი გახსნილია');
 }
 
-// ── /არე — create a map area (area_overrides) from two long-presses on the map ──
-//   /არე               close the console, then long-press two opposite corners on the map;
-//                      the console reopens with a text editor: 1st line = name, rest = tooltip.
-//   /არე გაუქმება      abort a pending creation
-// Geometry is structural (set once, here); name/tooltip are text. New areas are always
-// created in ka — the en translation is added later through the edit flow.
-var _tmAreaCtx = null; // { x1, y1, x2, y2 } of the rectangle waiting for its name
+// ── /არე — map areas from the console (area_overrides) ──────────────────────────
+//   /არე                          new area: console closes, long-press two opposite corners,
+//                                 then a text editor opens (1st line = name, rest = tooltip)
+//   /არე გაუქმება                 abort a pending creation
+//   /არე რედ სახელი               edit name/tooltip (ka; in en mode: the translation)
+//   /არე ზომა სახელი [N]          re-pick the rectangle (two long-presses)
+//   /არე წაშ სახელი [N] დიახ      soft-delete (no DELETE policy; reversible in Supabase)
+// Areas are found by name — the same key /წასვლა uses. Several rectangles sharing one name
+// behave as one group: edit/delete apply to all of them, unless a trailing N picks the
+// Nth rectangle. Geometry is structural (set here, once); name/tooltip are text.
+var _tmAreaCtx = null; // { kind:'new', x1,y1,x2,y2 } | { kind:'edit', ids, lang, ka:{label,tip} }
+
+var _TM_AREA_USAGE = [
+  ['/არე',                         'ახალი ზონა (ორი long-tap რუკაზე)'],
+  ['/არე რედ სახელი',              'სახელი/აღწერა (en რეჟიმში — თარგმანი)'],
+  ['/არე ზომა სახელი [N]',         'მართკუთხედის თავიდან არჩევა'],
+  ['/არე წაშ სახელი [N] დიახ',     'წაშლა'],
+  ['/არე გაუქმება',                'მიმდინარე შექმნის გაუქმება']
+];
+function _tmAreaUsage() { _TM_AREA_USAGE.forEach(function (r) { _tmL('tdm', '  ' + r[0] + '  —  ' + r[1]); }); }
+
+// Every .hs-area rectangle, read from the DOM (same source /ზონები and /წასვლა use).
+function _tmAreaRects() {
+  var T = (typeof _TS !== 'undefined') ? _TS : 32;
+  return [].slice.call(document.querySelectorAll('.hs-area')).map(function (el) {
+    var ox = +el.dataset.ox, oy = +el.dataset.oy, ow = +el.dataset.ow, oh = +el.dataset.oh;
+    return {
+      id: el.dataset.aid || '', ka: el.dataset.title || '', en: el.dataset.titleEn || '',
+      tipKa: el.dataset.tooltip || '', tipEn: el.dataset.tooltipEn || '',
+      x1: ox / T, y1: oy / T, x2: (ox + ow) / T, y2: (oy + oh) / T
+    };
+  });
+}
+
+// Rectangles called `argsArr.join(' ')` (ka or en name). If the whole text is not a name but
+// ends with a number, that number is the 1-based rectangle index within the name's group.
+function _tmAreaFind(argsArr) {
+  var text = argsArr.join(' ').trim(), all = _tmAreaRects();
+  function byName(n) { return all.filter(function (a) { return a.ka === n || (a.en && a.en === n); }); }
+  var hits = byName(text), idx = null, name = text;
+  if (!hits.length) {
+    var m = text.match(/^(.*\S)\s+(\d+)$/);
+    if (m) { var h2 = byName(m[1]); if (h2.length) { hits = h2; idx = +m[2]; name = m[1]; } }
+  }
+  if (idx != null) {
+    if (idx < 1 || idx > hits.length) return { name: name, hits: [], badIdx: idx, count: hits.length };
+    hits = [hits[idx - 1]];
+  }
+  return { name: name, hits: hits, idx: idx };
+}
+
+// Shared guard for edit/size/delete: found something, every rectangle has an id, network is up.
+function _tmAreaTarget(argsArr) {
+  if (!argsArr.length) { _tmAreaUsage(); return null; }
+  var f = _tmAreaFind(argsArr);
+  if (f.badIdx) { _tmL('ter', '✗ "' + f.name + '"-ს მხოლოდ ' + f.count + ' მართკუთხედი აქვს (მოითხოვე: ' + f.badIdx + ')'); return null; }
+  if (!f.hits.length) { _tmL('ter', '✗ ზონა ვერ მოიძებნა: "' + argsArr.join(' ') + '" (სია: /ზონები)'); return null; }
+  if (f.hits.some(function (h) { return !h.id; })) {
+    _tmL('ter', '✗ ამ ზონას id არ აქვს (ძველი export) — ედიტორში ხელახლა გააკეთე export, მერე ისევ სცადე'); return null;
+  }
+  if (typeof window.areaOverrideSaveMany !== 'function') { _tmL('ter', '✗ areaOverrideSaveMany ვერ მოიძებნა (runtime.js?)'); return null; }
+  return f;
+}
+function _tmAreaBox(h) { return '(' + h.x1 + ',' + h.y1 + ')–(' + h.x2 + ',' + h.y2 + ')'; }
+function _tmAreaSaveErr(res) {
+  return '✗ ვერ შეინახა' + (res && res.status ? ' (' + res.status + ')' : '') + (res && res.msg ? ': ' + res.msg : '');
+}
+
 function _tmArea(args) {
-  var sub = (args[0] || '').trim();
+  var sub = (args[0] || '').trim(), rest = args.slice(1);
   if (sub === 'გაუქმება' || sub === 'cancel') {
     _tmAreaCtx = null;
     if (typeof window.areaPickClear === 'function') window.areaPickClear();
@@ -1194,6 +1255,13 @@ function _tmArea(args) {
     return;
   }
   if (_tmEditObj) { _tmL('ter', '✗ ჯერ დახურე ღია edit-სესია (Esc)'); return; }
+  if (sub === 'დახმარება' || sub === 'help' || sub === '?')       { _tmAreaUsage(); return; }
+  if (sub === 'რედ' || sub === 'რედაქტირება' || sub === 'edit') { _tmAreaEdit(rest); return; }
+  if (sub === 'ზომა' || sub === 'size')                          { _tmAreaResize(rest); return; }
+  if (sub === 'წაშ' || sub === 'წაშლა' || sub === 'rm')          { _tmAreaDelete(rest); return; }
+  if (sub) { _tmL('ter', '✗ უცნობი ქვე-ბრძანება: "' + sub + '"'); _tmAreaUsage(); return; }
+
+  // ── new area ──
   if (_tmEditLang === 'en') { _tmL('ter', '✗ ახალი არეალი ქართულად იქმნება — ჯერ: /ენა ka'); return; }
   if (typeof window.areaPickStart !== 'function') { _tmL('ter', '✗ areaPickStart ვერ მოიძებნა (runtime.js?)'); return; }
   _tmL('tsy', '─── ახალი არეალი ──────────────');
@@ -1202,53 +1270,144 @@ function _tmArea(args) {
   window.areaPickStart(_tmAreaPicked, function () { _tmOpen_(); _tmL('tdm', 'არეალის შექმნა გაუქმდა'); });
 }
 
-// Both corners chosen: reopen the console with the name/tooltip editor.
-function _tmAreaPicked(r) {
-  _tmAreaCtx = r;
+// Open the name/tooltip editor for a new (kind:'new') or existing (kind:'edit') area.
+function _tmAreaEditorOpen(ctx, label, prefill, lines) {
+  _tmAreaCtx = ctx;
   _tmOpen_();
-  if (!_tmMulti) tmToggleMulti();
-  document.getElementById('tmTa').value = '';
+  if (!_tmMulti) tmToggleMulti();          // must run before _tmEditObj is set (it is locked during a session)
+  document.getElementById('tmTa').value = prefill;
   _tmTaResize();
   _tmEditObj   = '__area__';
   _tmEditMode  = 'area';
-  _tmEditLabel = 'ახალი არეალი (' + r.x1 + ',' + r.y1 + ')–(' + r.x2 + ',' + r.y2 + ')';
-  _tmL('tsy', '─── ' + _tmEditLabel + ' ──────────────');
-  _tmL('tdm', 'ზომა: ' + (r.x2 - r.x1) + '×' + (r.y2 - r.y1) + ' უჯრა');
-  _tmL('tdm', 'პირველი ხაზი — სახელი · დანარჩენი — აღწერა (tooltip, არასავალდებულო)');
+  _tmEditLabel = label;
+  _tmL('tsy', '─── ' + label + ' ──────────────');
+  lines.forEach(function (l) { _tmL('tdm', l); });
   _tmL('tdm', 'Ctrl+Enter — შენახვა · Esc — გაუქმება');
 }
 
-// Save the new area. Any failure keeps the editor (and its text) open so the same
-// Ctrl+Enter can simply be retried; the session closes only on success.
+// Both corners chosen for a NEW area: reopen the console with the name/tooltip editor.
+function _tmAreaPicked(r) {
+  _tmAreaEditorOpen(
+    { kind: 'new', x1: r.x1, y1: r.y1, x2: r.x2, y2: r.y2 },
+    'ახალი არეალი (' + r.x1 + ',' + r.y1 + ')–(' + r.x2 + ',' + r.y2 + ')', '',
+    ['ზომა: ' + (r.x2 - r.x1) + '×' + (r.y2 - r.y1) + ' უჯრა',
+     'პირველი ხაზი — სახელი · დანარჩენი — აღწერა (tooltip, არასავალდებულო)']);
+}
+
+// /არე რედ სახელი — edit name/tooltip of every rectangle with that name.
+function _tmAreaEdit(argsArr) {
+  var f = _tmAreaTarget(argsArr); if (!f) return;
+  var first = f.hits[0], en = (_tmEditLang === 'en');
+  var name = en ? (first.en || first.ka) : first.ka;
+  var tip  = en ? (first.tipEn || first.tipKa) : first.tipKa;
+  var lines = [];
+  if (f.hits.length > 1) lines.push(f.hits.length + ' მართკუთხედი განახლდება ერთად');
+  lines.push(en ? 'EN რეჟიმი — ქართულის იდენტური ტექსტი თარგმანად არ შეინახება'
+                : 'პირველი ხაზი — სახელი · დანარჩენი — აღწერა (ცარიელი აღწერა = წაიშლება)');
+  _tmAreaEditorOpen(
+    { kind: 'edit', ids: f.hits.map(function (h) { return h.id; }), lang: en ? 'en' : 'ka', ka: { label: first.ka, tip: first.tipKa } },
+    'არეალი: ' + first.ka + (en ? ' (EN)' : ''), name + (tip ? '\n' + tip : ''), lines);
+}
+
+// /არე ზომა სახელი [N] — re-pick the rectangle with two long-presses.
+function _tmAreaResize(argsArr) {
+  var f = _tmAreaTarget(argsArr); if (!f) return;
+  if (f.hits.length > 1) {
+    _tmL('ter', '✗ "' + f.name + '" ' + f.hits.length + ' მართკუთხედია — მიუთითე რომელი: /არე ზომა ' + f.name + ' N');
+    f.hits.forEach(function (h, i) { _tmL('tdm', '  ' + (i + 1) + ': ' + _tmAreaBox(h)); });
+    return;
+  }
+  var h = f.hits[0];
+  if (typeof window.areaPickStart !== 'function') { _tmL('ter', '✗ areaPickStart ვერ მოიძებნა (runtime.js?)'); return; }
+  _tmL('tsy', '─── ზომა: ' + h.ka + ' ' + _tmAreaBox(h) + ' ──────────────');
+  _tmL('tdm', 'კონსოლი დაიხურება — დიდხანს დააჭირე რუკაზე ორ მოპირდაპირე კუთხეს');
+  closeTerm();
+  window.areaPickStart(async function (r) {
+    _tmOpen_();
+    if (!navigator.onLine) { window.areaPickClear(); _tmL('ter', '✗ ოფლაინ — ცვლილებას ქსელი სჭირდება'); return; }
+    _tmL('tdm', '↑ ' + h.ka + ' ' + _tmAreaBox(r) + ' — ვინახავ...');
+    var res; try { res = await window.areaOverrideSaveMany([h.id], { x1: r.x1, y1: r.y1, x2: r.x2, y2: r.y2 }); }
+    catch (e) { res = { ok: false, status: 0, msg: e.message }; }
+    window.areaPickClear();
+    if (res === true) _tmL('tok', 'არეალი "' + h.ka + '" — ' + _tmAreaBox(r) + ' ✓ (ყველა viewer-ს ეჩვენება)');
+    else _tmL('ter', _tmAreaSaveErr(res) + ' — სცადე ისევ: /არე ზომა ' + h.ka);
+  }, function () { _tmOpen_(); _tmL('tdm', 'ზომის შეცვლა გაუქმდა'); });
+}
+
+// /არე წაშ სახელი [N] დიახ — soft delete (deleted=true). Without the final "დიახ" it only previews.
+function _tmAreaDelete(argsArr) {
+  var confirmed = argsArr.length > 1 && (argsArr[argsArr.length - 1] === 'დიახ' || argsArr[argsArr.length - 1] === 'yes');
+  var nameArgs = confirmed ? argsArr.slice(0, -1) : argsArr;
+  var f = _tmAreaTarget(nameArgs); if (!f) return;
+  var desc = '"' + f.name + '" — ' + f.hits.length + ' მართკუთხედი: ' + f.hits.map(_tmAreaBox).join(' ');
+  if (!confirmed) {
+    _tmL('ter', 'წაიშლება ' + desc);
+    _tmL('tdm', 'დასადასტურებლად: /არე წაშ ' + nameArgs.join(' ') + ' დიახ');
+    return;
+  }
+  if (!navigator.onLine) { _tmL('ter', '✗ ოფლაინ — წაშლას ქსელი სჭირდება'); return; }
+  _tmL('tdm', '↑ წაშლა: ' + desc + ' — ვინახავ...');
+  window.areaOverrideSaveMany(f.hits.map(function (h) { return h.id; }), { deleted: true }).then(function (res) {
+    if (res === true) _tmL('tok', 'არეალი "' + f.name + '" — წაშლილია ✓ (აღდგენა: deleted=false Supabase-ში)');
+    else _tmL('ter', _tmAreaSaveErr(res));
+  }, function (e) { _tmL('ter', _tmAreaSaveErr({ msg: e.message })); });
+}
+
+// Save from the editor (new or edit). Any failure keeps the editor and its text open, so the
+// same Ctrl+Enter can simply be retried; the session closes only on success.
 async function _tmSaveArea(text) {
-  var r = _tmAreaCtx;
-  if (!r) { _tmEditCancel(); return; }
+  var c = _tmAreaCtx;
+  if (!c) { _tmEditCancel(); return; }
   var lines = text.split('\n');
   var label = lines[0].trim();
   var tip = lines.slice(1).join('\n').trim();
-  if (!label) { _tmL('ter', '✗ სახელი ცარიელია — პირველ ხაზზე ჩაწერე არეალის სახელი'); return; }
-  if (typeof window.areaOverrideSave !== 'function') { _tmL('ter', '✗ areaOverrideSave ვერ მოიძებნა (runtime.js?)'); return; }
-  if (!navigator.onLine) { _tmL('ter', '✗ ოფლაინ — არეალის შექმნას ქსელი სჭირდება (ტექსტი რედაქტორშია)'); return; }
+  var ids, fields, dup = false;
 
-  var dup = !!document.querySelector('.hs-area[data-title="' + label.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]');
-  var fields = { x1: r.x1, y1: r.y1, x2: r.x2, y2: r.y2, label: label };
-  if (tip) fields.tooltip = tip;
-  _tmL('tdm', '↑ ' + label + ' — ვინახავ...');
+  if (c.kind === 'new') {
+    if (!label) { _tmL('ter', '✗ სახელი ცარიელია — პირველ ხაზზე ჩაწერე არეალის სახელი'); return; }
+    dup = _tmAreaRects().some(function (a) { return a.ka === label; });
+    ids = ['area_' + Date.now()];
+    fields = { x1: c.x1, y1: c.y1, x2: c.x2, y2: c.y2, label: label };
+    if (tip) fields.tooltip = tip;
+  } else if (c.lang === 'en') {
+    // Only what differs from the ka reference shown while editing counts as a translation —
+    // an untouched field must never be saved back as a false one (same rule as legend/dialogue).
+    ids = c.ids; fields = {};
+    if (label !== c.ka.label) fields.label_en = label;
+    if (tip !== c.ka.tip) fields.tooltip_en = tip;
+    if (!Object.keys(fields).length) {
+      _tmAreaSessionClose();
+      _tmL('tdm', 'ცვლილება არ არის — ტექსტი ქართულის იდენტურია, თარგმანად არ შეინახა');
+      return;
+    }
+  } else {
+    if (!label) { _tmL('ter', '✗ სახელი ცარიელია — პირველ ხაზზე ჩაწერე არეალის სახელი'); return; }
+    ids = c.ids; fields = { label: label, tooltip: tip };
+  }
+
+  if (typeof window.areaOverrideSaveMany !== 'function') { _tmL('ter', '✗ areaOverrideSaveMany ვერ მოიძებნა (runtime.js?)'); return; }
+  if (!navigator.onLine) { _tmL('ter', '✗ ოფლაინ — შენახვას ქსელი სჭირდება (ტექსტი რედაქტორშია)'); return; }
+  _tmL('tdm', '↑ ' + (label || c.ka.label) + ' — ვინახავ...');
   var res;
-  try { res = await window.areaOverrideSave('area_' + Date.now(), fields); }
+  try { res = await window.areaOverrideSaveMany(ids, fields); }
   catch (e) { res = { ok: false, status: 0, msg: e.message }; }
 
-  if (res !== true) {
-    _tmL('ter', '✗ ვერ შეინახა' + (res && res.status ? ' (' + res.status + ')' : '') + (res && res.msg ? ': ' + res.msg : '') + ' — ტექსტი რედაქტორშია, სცადე ისევ Ctrl+Enter');
-    return;
+  if (res !== true) { _tmL('ter', _tmAreaSaveErr(res) + ' — ტექსტი რედაქტორშია, სცადე ისევ Ctrl+Enter'); return; }
+  _tmAreaSessionClose();
+  if (c.kind === 'new') {
+    _tmL('tok', 'არეალი "' + label + '" — შენახულია ✓ (ყველა viewer-ს ეჩვენება)');
+    if (dup) _tmL('tdm', 'ℹ ამ სახელით არეალი უკვე არსებობდა — ისინი ერთ ჯგუფად ჩაითვლება (ერთად ინათებს, /წასვლა ორივეს პოულობს)');
+  } else {
+    _tmL('tok', 'არეალი "' + c.ka.label + '" — განახლდა ✓' + (ids.length > 1 ? ' (' + ids.length + ' მართკუთხედი)' : '') + ' (ყველა viewer-ს ეჩვენება)');
+    if (c.lang === 'ka' && label !== c.ka.label) _tmL('tdm', 'ℹ ახალი სახელი: "' + label + '" — /წასვლა და #area= ბმულები ახლა ამ სახელით მუშაობს');
   }
+}
+function _tmAreaSessionClose() {
   _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; _tmEditMediaBuf = [];
   _tmAreaCtx = null;
   document.getElementById('tmTa').value = '';
   if (_tmMulti) tmToggleMulti();
   if (typeof window.areaPickClear === 'function') window.areaPickClear();
-  _tmL('tok', 'არეალი "' + label + '" — შენახულია ✓ (ყველა viewer-ს ეჩვენება)');
-  if (dup) _tmL('tdm', 'ℹ ამ სახელით არეალი უკვე არსებობდა — ისინი ერთ ჯგუფად ჩაითვლება (ერთად ინათებს, /წასვლა ორივეს პოულობს)');
 }
 
 // ── /შეყვანა — Enter/Send equivalent for macro chains ──

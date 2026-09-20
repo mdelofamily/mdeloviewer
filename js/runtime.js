@@ -2776,23 +2776,30 @@ window.loadAreaOverrides = loadAreaOverrides;
 
 // Partial upsert — called from terminal.js (/არე). `fields` may include any of:
 // x1, y1, x2, y2, label, label_en, tooltip, tooltip_en, deleted. Only the given keys are
-// written (merge-duplicates leaves every other column alone). On success the local rows,
-// the offline snapshot and the DOM are updated at once — no reload needed.
-window.areaOverrideSave = async function (areaId, fields) {
+// written (merge-duplicates leaves every other column alone). One request covers all the
+// ids (a single bulk upsert = all-or-nothing), which is how a same-named group of
+// rectangles is edited or deleted together. On success the local rows, the offline
+// snapshot and the DOM are updated at once — no reload needed.
+window.areaOverrideSaveMany = async function (areaIds, fields) {
   try {
-    var body = Object.assign({ map_id: _MAP_ID, area_id: areaId, updated_at: new Date().toISOString() }, fields);
+    var now = new Date().toISOString();
+    var rows = areaIds.map(function (id) {
+      return Object.assign({ map_id: _MAP_ID, area_id: id, updated_at: now }, fields);
+    });
     var r = await fetch(SUPA_URL + '/rest/v1/area_overrides', {
       method: 'POST',
       headers: Object.assign({
         'Content-Type': 'application/json',
         'Prefer': 'resolution=merge-duplicates,return=minimal'
       }, _authHeaders()),
-      body: JSON.stringify(body)
+      body: JSON.stringify(rows)
     });
     if (r.ok) {
-      var row = _areaOvRows.find(function (x) { return x.area_id === areaId; });
-      if (!row) { row = { map_id: _MAP_ID, area_id: areaId }; _areaOvRows.push(row); }
-      Object.assign(row, fields);
+      areaIds.forEach(function (id) {
+        var row = _areaOvRows.find(function (x) { return x.area_id === id; });
+        if (!row) { row = { map_id: _MAP_ID, area_id: id }; _areaOvRows.push(row); }
+        Object.assign(row, fields);
+      });
       _syncSnapSave('areas', _areaOvRows);
       _applyAreaOverrides(_areaOvRows);
       return true;
@@ -2801,6 +2808,7 @@ window.areaOverrideSave = async function (areaId, fields) {
     return { ok: false, status: r.status, msg: errBody.slice(0, 150) };
   } catch (e) { return { ok: false, status: 0, msg: e.message }; }
 };
+window.areaOverrideSave = function (areaId, fields) { return window.areaOverrideSaveMany([areaId], fields); };
 
 // Partial upsert — called from terminal.js. `fields` may include any of:
 // parent_id, icon, title, items_json, deleted. Only the given keys are written;
