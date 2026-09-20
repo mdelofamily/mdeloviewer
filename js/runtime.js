@@ -2846,6 +2846,33 @@ window.areaOverrideSaveMany = async function (areaIds, fields) {
 };
 window.areaOverrideSave = function (areaId, fields) { return window.areaOverrideSaveMany([areaId], fields); };
 
+// Soft-deleted areas, for /არე აღდგენა: [{ id, label, en, x1, y1, x2, y2, baked }] ordered by id.
+// A deleted baked area keeps its baked values plus any text/geometry overrides made before the
+// delete; an unnamed grouped member borrows its group master's name (as the DOM does).
+window.areaDeletedList = function () {
+  var bakedList = _CFG.hotAreas || [], baked = {};
+  bakedList.forEach(function (a) { if (a.id) baked[a.id] = a; });
+  var out = [];
+  _areaOvRows.forEach(function (r) {
+    if (!r.deleted) return;
+    var b = baked[r.area_id], a;
+    if (b) {
+      a = Object.assign({}, b);
+      ['x1', 'y1', 'x2', 'y2', 'label', 'label_en'].forEach(function (k) { if (r[k] != null) a[k] = r[k]; });
+    } else if (r.x1 != null && r.y1 != null && r.x2 != null && r.y2 != null) {
+      a = { id: r.area_id, x1: r.x1, y1: r.y1, x2: r.x2, y2: r.y2, label: r.label, label_en: r.label_en };
+    } else return;
+    var label = _mdeloTxt(a.label);
+    if (!label && a.groupId) {
+      var m = bakedList.find(function (x) { return x.groupId === a.groupId && x.label; });
+      if (m) label = _mdeloTxt(m.label);
+    }
+    out.push({ id: a.id, label: label, en: _mdeloTxt(a.label_en), x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, baked: !!b });
+  });
+  out.sort(function (x, y) { return x.id < y.id ? -1 : x.id > y.id ? 1 : 0; });
+  return out;
+};
+
 // Partial upsert — called from terminal.js. `fields` may include any of:
 // parent_id, icon, title, items_json, deleted. Only the given keys are written;
 // PostgREST's merge-duplicates upsert leaves every other column untouched.
