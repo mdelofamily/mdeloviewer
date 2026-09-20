@@ -74,24 +74,59 @@ function _lbMatches(field, str) {
 //   #questBtn + #questPopup (default legend block) · .info line
 // The resulting DOM is identical to what the old export baked. Must run before
 // anything reads these elements (zoom/pan block below, canvas-renderer.js).
+// plain string from a legacy string or a { ka, en } field
+function _mdeloTxt(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  return v.ka || v.en || '';
+}
+function _mdeloPlace(el, ox, oy, ow, oh) {
+  el.setAttribute('data-ox', ox); el.setAttribute('data-oy', oy);
+  el.setAttribute('data-ow', ow); el.setAttribute('data-oh', oh);
+  el.setAttribute('style', 'left:' + ox + 'px;top:' + oy + 'px;width:' + ow + 'px;height:' + oh + 'px;');
+}
+
+// One .hs-area div from an area { id, x1, y1, x2, y2, label, tooltip, label_en, tooltip_en, groupId }.
+// Grouped areas share the group master's label/tooltip. data-title stays the ka label
+// (identity / lookup key everywhere); the *-en attributes only change popup display text.
+function _mdeloMakeAreaEl(a, all) {
+  var TS = _TS, label = a.label, tooltip = a.tooltip, labelEn = a.label_en, tooltipEn = a.tooltip_en;
+  if (a.groupId) {
+    var master = all.find(function (x) { return x.groupId === a.groupId && x.label; }) || a;
+    label = master.label; tooltip = master.tooltip; labelEn = master.label_en; tooltipEn = master.tooltip_en;
+  }
+  var el = document.createElement('div');
+  el.className = 'hotspot hs-area';
+  if (a.groupId) el.setAttribute('data-group', a.groupId);
+  if (a.id) el.setAttribute('data-aid', a.id);   // NOT data-area-id — unlock.js owns that attribute
+  _mdeloPlace(el, a.x1 * TS, a.y1 * TS, (a.x2 - a.x1) * TS, (a.y2 - a.y1) * TS);
+  el.setAttribute('data-title', _mdeloTxt(label));
+  el.setAttribute('data-tooltip', _mdeloTxt(tooltip));
+  if (labelEn) el.setAttribute('data-title-en', _mdeloTxt(labelEn));
+  if (tooltipEn) el.setAttribute('data-tooltip-en', _mdeloTxt(tooltipEn));
+  return el;
+}
+
+// (Re)build every .hs-area div from a list of areas. Areas are plain DOM overlays
+// (never painted on the canvas), and every consumer queries them at call time,
+// so a full rebuild is safe and cheap. List order = DOM order = stacking order.
+function _mdeloRenderAreas(list) {
+  var inner = document.getElementById('mapInner');
+  if (!inner) return;
+  inner.querySelectorAll('.hs-area').forEach(function (e) { e.remove(); });
+  var frag = document.createDocumentFragment();
+  list.forEach(function (a) { frag.appendChild(_mdeloMakeAreaEl(a, list)); });
+  inner.appendChild(frag);
+}
+window._mdeloMakeAreaEl = _mdeloMakeAreaEl;
+window._mdeloRenderAreas = _mdeloRenderAreas;
+
 function _mdeloBuildMapDom() {
   var TS = _TS, cfg = _CFG;
   var inner = document.getElementById('mapInner');
   var sizerEl = document.getElementById('sizer');
   var wrapEl = document.getElementById('mapWrap');
   if (!inner) return;
-
-  // plain string from a legacy string or a { ka, en } field
-  function txt(v) {
-    if (v == null) return '';
-    if (typeof v === 'string') return v;
-    return v.ka || v.en || '';
-  }
-  function place(el, ox, oy, ow, oh) {
-    el.setAttribute('data-ox', ox); el.setAttribute('data-oy', oy);
-    el.setAttribute('data-ow', ow); el.setAttribute('data-oh', oh);
-    el.setAttribute('style', 'left:' + ox + 'px;top:' + oy + 'px;width:' + ow + 'px;height:' + oh + 'px;');
-  }
 
   if (sizerEl) { sizerEl.style.width = _W + 'px'; sizerEl.style.height = _H + 'px'; }
 
@@ -108,9 +143,9 @@ function _mdeloBuildMapDom() {
     var hasInteraction = !!(o.title || o.marker || (hasDlg && o.dialogue[0].text));
     var el = document.createElement('div');
     el.className = 'hotspot' + (hasInteraction ? '' : ' no-interact');
-    place(el, o.x * TS, o.y * TS, o.cols * TS, o.rows * TS);
-    el.setAttribute('data-title', txt(o.title || o.lb));
-    el.setAttribute('data-tooltip', txt(o.tooltip));
+    _mdeloPlace(el, o.x * TS, o.y * TS, o.cols * TS, o.rows * TS);
+    el.setAttribute('data-title', _mdeloTxt(o.title || o.lb));
+    el.setAttribute('data-tooltip', _mdeloTxt(o.tooltip));
     el.setAttribute('data-oi', oi);
     if (hasDlg) el.setAttribute('data-dialog-id', 'dlg_' + oi);
     if (hasInteraction) {
@@ -123,28 +158,14 @@ function _mdeloBuildMapDom() {
     frag.appendChild(el);
   });
 
-  // area hotspots (grouped areas share the master's label/tooltip)
-  var areas = cfg.hotAreas || [];
-  areas.forEach(function (a) {
-    var label = a.label, tooltip = a.tooltip;
-    if (a.groupId) {
-      var master = areas.find(function (x) { return x.groupId === a.groupId && x.label; }) || a;
-      label = master.label; tooltip = master.tooltip;
-    }
-    var el = document.createElement('div');
-    el.className = 'hotspot hs-area';
-    if (a.groupId) el.setAttribute('data-group', a.groupId);
-    place(el, a.x1 * TS, a.y1 * TS, (a.x2 - a.x1) * TS, (a.y2 - a.y1) * TS);
-    el.setAttribute('data-title', txt(label));
-    el.setAttribute('data-tooltip', txt(tooltip));
-    frag.appendChild(el);
-  });
   inner.appendChild(frag);
+  // area hotspots — baked ones here; console overrides are merged in later by loadAreaOverrides()
+  _mdeloRenderAreas(cfg.hotAreas || []);
 
   // legend button + popup — only the default block (before the first ">>flag"
   // line) is baked into the DOM; flag blocks resolve later from legend_overrides.
   // #questPopup must always exist so /ლეგენდა რედაქტირება has a target.
-  var raw = String(txt(cfg.description));
+  var raw = String(_mdeloTxt(cfg.description));
   var fm = raw.match(/^\s*>>\s*\S+\s*$/m);
   var def = (fm ? raw.slice(0, fm.index) : raw).trim();
   var questHtml = def
@@ -822,7 +843,7 @@ wrap.addEventListener('click', e => {
     if (hs.classList.contains('hs-area')) {
       const t = hs.dataset.title || '', grp = hs.dataset.group || '';
       blinkAreasByGroupOrTitle(grp, t);
-      if (t) openAreaPopup(t, hs.dataset.tooltip || '');
+      if (t) openAreaPopup(_areaDisp(hs, 'title') || t, _areaDisp(hs, 'tooltip'));
     } else {
       const oi = hs.dataset.oi;
       const objData = (oi != null && _OBJS[+oi]) ? _OBJS[+oi] : null;
@@ -874,6 +895,12 @@ function closeHsPopup() {
   p.classList.remove('show'); p.style.display = 'none';
   wrap.style.overflow = 'auto'; _stopObjBlink();
   _dlgNodes = {}; _dlgObj = null;
+}
+// Popup text for an area: en override when the visitor language is en and one exists,
+// otherwise the ka text. (data-title itself stays ka — it is the lookup key.)
+function _areaDisp(el, key) {
+  var en = (typeof _mdeloLang !== 'undefined' && _mdeloLang === 'en') ? (el.getAttribute('data-' + key + '-en') || '') : '';
+  return en || el.getAttribute('data-' + key) || '';
 }
 function openAreaPopup(title, tip) {
   closeHsPopup();
@@ -2639,6 +2666,56 @@ async function loadMenuOverrides() {
   }
 }
 
+// ── area overrides (Supabase area_overrides) ──
+// Row: { map_id, area_id, x1, y1, x2, y2, label, label_en, tooltip, tooltip_en, deleted }.
+// area_id equal to a baked (editor) area's id  -> non-null columns REPLACE that area's values,
+//                                                deleted=true hides it;
+// any other area_id                            -> a console-created area (needs full geometry).
+// NULL columns inherit. Soft delete only (no DELETE policy, same as menu_overrides).
+var _areaOvRows = [];
+function _mergedAreas(rows) {
+  var baked = (_CFG.hotAreas || []).map(function (a) { return Object.assign({}, a); });
+  var byId = {};
+  baked.forEach(function (a) { if (a.id) byId[a.id] = a; });
+  var added = [];
+  (rows || []).forEach(function (r) {
+    var b = byId[r.area_id];
+    if (b) {
+      if (r.deleted) { b._deleted = true; return; }
+      ['x1', 'y1', 'x2', 'y2', 'label', 'tooltip', 'label_en', 'tooltip_en'].forEach(function (k) {
+        if (r[k] != null) b[k] = r[k];
+      });
+    } else if (!r.deleted && r.x1 != null && r.y1 != null && r.x2 != null && r.y2 != null) {
+      added.push({ id: r.area_id, x1: r.x1, y1: r.y1, x2: r.x2, y2: r.y2,
+        label: r.label || '', tooltip: r.tooltip || '', label_en: r.label_en || '', tooltip_en: r.tooltip_en || '' });
+    }
+  });
+  // console-created areas go after the baked ones (=> on top), oldest first (area_<timestamp> ids sort by time)
+  added.sort(function (x, y) { return x.id < y.id ? -1 : x.id > y.id ? 1 : 0; });
+  return baked.filter(function (a) { return !a._deleted; }).concat(added);
+}
+function _applyAreaOverrides(rows) {
+  _areaOvRows = rows || [];
+  _mdeloRenderAreas(_mergedAreas(_areaOvRows));
+}
+async function loadAreaOverrides() {
+  try {
+    var r = await fetch(
+      SUPA_URL + '/rest/v1/area_overrides?map_id=eq.' + encodeURIComponent(_MAP_ID),
+      { headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY } }
+    );
+    if (!r.ok) { _syncSnapRestore('areas', _applyAreaOverrides); return; }
+    var rows = await r.json();
+    _applyAreaOverrides(rows);
+    _syncSnapSave('areas', rows);
+  } catch (e) {
+    _syncSnapRestore('areas', _applyAreaOverrides);
+  }
+}
+window._mergedAreas = _mergedAreas;
+window._applyAreaOverrides = _applyAreaOverrides;
+window.loadAreaOverrides = loadAreaOverrides;
+
 // Partial upsert — called from terminal.js. `fields` may include any of:
 // parent_id, icon, title, items_json, deleted. Only the given keys are written;
 // PostgREST's merge-duplicates upsert leaves every other column untouched.
@@ -2954,6 +3031,7 @@ window.addEventListener('load', async () => {
   loadMenuOverrides();
   loadMacroOverrides();
   loadLegendOverride();
+  loadAreaOverrides();
   _startRealtime();
   applySpotHash();
   applyAreaHash();
