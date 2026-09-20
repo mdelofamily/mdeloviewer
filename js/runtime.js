@@ -1710,6 +1710,62 @@ function copySlLink() {
 }
 function _slFb(text) { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;'; document.body.appendChild(ta); ta.focus(); ta.select(); try { document.execCommand('copy'); } catch (e) {} document.body.removeChild(ta); }
 
+// ── area pick mode ──
+// /არე (terminal.js) starts it: two long-presses (the same 600ms gesture as the
+// spot link) mark opposite corners of a rectangle. Coordinates follow the hotAreas
+// convention — x2/y2 exclusive — so the far corner's cell is included.
+var _areaPickHandler = null, _areaPickPrev = null, _areaPickBar = null;
+function areaPickClear() {
+  _areaPickHandler = null;
+  if (_areaPickPrev) { _areaPickPrev.remove(); _areaPickPrev = null; }
+  if (_areaPickBar) { _areaPickBar.remove(); _areaPickBar = null; }
+}
+function _areaPickBox(x1, y1, x2, y2) {
+  if (!_areaPickPrev) {
+    _areaPickPrev = document.createElement('div');
+    _areaPickPrev.style.cssText = 'position:absolute;z-index:6;pointer-events:none;box-sizing:border-box;' +
+      'border:2px dashed #ffd23f;background:rgba(255,210,63,.18);border-radius:4px;';
+    inner.appendChild(_areaPickPrev);
+  }
+  var T = _TS;
+  _areaPickPrev.style.left = (x1 * T) + 'px'; _areaPickPrev.style.top = (y1 * T) + 'px';
+  _areaPickPrev.style.width = ((x2 - x1) * T) + 'px'; _areaPickPrev.style.height = ((y2 - y1) * T) + 'px';
+}
+// onDone({x1,y1,x2,y2}) after the 2nd press; onCancel() if the banner's ✕ is tapped.
+// The preview rectangle stays on the map until areaPickClear() (save / cancel).
+function areaPickStart(onDone, onCancel) {
+  areaPickClear();
+  var c1 = null, cols = (_CFG && _CFG.cols) || 9999, rows = (_CFG && _CFG.rows) || 9999;
+  _areaPickBar = document.createElement('div');
+  _areaPickBar.style.cssText = 'position:fixed;top:56px;left:50%;transform:translateX(-50%);z-index:35;display:flex;' +
+    'align-items:center;gap:10px;max-width:92vw;padding:8px 12px;border-radius:10px;background:rgba(13,17,23,.92);' +
+    'border:1px solid rgba(255,210,63,.55);color:#ffd23f;font:13px sans-serif;';
+  var msg = document.createElement('span'), x = document.createElement('button');
+  msg.textContent = '📍 არეალი 1/2 — დიდხანს დააჭირე პირველ უჯრას';
+  x.textContent = '✕';
+  x.style.cssText = 'background:none;border:none;color:#ffd23f;font-size:16px;cursor:pointer;padding:0 2px;';
+  x.onclick = function () { areaPickClear(); if (onCancel) onCancel(); };
+  _areaPickBar.appendChild(msg); _areaPickBar.appendChild(x);
+  document.body.appendChild(_areaPickBar);
+  _areaPickHandler = function (col, row) {
+    col = Math.min(col, cols - 1); row = Math.min(row, rows - 1);
+    if (navigator.vibrate) { try { navigator.vibrate(30); } catch (e) {} }
+    if (!c1) {
+      c1 = { col: col, row: row };
+      _areaPickBox(col, row, col + 1, row + 1);
+      msg.textContent = '📍 არეალი 2/2 — დიდხანს დააჭირე მოპირდაპირე კუთხეს';
+      return;
+    }
+    var r = { x1: Math.min(c1.col, col), y1: Math.min(c1.row, row), x2: Math.max(c1.col, col) + 1, y2: Math.max(c1.row, row) + 1 };
+    _areaPickBox(r.x1, r.y1, r.x2, r.y2);
+    _areaPickHandler = null;
+    if (_areaPickBar) { _areaPickBar.remove(); _areaPickBar = null; }
+    if (onDone) onDone(r);
+  };
+}
+window.areaPickStart = areaPickStart;
+window.areaPickClear = areaPickClear;
+
 // ── long-press for spot link ──
 (function () {
   const TS2 = _TS;
@@ -1721,7 +1777,9 @@ function _slFb(text) { const ta = document.createElement('textarea'); ta.value =
       _ltTimer = null; _ltSuppress = true;
       const rect = wrap.getBoundingClientRect();
       const mx = sx - rect.left + wrap.scrollLeft, my = sy - rect.top + wrap.scrollTop;
-      openSlPopup(Math.max(0, Math.floor(mx / (TS2 * scale))), Math.max(0, Math.floor(my / (TS2 * scale))), sx, sy);
+      const pc = Math.max(0, Math.floor(mx / (TS2 * scale))), pr = Math.max(0, Math.floor(my / (TS2 * scale)));
+      if (_areaPickHandler) { _areaPickHandler(pc, pr); return; }   // /არე is waiting for a corner
+      openSlPopup(pc, pr, sx, sy);
     }, 600);
   }, { passive: true });
   wrap.addEventListener('touchmove', e => { if (_ltTimer) { clearTimeout(_ltTimer); _ltTimer = null; } }, { passive: true });
@@ -2715,6 +2773,34 @@ async function loadAreaOverrides() {
 window._mergedAreas = _mergedAreas;
 window._applyAreaOverrides = _applyAreaOverrides;
 window.loadAreaOverrides = loadAreaOverrides;
+
+// Partial upsert — called from terminal.js (/არე). `fields` may include any of:
+// x1, y1, x2, y2, label, label_en, tooltip, tooltip_en, deleted. Only the given keys are
+// written (merge-duplicates leaves every other column alone). On success the local rows,
+// the offline snapshot and the DOM are updated at once — no reload needed.
+window.areaOverrideSave = async function (areaId, fields) {
+  try {
+    var body = Object.assign({ map_id: _MAP_ID, area_id: areaId, updated_at: new Date().toISOString() }, fields);
+    var r = await fetch(SUPA_URL + '/rest/v1/area_overrides', {
+      method: 'POST',
+      headers: Object.assign({
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      }, _authHeaders()),
+      body: JSON.stringify(body)
+    });
+    if (r.ok) {
+      var row = _areaOvRows.find(function (x) { return x.area_id === areaId; });
+      if (!row) { row = { map_id: _MAP_ID, area_id: areaId }; _areaOvRows.push(row); }
+      Object.assign(row, fields);
+      _syncSnapSave('areas', _areaOvRows);
+      _applyAreaOverrides(_areaOvRows);
+      return true;
+    }
+    var errBody = r.text ? await r.text().catch(function () { return ''; }) : '';
+    return { ok: false, status: r.status, msg: errBody.slice(0, 150) };
+  } catch (e) { return { ok: false, status: 0, msg: e.message }; }
+};
 
 // Partial upsert — called from terminal.js. `fields` may include any of:
 // parent_id, icon, title, items_json, deleted. Only the given keys are written;
