@@ -1994,6 +1994,14 @@ function _startRealtime() {
         if (payload.new && payload.new.map_id === _MAP_ID) _applyDlgOverride(payload.new);
       })
       .subscribe();
+    // area overrides channel — every viewer sees /არე changes live. Events that happened while
+    // the socket was down are lost, so every RE-subscribe (not the first) refetches the table.
+    var _areaRtSeen = false;
+    client.channel('area-overrides')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'area_overrides' }, _areaRtEvent)
+      .subscribe(function (status) {
+        if (status === 'SUBSCRIBED') { if (_areaRtSeen) loadAreaOverrides(); _areaRtSeen = true; }
+      });
   } catch (e) {}
 }
 
@@ -2757,6 +2765,7 @@ function _applyAreaOverrides(rows) {
   _mdeloRenderAreas(_mergedAreas(_areaOvRows));
 }
 async function loadAreaOverrides() {
+  _areaOvReady = false;   // realtime events that arrive mid-fetch wait, so an older fetch can't overwrite them
   try {
     var r = await fetch(
       SUPA_URL + '/rest/v1/area_overrides?map_id=eq.' + encodeURIComponent(_MAP_ID),
@@ -2768,8 +2777,35 @@ async function loadAreaOverrides() {
     _syncSnapSave('areas', rows);
   } catch (e) {
     _syncSnapRestore('areas', _applyAreaOverrides);
+  } finally {
+    _areaOvReady = true;
+    var q = _areaOvQueue; _areaOvQueue = [];
+    q.forEach(_areaRtApply);
   }
 }
+
+// ── area_overrides realtime (channel is set up in _startRealtime) ──
+// Every change made by anyone (console /არე, SQL) reaches every open viewer live. Rows are
+// replaced whole (the payload carries all columns; NULL = inherit the baked value). A
+// DELETE event (manual SQL cleanup) carries only the primary key — enough to drop the row,
+// which un-hides a baked area that a deleted=true row was covering.
+var _areaOvReady = false, _areaOvQueue = [];
+function _areaRtApply(payload) {
+  var isDel = payload.eventType === 'DELETE';
+  var row = isDel ? payload.old : payload.new;
+  if (!row || row.map_id !== _MAP_ID || !row.area_id) return;
+  var i = _areaOvRows.findIndex(function (x) { return x.area_id === row.area_id; });
+  if (isDel) { if (i >= 0) _areaOvRows.splice(i, 1); else return; }
+  else if (i >= 0) _areaOvRows[i] = row;
+  else _areaOvRows.push(row);
+  _syncSnapSave('areas', _areaOvRows);
+  _applyAreaOverrides(_areaOvRows);
+}
+function _areaRtEvent(payload) {
+  if (!_areaOvReady) { _areaOvQueue.push(payload); return; }
+  _areaRtApply(payload);
+}
+window._areaRtEvent = _areaRtEvent;
 window._mergedAreas = _mergedAreas;
 window._applyAreaOverrides = _applyAreaOverrides;
 window.loadAreaOverrides = loadAreaOverrides;

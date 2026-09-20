@@ -364,7 +364,7 @@ var _TM_MIN_TIER = {
   'შესრულება':   'caretaker', // = todo, new name
   'ფოთოლი':      'caretaker', // leaf-level item add (text/indicator/todo) — caretaker's direct write scope
   'დიალოგი':     'resident',  // dialogue DSL authoring
-  'არე':         'resident',  // create/edit/delete map areas (area_overrides) — structural, same tier as menu/dialogue authoring
+  'არე':         'caretaker', // create/edit/delete map areas (area_overrides) — caretaker and above
   'md':          'resident',  // create menu branch — structural, not leaf
   'rm':          'resident',  // remove menu node — structural
   'წაშ':         'resident',  // = rm, new name
