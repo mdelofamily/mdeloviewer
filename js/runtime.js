@@ -2282,6 +2282,11 @@ async function castConsensusVote(vote) {
   const uid = window.myUserId();
   const name = window.myDisplayName();
 
+  // Mark the write as pending BEFORE the optimistic evaluate below: _evaluateConsensusState
+  // must not fire terminal_cmd (e.g. /სტატუსი → resolve_tier_change) until this vote is
+  // actually in the DB, otherwise the server counts one vote fewer and refuses.
+  _voteWritePending = true;
+
   // optimistic: update local array immediately, no flicker
   const existing = _consensusVotes.findIndex(v => v.user_id === uid);
   if (existing >= 0) {
@@ -2292,8 +2297,7 @@ async function castConsensusVote(vote) {
   _renderConsensusFeed();
   _evaluateConsensusState();
 
-  // persist to Supabase in background
-  _voteWritePending = true;
+  // persist to Supabase in background (_voteWritePending is already set above)
   try {
     await fetch(SUPA_URL + '/rest/v1/consensus_votes?on_conflict=notification_id,user_id', {
       method: 'POST',
@@ -2347,7 +2351,8 @@ function _evaluateConsensusState() {
     label = _i18n(allAgree ? pair[0] : pair[1]);
     color = allAgree ? '#4ade80' : '#f85149';
     // fire terminal_cmd once on positive outcome
-    if (allAgree && n.terminal_cmd && !_executedTerminalCmds.has(n.id)) {
+    // (skipped while our own vote is still being written; loadConsensusVotes re-evaluates afterwards)
+    if (allAgree && n.terminal_cmd && !_executedTerminalCmds.has(n.id) && !_voteWritePending) {
       _executedTerminalCmds.add(n.id);
       if (typeof window.tmRun === 'function') window.tmRun(n.terminal_cmd);
       else if (typeof window.runMacro === 'function') window.runMacro(n.terminal_cmd);
