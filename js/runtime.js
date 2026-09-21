@@ -650,6 +650,28 @@ window.listUsers = async function () {
   } catch (e) { return { ok: false, status: 0, msg: e.message }; }
 };
 
+// shadow_admin only — hard-deletes a logged-in user via the `delete_user` SQL
+// RPC (SECURITY DEFINER, re-validates the caller server-side; the client-side
+// tier gate in terminal.js is just fail-fast). confirm=false → preview only,
+// nothing is deleted. Returns the RPC's jsonb ({ ok, mode, reason?, target,
+// blocking_votes, will_delete, quorum }) — business refusals come back with
+// ok:false AND a .reason; transport/HTTP errors come back as
+// { ok:false, status, msg } with no .reason.
+window.deleteUser = async function (email, confirm) {
+  try {
+    const r = await fetch(SUPA_URL + '/rest/v1/rpc/delete_user', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, _authHeaders()),
+      body: JSON.stringify({ p_email: String(email || ''), p_confirm: !!confirm })
+    });
+    if (!r.ok) {
+      const errBody = await r.text().catch(() => '');
+      return { ok: false, status: r.status, msg: errBody.slice(0, 150) };
+    }
+    return await r.json();
+  } catch (e) { return { ok: false, status: 0, msg: e.message }; }
+};
+
 // Refreshes the session if it's expired or about to be (within 60s). A
 // tab left open longer than the access-token lifetime (~1h by default)
 // would otherwise sit past expires_at with nothing re-checking it until

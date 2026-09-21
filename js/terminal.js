@@ -22,7 +22,7 @@ var _tmFilesCache = [];    // last /ფაილები result — lets /play 
 var _tmEditMediaBuf = [];  // [{items:[{type,url,name}...]}...] — files-segments captured via /მედია
                             // during the current 'text' menuItem session; [[მედია:N]] tokens in tmTa
                             // point into this by index. Cleared on every session open/close/save/cancel.
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/არე','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/მარკერი','/დახურვა','/დროშა','/მეტსახელი','/მე','/ვინ','/ფერი','/help','/გზა','/ჩვ','/გად','/md','/წაშ','/რედ','/ფოთოლი','/მაკრო','/ლოგინი','/ლოგაუთი','/სახელი','/სესია','/სია','/სურვილი','/შენახვა','/ჩატვირთვა','/სინქრონიზაცია','/შესრულება','/play','/მუსიკა','/ფაილები','/ფაილი','/ენა','/სექცია'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/არე','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/მარკერი','/დახურვა','/დროშა','/მეტსახელი','/მე','/ვინ','/ფერი','/help','/გზა','/ჩვ','/გად','/md','/წაშ','/რედ','/ფოთოლი','/მაკრო','/ლოგინი','/ლოგაუთი','/სახელი','/სესია','/სია','/იუზერი','/სურვილი','/შენახვა','/ჩატვირთვა','/სინქრონიზაცია','/შესრულება','/play','/მუსიკა','/ფაილები','/ფაილი','/ენა','/სექცია'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -378,7 +378,8 @@ var _TM_MIN_TIER = {
   'ფაილები':     'caretaker', // list uploaded bucket files
   'files':       'caretaker', // = ფაილები, new name
   'ფაილი':       'resident',  // delete an arbitrary bucket file by index/name (same severity as /rm)
-  'სია':         'shadow_admin' // list logged-in users (nickname/name/email/tier)
+  'სია':         'shadow_admin', // list logged-in users (nickname/name/email/tier)
+  'იუზერი':      'shadow_admin' // hard-delete a logged-in user (server re-checks in delete_user RPC)
 };
 
 // Scoped elevation flag — true only while executing the commands *inside* a
@@ -531,6 +532,7 @@ async function _tmRun(raw) {
     'სტატუსი':     _tmResolveStatus,
     'სესია':       _tmDebug,
     'სია':         _tmUserList,
+    'იუზერი':      _tmUserDelete,
     'დაწინაურება': _tmRequestTierUp,
     'სურვილი':     _tmRequestTierUp,
     'შენახვა':     _tmSavePending,
@@ -598,6 +600,7 @@ function _tmHelp() {
     ['/ფაილები [N]', 'bucket-ში ბოლო N ატვირთული ფაილის URL (default 20)'],
     ['/ფაილი წაშ <N|სახელი>', 'ცალკე bucket-ფაილის წაშლა — item-ზე მიბმულობის მიუხედავად'],
     ['/სია', 'დალოგინებული იუზერების სია (მხოლოდ shadow_admin)'],
+    ['/იუზერი წაშ <email> [დიახ]', 'იუზერის სრული წაშლა — დიახ-ის გარეშე preview (მხოლოდ shadow_admin)'],
     ['/სურვილი', 'შემდეგი ტიერის თხოვნა კონსენსუსით (სტუმარი→მეურვე, მეურვე→მაცხოვრებელი)'],
     ['/შენახვა [ფაილის სახელი]', 'offline queue-ს გადმოწერა JSON ფაილად (მხოლოდ დაუსინქრონებელი ცვლილებები)'],
     ['/ჩატვირთვა', 'JSON ფაილიდან queue-ს ატვირთვა — ერთვის მიმდინარე queue-ს, ერთი და იმავე target-ის ჩანაწერი გადაიწერება'],
@@ -830,6 +833,79 @@ async function _tmUserList() {
     var tier = u.tier || 'visitor';
     _tmL('tnf', '  ' + name + '  ·  ' + email + '  ·  ' + tier);
   });
+}
+
+// ── /იუზერი — shadow_admin only ──
+//   /იუზერი წაშ <email>        → preview (nothing is deleted)
+//   /იუზერი წაშ <email> დიახ   → hard delete
+// All logic (permissions, open-vote block, quorum numbers, the delete itself)
+// lives in the `delete_user` SQL RPC (scope-user-removal.md); this only prints.
+function _tmUserDeleteUsage() {
+  _tmL('tdm', '  /იუზერი წაშ <email>          —  preview (არაფერი იშლება)');
+  _tmL('tdm', '  /იუზერი წაშ <email> დიახ     —  სრული წაშლა (შეუქცევადია)');
+}
+
+// Prints refusals / errors. Returns true only when the RPC answered ok:true.
+function _tmUserDeleteReport(res, email) {
+  if (!res) { _tmL('ter', '✗ პასუხი ცარიელია'); return false; }
+  // transport / HTTP error: { ok:false, status, msg } — has no .reason
+  if (res.ok === false && res.reason === undefined) {
+    _tmL('ter', '✗ Supabase: ' + (res.msg || ('status ' + res.status)));
+    if (res.status === 404) _tmL('tdm', '(სავარაუდოდ `delete_user` RPC ჯერ არ არსებობს Supabase-ში)');
+    return false;
+  }
+  if (res.ok === false) {
+    if (res.reason === 'not_found') {
+      _tmL('ter', '✗ იუზერი ვერ მოიძებნა: ' + email);
+    } else if (res.reason === 'self') {
+      _tmL('ter', '✗ საკუთარი თავის წაშლა აკრძალულია');
+    } else if (res.reason === 'target_shadow_admin') {
+      _tmL('ter', '✗ shadow_admin-ის წაშლა ამ ბრძანებით აკრძალულია (მხოლოდ ხელით Supabase-ში)');
+    } else if (res.reason === 'open_votes') {
+      (res.blocking_votes || []).forEach(function (b) {
+        var txt = b.text ? '„' + b.text + '"' : '(უტექსტო)';
+        if (b.kind === 'approved_pending') {
+          _tmL('ter', '✗ დამტკიცებულია, მაგრამ ჯერ არ შესრულებულა: ' + txt + ' (id ' + b.id + ') — გახსენი ეს შეტყობინება და სცადე თავიდან');
+        } else {
+          _tmL('ter', '✗ ღია კენჭისყრაა: ' + txt + ' (' + b.votes + '/' + b.quorum + ', id ' + b.id + ') — ჯერ დასრულდეს');
+        }
+      });
+    } else {
+      _tmL('ter', '✗ უარი: ' + res.reason);
+    }
+    return false;
+  }
+  return true;
+}
+
+function _tmUserDeletePreview(res) {
+  var t = res.target || {}, w = res.will_delete || {}, q = res.quorum || {};
+  _tmL('tsy', (t.display_name || '(უსახელო)') + '  ·  ' + (t.email || '?') + '  ·  ' + (t.tier || 'visitor'));
+  _tmL('tnf', 'წაიშლება: ანგარიში, tier-ჩანაწერი, ' + (w.own_tier_requests || 0) + ' საკუთარი განაცხადი');
+  if (w.votes_kept_anonymized) _tmL('tnf', 'დარჩება (ანონიმურად): ' + w.votes_kept_anonymized + ' ხმა სხვა კენჭისყრებში');
+  _tmL('tnf', 'კვორუმი (ახალი კენჭისყრებისთვის): ' + q.before + ' → ' + q.after);
+}
+
+async function _tmUserDelete(args) {
+  if (args[0] !== 'წაშ' && args[0] !== 'წაშლა') { _tmUserDeleteUsage(); return; }
+  var rest = args.slice(1);
+  var last = rest[rest.length - 1];
+  var confirmed = rest.length > 1 && (last === 'დიახ' || last === 'yes');
+  var email = (confirmed ? rest.slice(0, -1) : rest).join(' ').trim();
+  if (!email) { _tmUserDeleteUsage(); return; }
+  if (typeof window.deleteUser !== 'function') { _tmL('ter', '✗ auth engine ვერ მოიძებნა (runtime.js?)'); return; }
+  if (!navigator.onLine) { _tmL('ter', '✗ ოფლაინ — წაშლას ქსელი სჭირდება'); return; }
+
+  var pv = await window.deleteUser(email, false); // always preview first
+  if (!_tmUserDeleteReport(pv, email)) return;
+  _tmUserDeletePreview(pv);
+  if (!confirmed) { _tmL('tdm', 'დასადასტურებლად: /იუზერი წაშ ' + email + ' დიახ'); return; }
+
+  _tmL('tdm', '↑ წაშლა: ' + email + ' — ვცდი...');
+  var res = await window.deleteUser(email, true);
+  if (!_tmUserDeleteReport(res, email)) return;
+  if (res.mode !== 'deleted') { _tmL('ter', '✗ მოულოდნელი პასუხი (mode: ' + res.mode + ') — არაფერია დადასტურებული'); return; }
+  _tmL('tok', '✓ იუზერი წაიშალა: ' + email);
 }
 
 // /დაწინაურება — available to any logged-in tier below resident (visitor or
@@ -2822,7 +2898,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
 var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
-  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
+  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
 // ";" inside ordinary command args is left alone) — PLUS treats any [...]
