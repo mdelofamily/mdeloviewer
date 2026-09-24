@@ -104,6 +104,12 @@ function _mdeloMakeAreaEl(a, all) {
   el.setAttribute('data-tooltip', _mdeloTxt(tooltip));
   if (labelEn) el.setAttribute('data-title-en', _mdeloTxt(labelEn));
   if (tooltipEn) el.setAttribute('data-tooltip-en', _mdeloTxt(tooltipEn));
+  // fill overlay state (raw values; expiry is evaluated by _areaFillActive at read time)
+  if (a.fill_tile_id) {
+    el.setAttribute('data-fill-tile', a.fill_tile_id);
+    el.setAttribute('data-fill-days', a.fill_days || '');
+    el.setAttribute('data-filled-at', a.filled_at || '');
+  }
   return el;
 }
 
@@ -2760,7 +2766,8 @@ async function loadMenuOverrides() {
 }
 
 // ── area overrides (Supabase area_overrides) ──
-// Row: { map_id, area_id, x1, y1, x2, y2, label, label_en, tooltip, tooltip_en, deleted }.
+// Row: { map_id, area_id, x1, y1, x2, y2, label, label_en, tooltip, tooltip_en, deleted,
+//        fill_tile_id, fill_days, filled_at }.
 // area_id equal to a baked (editor) area's id  -> non-null columns REPLACE that area's values,
 //                                                deleted=true hides it;
 // any other area_id                            -> a console-created area (needs full geometry).
@@ -2775,21 +2782,59 @@ function _mergedAreas(rows) {
     var b = byId[r.area_id];
     if (b) {
       if (r.deleted) { b._deleted = true; return; }
-      ['x1', 'y1', 'x2', 'y2', 'label', 'tooltip', 'label_en', 'tooltip_en'].forEach(function (k) {
+      ['x1', 'y1', 'x2', 'y2', 'label', 'tooltip', 'label_en', 'tooltip_en', 'fill_tile_id', 'fill_days', 'filled_at'].forEach(function (k) {
         if (r[k] != null) b[k] = r[k];
       });
     } else if (!r.deleted && r.x1 != null && r.y1 != null && r.x2 != null && r.y2 != null) {
       added.push({ id: r.area_id, x1: r.x1, y1: r.y1, x2: r.x2, y2: r.y2,
-        label: r.label || '', tooltip: r.tooltip || '', label_en: r.label_en || '', tooltip_en: r.tooltip_en || '' });
+        label: r.label || '', tooltip: r.tooltip || '', label_en: r.label_en || '', tooltip_en: r.tooltip_en || '',
+        fill_tile_id: r.fill_tile_id || null, fill_days: r.fill_days || null, filled_at: r.filled_at || null });
     }
   });
   // console-created areas go after the baked ones (=> on top), oldest first (area_<timestamp> ids sort by time)
   added.sort(function (x, y) { return x.id < y.id ? -1 : x.id > y.id ? 1 : 0; });
   return baked.filter(function (a) { return !a._deleted; }).concat(added);
 }
+// ── area fill overlays (fill_tile_id / fill_days / filled_at) ──
+// A fill is active from filled_at until filled_at + fill_days days. Expiry is evaluated here on
+// the client, so an expired fill disappears on time even before the server-side cleanup
+// (expire_area_fills) has nulled the columns.
+function _areaFillExpiry(a) {
+  if (!a || !a.fill_tile_id || !a.filled_at || !(a.fill_days > 0)) return null;
+  var t = Date.parse(a.filled_at);
+  return isNaN(t) ? null : t + a.fill_days * 86400000;
+}
+function _areaFillActive(a) {
+  var e = _areaFillExpiry(a);
+  return e != null && Date.now() < e;
+}
+window._areaFillExpiry = _areaFillExpiry;
+window._areaFillActive = _areaFillActive;
+
+var _areaFillTimer = null;
+function _mdeloSyncFills(list) {
+  window._areaFills = list.filter(_areaFillActive).map(function (a) {
+    return { x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, tile: a.fill_tile_id };
+  });
+  if (typeof window.redrawMap === 'function') window.redrawMap();
+  // repaint once the earliest active fill expires (setTimeout max ~24.8 days — clamp, re-arms itself)
+  clearTimeout(_areaFillTimer); _areaFillTimer = null;
+  var next = null;
+  list.forEach(function (a) {
+    var e = _areaFillExpiry(a);
+    if (e != null && e > Date.now() && (next == null || e < next)) next = e;
+  });
+  if (next != null) {
+    _areaFillTimer = setTimeout(function () { _applyAreaOverrides(_areaOvRows); },
+      Math.min(next - Date.now() + 1000, 2147000000));
+  }
+}
+
 function _applyAreaOverrides(rows) {
   _areaOvRows = rows || [];
-  _mdeloRenderAreas(_mergedAreas(_areaOvRows));
+  var merged = _mergedAreas(_areaOvRows);
+  _mdeloRenderAreas(merged);
+  _mdeloSyncFills(merged);
 }
 async function loadAreaOverrides() {
   _areaOvReady = false;   // realtime events that arrive mid-fetch wait, so an older fetch can't overwrite them
@@ -2838,7 +2883,8 @@ window._applyAreaOverrides = _applyAreaOverrides;
 window.loadAreaOverrides = loadAreaOverrides;
 
 // Partial upsert — called from terminal.js (/არე). `fields` may include any of:
-// x1, y1, x2, y2, label, label_en, tooltip, tooltip_en, deleted. Only the given keys are
+// x1, y1, x2, y2, label, label_en, tooltip, tooltip_en, deleted, fill_tile_id, fill_days,
+// filled_at (null clears). Only the given keys are
 // written (merge-duplicates leaves every other column alone). One request covers all the
 // ids (a single bulk upsert = all-or-nothing), which is how a same-named group of
 // rectangles is edited or deleted together. On success the local rows, the offline

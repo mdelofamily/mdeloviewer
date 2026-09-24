@@ -558,7 +558,7 @@ function _tmHelp() {
     ['/ინფო',             'რუკის ინფორმაცია'],
     ['/მასშტაბი [N]',     'zoom 0.25–6'],
     ['/ზონები',           'ზონების სია'],
-    ['/არე [რედ|ზომა|წაშ|აღდგენა]', 'ზონები კონსოლიდან · /არე დახმარება'],
+    ['/არე [რედ|წაშ|აღდგენა|შევსება]', 'ზონები კონსოლიდან · /არე დახმარება'],
     ['/ობიექტები',        'ობიექტები + dialogue სტატუსი'],
     ['/დიალოგი [სახელი]', 'DSL რედაქტირება · Ctrl+Enter შესანახად'],
     ['/წასვლა [N]',       'ზონაზე ნავიგაცია'],
@@ -1259,8 +1259,9 @@ function _tmOpenCmd() {
 //                                 then a text editor opens (1st line = name, rest = tooltip)
 //   /არე გაუქმება                 abort a pending creation
 //   /არე რედ სახელი               edit name/tooltip (ka; in en mode: the translation)
-//   /არე ზომა სახელი [N]          re-pick the rectangle (two long-presses)
-//   /არე წაშ სახელი [N] დიახ      soft-delete (no DELETE policy)
+//   /არე სახელი შევსება ფილა ვადა დღე   fill every rectangle of the name with an overlay tile
+//                                 for N whole days (resident+); it then disappears by itself
+//   /არე წაშ სახელი [N] დიახ      soft-delete (no DELETE policy); also drops the fill
 //   /არე აღდგენა [სახელი [N] | №]  list soft-deleted areas / restore them (deleted=false)
 // Areas are found by name — the same key /წასვლა uses. Several rectangles sharing one name
 // behave as one group: edit/delete apply to all of them, unless a trailing N picks the
@@ -1270,8 +1271,8 @@ var _tmAreaCtx = null; // { kind:'new', x1,y1,x2,y2 } | { kind:'edit', ids, lang
 var _TM_AREA_USAGE = [
   ['/არე',                         'ახალი ზონა (ორი long-tap რუკაზე)'],
   ['/არე რედ სახელი',              'სახელი/აღწერა (en რეჟიმში — თარგმანი)'],
-  ['/არე ზომა სახელი [N]',         'მართკუთხედის თავიდან არჩევა'],
-  ['/არე წაშ სახელი [N] დიახ',     'წაშლა'],
+  ['/არე სახელი შევსება ფილა ვადა დღე', 'ფილით შევსება დღეების ვადით (resident+)'],
+  ['/არე წაშ სახელი [N] დიახ',     'წაშლა (ფილაც იშლება)'],
   ['/არე აღდგენა [სახელი [N] | №]', 'წაშლილის აღდგენა (ყველა-ს სია: /არე აღდგენა)'],
   ['/არე გაუქმება',                'მიმდინარე შექმნის გაუქმება']
 ];
@@ -1282,10 +1283,14 @@ function _tmAreaRects() {
   var T = (typeof _TS !== 'undefined') ? _TS : 32;
   return [].slice.call(document.querySelectorAll('.hs-area')).map(function (el) {
     var ox = +el.dataset.ox, oy = +el.dataset.oy, ow = +el.dataset.ow, oh = +el.dataset.oh;
+    var ft = el.dataset.fillTile || '', fd = +el.dataset.fillDays || 0, fa = el.dataset.filledAt || '';
+    var frow = { fill_tile_id: ft || null, fill_days: fd || null, filled_at: fa || null };
     return {
       id: el.dataset.aid || '', ka: el.dataset.title || '', en: el.dataset.titleEn || '',
       tipKa: el.dataset.tooltip || '', tipEn: el.dataset.tooltipEn || '',
-      x1: ox / T, y1: oy / T, x2: (ox + ow) / T, y2: (oy + oh) / T
+      x1: ox / T, y1: oy / T, x2: (ox + ow) / T, y2: (oy + oh) / T,
+      // fill overlay: active = set and not yet expired (expiry evaluated in runtime.js)
+      fill: { tile: ft, days: fd, at: fa, active: !!(ft && typeof window._areaFillActive === 'function' && window._areaFillActive(frow)) }
     };
   });
 }
@@ -1333,9 +1338,13 @@ function _tmArea(args) {
     return;
   }
   if (_tmEditObj) { _tmL('ter', '✗ ჯერ დახურე ღია edit-სესია (Esc)'); return; }
+  // "/არე <სახელი> შევსება <ფილა> ვადა <დღე>" — the name comes first (may be several words), so
+  // this is recognised by its tail before the sub-command switch below.
+  var fp = _tmAreaFillParse(args);
+  if (fp) { _tmAreaFill(fp); return; }
+  if (args.indexOf('შევსება') > 0) { _tmL('ter', '✗ გამოყენება: /არე სახელი შევსება ფილა ვადა დღე   (მაგ.: /არე ბაღი შევსება მოცელილი ვადა 18)'); return; }
   if (sub === 'დახმარება' || sub === 'help' || sub === '?')       { _tmAreaUsage(); return; }
   if (sub === 'რედ' || sub === 'რედაქტირება' || sub === 'edit') { _tmAreaEdit(rest); return; }
-  if (sub === 'ზომა' || sub === 'size')                          { _tmAreaResize(rest); return; }
   if (sub === 'წაშ' || sub === 'წაშლა' || sub === 'rm')          { _tmAreaDelete(rest); return; }
   if (sub === 'აღდგენა' || sub === 'წაშლილები' || sub === 'restore') { _tmAreaRestore(rest); return; }
   if (sub) { _tmL('ter', '✗ უცნობი ქვე-ბრძანება: "' + sub + '"'); _tmAreaUsage(); return; }
@@ -1388,29 +1397,66 @@ function _tmAreaEdit(argsArr) {
     'არეალი: ' + first.ka + (en ? ' (EN)' : ''), name + (tip ? '\n' + tip : ''), lines);
 }
 
-// /არე ზომა სახელი [N] — re-pick the rectangle with two long-presses.
-function _tmAreaResize(argsArr) {
-  var f = _tmAreaTarget(argsArr); if (!f) return;
-  if (f.hits.length > 1) {
-    _tmL('ter', '✗ "' + f.name + '" ' + f.hits.length + ' მართკუთხედია — მიუთითე რომელი: /არე ზომა ' + f.name + ' N');
-    f.hits.forEach(function (h, i) { _tmL('tdm', '  ' + (i + 1) + ': ' + _tmAreaBox(h)); });
+// ── /არე სახელი შევსება ფილა ვადა დღე — fill overlay ────────────────────────────
+// Fills EVERY rectangle sharing the name (the name is the group) with an overlay tile that
+// disappears by itself after N whole days. Visual only (map[][] is untouched). Rules:
+//   · resident+ (the rest of /არე is caretaker+)
+//   · known tiles only (_TM_FILL_TILES) and the tile must exist in data.js dualTiles
+//   · two filled areas may not overlap; unfilled areas overlap freely
+//   · running it again on a filled name restarts the timer
+//   · there is no "remove fill": delete the area (/არე წაშ) and draw it again
+var _TM_FILL_TILES = ['მოცელილი'];   // one tile so far; every future tile gets its own lifetimes
+var _TM_FILL_MAX_DAYS = 365;
+
+// args = [name…, 'შევსება', tile…, 'ვადა', days] → { nameArgs, tile, days } | null
+function _tmAreaFillParse(args) {
+  var n = args.length;
+  if (n < 5 || args[n - 2] !== 'ვადა') return null;
+  var si = args.lastIndexOf('შევსება', n - 4);   // ≥1 name word before it, ≥1 tile word after it
+  if (si < 1) return null;
+  return { nameArgs: args.slice(0, si), tile: args.slice(si + 1, n - 2).join(' '), days: args[n - 1] };
+}
+
+// Names of ACTIVE filled areas (other than `ownKa`) that overlap any of `rects` (half-open cell boxes).
+function _tmAreaFillClash(rects, ownKa) {
+  var names = [];
+  _tmAreaRects().forEach(function (o) {
+    if (!o.fill || !o.fill.active || o.ka === ownKa) return;
+    var hit = rects.some(function (r) { return r.x1 < o.x2 && o.x1 < r.x2 && r.y1 < o.y2 && o.y1 < r.y2; });
+    if (hit && names.indexOf(o.ka) < 0) names.push(o.ka);
+  });
+  return names;
+}
+
+function _tmAreaFill(fp) {
+  if (typeof window._tierAtLeast === 'function' && !window._tierAtLeast('resident')) {
+    _tmL('ter', '✗ ფილით შევსება საჭიროებს "resident" ან უფრო მაღალ tier-ს — შენი: ' + (typeof window.myTier === 'function' ? window.myTier() : 'visitor'));
     return;
   }
-  var h = f.hits[0];
-  if (typeof window.areaPickStart !== 'function') { _tmL('ter', '✗ areaPickStart ვერ მოიძებნა (runtime.js?)'); return; }
-  _tmL('tsy', '─── ზომა: ' + h.ka + ' ' + _tmAreaBox(h) + ' ──────────────');
-  _tmL('tdm', 'კონსოლი დაიხურება — დიდხანს დააჭირე რუკაზე ორ მოპირდაპირე კუთხეს');
-  closeTerm();
-  window.areaPickStart(async function (r) {
-    _tmOpen_();
-    if (!navigator.onLine) { window.areaPickClear(); _tmL('ter', '✗ ოფლაინ — ცვლილებას ქსელი სჭირდება'); return; }
-    _tmL('tdm', '↑ ' + h.ka + ' ' + _tmAreaBox(r) + ' — ვინახავ...');
-    var res; try { res = await window.areaOverrideSaveMany([h.id], { x1: r.x1, y1: r.y1, x2: r.x2, y2: r.y2 }); }
-    catch (e) { res = { ok: false, status: 0, msg: e.message }; }
-    window.areaPickClear();
-    if (res === true) _tmL('tok', 'არეალი "' + h.ka + '" — ' + _tmAreaBox(r) + ' ✓ (ყველა viewer-ს ეჩვენება)');
-    else _tmL('ter', _tmAreaSaveErr(res) + ' — სცადე ისევ: /არე ზომა ' + h.ka);
-  }, function () { _tmOpen_(); _tmL('tdm', 'ზომის შეცვლა გაუქმდა'); });
+  if (!/^\d+$/.test(fp.days) || +fp.days < 1 || +fp.days > _TM_FILL_MAX_DAYS) {
+    _tmL('ter', '✗ ვადა — მთელი დღეები, 1–' + _TM_FILL_MAX_DAYS + ' (მიიღე: "' + fp.days + '")'); return;
+  }
+  var days = +fp.days;
+  if (_TM_FILL_TILES.indexOf(fp.tile) < 0) {
+    _tmL('ter', '✗ უცნობი ფილა: "' + fp.tile + '" — ხელმისაწვდომი: ' + _TM_FILL_TILES.join(', ')); return;
+  }
+  if (!(_CFG.dualTiles || []).some(function (t) { return t.id === fp.tile; })) {
+    _tmL('ter', '✗ ფილა "' + fp.tile + '" data.js-ში არ არის — ედიტორიდან თავიდან export და data.js-ის ატვირთვა'); return;
+  }
+  var f = _tmAreaTarget(fp.nameArgs); if (!f) return;
+  if (f.idx != null) { _tmL('ter', '✗ შევსება მთელ სახელზე მუშაობს (ჯგუფი) — N არ გამოიყენება'); return; }
+  var clash = _tmAreaFillClash(f.hits, f.hits[0].ka);
+  if (clash.length) { _tmL('ter', '✗ "' + f.name + '" გადაფარავს ფილიან არეს: ' + clash.join(', ') + ' — ორი ფილიანი არე ვერ გადაფარავს ერთმანეთს'); return; }
+  if (!navigator.onLine) { _tmL('ter', '✗ ოფლაინ — შევსებას ქსელი სჭირდება'); return; }
+  var now = new Date();
+  _tmL('tdm', '↑ ' + f.name + ' — ' + fp.tile + ', ' + days + ' დღე — ვინახავ...');
+  window.areaOverrideSaveMany(f.hits.map(function (h) { return h.id; }),
+    { fill_tile_id: fp.tile, fill_days: days, filled_at: now.toISOString() }).then(function (res) {
+    if (res === true) {
+      _tmL('tok', 'არეალი "' + f.name + '" — ' + fp.tile + ' ✓ (' + f.hits.length + ' მართკუთხედი, იწურება: ' +
+        new Date(now.getTime() + days * 86400000).toISOString().slice(0, 10) + ')');
+    } else _tmL('ter', _tmAreaSaveErr(res));
+  }, function (e) { _tmL('ter', _tmAreaSaveErr({ msg: e.message })); });
 }
 
 // /არე წაშ სახელი [N] დიახ — soft delete (deleted=true). Without the final "დიახ" it only previews.
@@ -1419,14 +1465,18 @@ function _tmAreaDelete(argsArr) {
   var nameArgs = confirmed ? argsArr.slice(0, -1) : argsArr;
   var f = _tmAreaTarget(nameArgs); if (!f) return;
   var desc = '"' + f.name + '" — ' + f.hits.length + ' მართკუთხედი: ' + f.hits.map(_tmAreaBox).join(' ');
+  // a filled area loses its fill (tile + lifetime) with it; restoring brings the area back without the fill
+  var hasFill = f.hits.some(function (h) { return h.fill && h.fill.tile; });
+  var delFields = { deleted: true };
+  if (hasFill) { delFields.fill_tile_id = null; delFields.fill_days = null; delFields.filled_at = null; }
   if (!confirmed) {
-    _tmL('ter', 'წაიშლება ' + desc);
+    _tmL('ter', 'წაიშლება ' + desc + (hasFill ? ' (ფილაც წაიშლება)' : ''));
     _tmL('tdm', 'დასადასტურებლად: /არე წაშ ' + nameArgs.join(' ') + ' დიახ');
     return;
   }
   if (!navigator.onLine) { _tmL('ter', '✗ ოფლაინ — წაშლას ქსელი სჭირდება'); return; }
   _tmL('tdm', '↑ წაშლა: ' + desc + ' — ვინახავ...');
-  window.areaOverrideSaveMany(f.hits.map(function (h) { return h.id; }), { deleted: true }).then(function (res) {
+  window.areaOverrideSaveMany(f.hits.map(function (h) { return h.id; }), delFields).then(function (res) {
     if (res === true) _tmL('tok', 'არეალი "' + f.name + '" — წაშლილია ✓ (აღდგენა: deleted=false Supabase-ში)');
     else _tmL('ter', _tmAreaSaveErr(res));
   }, function (e) { _tmL('ter', _tmAreaSaveErr({ msg: e.message })); });
@@ -1480,7 +1530,7 @@ async function _tmSaveArea(text) {
   var lines = text.split('\n');
   var label = lines[0].trim();
   var tip = lines.slice(1).join('\n').trim();
-  var ids, fields, dup = false;
+  var ids, fields, dup = false, inherited = false;
 
   if (c.kind === 'new') {
     if (!label) { _tmL('ter', '✗ სახელი ცარიელია — პირველ ხაზზე ჩაწერე არეალის სახელი'); return; }
@@ -1488,6 +1538,18 @@ async function _tmSaveArea(text) {
     ids = ['area_' + Date.now()];
     fields = { x1: c.x1, y1: c.y1, x2: c.x2, y2: c.y2, label: label };
     if (tip) fields.tooltip = tip;
+    // same name = same group: an active fill of the group extends to the new rectangle (same tile,
+    // same filled_at, so the whole group expires together) — unless it would overlap another filled area
+    var grp = _tmAreaRects().filter(function (a) { return a.ka === label && a.fill && a.fill.active; });
+    if (grp.length) {
+      var clash = _tmAreaFillClash([{ x1: c.x1, y1: c.y1, x2: c.x2, y2: c.y2 }], label);
+      if (clash.length) {
+        _tmL('ter', '✗ ახალი მართკუთხედი გადაფარავს ფილიან არეს: ' + clash.join(', ') + ' — შეცვალე სახელი (ფილის გარეშე შეინახება) ან Esc და თავიდან დახატე');
+        return;
+      }
+      fields.fill_tile_id = grp[0].fill.tile; fields.fill_days = grp[0].fill.days; fields.filled_at = grp[0].fill.at;
+      inherited = true;
+    }
   } else if (c.lang === 'en') {
     // Only what differs from the ka reference shown while editing counts as a translation —
     // an untouched field must never be saved back as a false one (same rule as legend/dialogue).
@@ -1514,7 +1576,7 @@ async function _tmSaveArea(text) {
   if (res !== true) { _tmL('ter', _tmAreaSaveErr(res) + ' — ტექსტი რედაქტორშია, სცადე ისევ Ctrl+Enter'); return; }
   _tmAreaSessionClose();
   if (c.kind === 'new') {
-    _tmL('tok', 'არეალი "' + label + '" — შენახულია ✓ (ყველა viewer-ს ეჩვენება)');
+    _tmL('tok', 'არეალი "' + label + '" — შენახულია ✓ (ყველა viewer-ს ეჩვენება)' + (inherited ? ' · ჯგუფის ფილა გავრცელდა' : ''));
     if (dup) _tmL('tdm', 'ℹ ამ სახელით არეალი უკვე არსებობდა — ისინი ერთ ჯგუფად ჩაითვლება (ერთად ინათებს, /წასვლა ორივეს პოულობს)');
   } else {
     _tmL('tok', 'არეალი "' + c.ka.label + '" — განახლდა ✓' + (ids.length > 1 ? ' (' + ids.length + ' მართკუთხედი)' : '') + ' (ყველა viewer-ს ეჩვენება)');

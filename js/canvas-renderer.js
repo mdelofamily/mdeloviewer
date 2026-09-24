@@ -1,6 +1,12 @@
 // canvas-renderer.js — the only map renderer; always active
-// static file (mdeloviewer/js/canvas-renderer.js), loaded after runtime.js
-// depends on: _CFG, _TS (data.js) and <canvas id="mapImg"> (built by runtime.js)
+// static file (mdeloviewer/js/canvas-renderer.js)
+// depends on: _CFG, _TS (data.js) and <canvas id="mapImg"> (built by dom-init.js / runtime.js)
+//
+// Public API:
+//   window.redrawMap()  - repaint the whole canvas. Safe to call at any time (before all
+//                         images have loaded it is a no-op; the first paint happens by itself).
+//   window._areaFills   - [{ x1, y1, x2, y2, tile }] active fill overlays (x2/y2 exclusive),
+//                         maintained by runtime.js from area_overrides. Read on every paint.
 
 (function () {
   const cfg = _CFG, TS = _TS, COLS = cfg.cols, ROWS = cfg.rows;
@@ -29,6 +35,7 @@
   });
 
   let loadPending = urls.size + b64tiles.length + spriteImgs.size;
+  let ready = false;   // true once every image has loaded (or failed); redrawMap() is a no-op before that
   function tryDone() { if (--loadPending <= 0) onAllLoaded(); }
 
   // ── draw helpers ──
@@ -44,8 +51,10 @@
     }
   }
 
-  // ── layer renderer (base or overlay) ──
-  function renderLayer(lmap) {
+  // ── layer renderer (base, overlay or fill) ──
+  // onlyIds (optional Set): restrict the dual-tile pass to these tile ids - the fill layer uses
+  // it so another dual tile's compatibleWith can never pull its sprites onto the fill layer.
+  function renderLayer(lmap, onlyIds) {
     // pass 1: regular tiles
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
@@ -57,6 +66,7 @@
     }
     // pass 2: dual tiles (corner-based, drawn at half-offset)
     (cfg.dualTiles || []).forEach(dt => {
+      if (onlyIds && !onlyIds.has(dt.id)) return;
       const compat = dt.compatibleWith || [];
       for (let r = 0; r < ROWS - 1; r++) {
         for (let c = 0; c < COLS - 1; c++) {
@@ -88,12 +98,30 @@
     }
   }
 
-  // ── final composite after all images loaded ──
-  function onAllLoaded() {
+  // ── fill layer: synthetic COLS x ROWS layer, empty except the cells of active fill areas ──
+  // Purely visual - map[][] / overlayMap are never touched. Fills never overlap (enforced by
+  // the /არე შევსება command), so cell order does not matter.
+  function renderFills() {
+    const fills = (window._areaFills || []).filter(f => f && tileMap.has(f.tile));
+    if (!fills.length) return;
+    const lmap = [];
+    for (let r = 0; r < ROWS; r++) lmap.push(new Array(COLS).fill(''));
+    const ids = new Set();
+    fills.forEach(f => {
+      ids.add(f.tile);
+      const x1 = Math.max(0, f.x1), y1 = Math.max(0, f.y1), x2 = Math.min(COLS, f.x2), y2 = Math.min(ROWS, f.y2);
+      for (let r = y1; r < y2; r++) for (let c = x1; c < x2; c++) lmap[r][c] = f.tile;
+    });
+    renderLayer(lmap, ids);
+  }
+
+  // ── composite: base -> overlay -> fills -> objects ──
+  function composite() {
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     renderLayer(cfg.map);
     if (cfg.overlayMap) renderLayer(cfg.overlayMap);
+    renderFills();
 
     // draw objects — straight from their tile definition (sheet crop or
     // b64 tile image); no per-object image data is stored in data.js
@@ -109,6 +137,9 @@
       }
     });
   }
+
+  function onAllLoaded() { ready = true; composite(); }
+  window.redrawMap = function () { if (ready) composite(); };
 
   // ── load assets ──
   if (loadPending === 0) { onAllLoaded(); return; }
