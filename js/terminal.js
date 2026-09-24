@@ -1255,8 +1255,8 @@ function _tmOpenCmd() {
 }
 
 // ── /არე — map areas from the console (area_overrides) ──────────────────────────
-//   /არე                          new area: console closes, paint cells with one finger like a
-//                                 brush (two fingers pan/zoom), ✓ opens a text editor
+//   /არე                          new area: console closes, hold to start painting cells like a
+//                                 brush (plain swipe = pan), ✓ opens a text editor
 //                                 (1st line = name, rest = tooltip)
 //   /არე გაუქმება                 abort a pending creation
 //   /არე რედ სახელი               edit name/tooltip (ka; in en mode: the translation)
@@ -1345,7 +1345,7 @@ function _tmArea(args) {
   if (_tmEditLang === 'en') { _tmL('ter', '✗ ახალი არეალი ქართულად იქმნება — ჯერ: /ენა ka'); return; }
   if (typeof window.areaPickStart !== 'function') { _tmL('ter', '✗ areaPickStart ვერ მოიძებნა (runtime.js?)'); return; }
   _tmL('tsy', '─── ახალი არეალი ──────────────');
-  _tmL('tdm', 'კონსოლი დაიხურება — ხატე რუკაზე: 1 თითი ხატავს, 2 თითი გადააადგილებს/ზუმავს; ✓ — დასრულება');
+  _tmL('tdm', 'კონსოლი დაიხურება — ხანგრძლივი შეხებით დაიწყე ხატვა (სვიპი ჩვეულებრივ გადააადგილებს რუკას); ✓ — დასრულება');
   closeTerm();
   window.areaPickStart(_tmAreaPicked, function () { _tmOpen_(); _tmL('tdm', 'არეალის შექმნა გაუქმდა'); });
 }

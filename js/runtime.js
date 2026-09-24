@@ -1739,13 +1739,14 @@ function copySlLink() {
 function _slFb(text) { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;'; document.body.appendChild(ta); ta.focus(); ta.select(); try { document.execCommand('copy'); } catch (e) {} document.body.removeChild(ta); }
 
 // ── area draw mode (brush) ──
-// /არე (terminal.js) starts it. ONE finger paints cells like a brush (a tap = one cell, a drag =
-// every cell along the path); TWO fingers pan and zoom the map. Strokes accumulate into a single
+// /არე (terminal.js) starts it. A short HOLD starts a brush stroke (hold + release = one cell, hold +
+// drag = every cell along the path); without the hold a swipe is the normal map pan and two fingers
+// the normal pinch-zoom. Strokes accumulate into a single
 // cell set, so strokes that touch or overlap simply merge. ✓ converts the set into rectangles
 // (x2/y2 exclusive — the hotAreas convention) which all get the same name = one group; ↶ undoes
 // the last stroke; ✕ cancels. There is no eraser: undo, or delete the area and draw it again.
 var _AREA_MAX_RECTS = 120;   // safety cap: a scribble must not turn into hundreds of DB rows
-var _areaDraw = null;        // live session: { mask, count, strokes, stroke, last, multi, mid, on, listeners, cvs, cx, bar }
+var _areaDraw = null;        // live session: { mask, count, strokes, stroke, last, multi, on, listeners, cvs, cx, bar }
 
 // Greedy decomposition: per row find horizontal runs; a run identical (same x-range) to one that
 // ended on the previous row extends that rectangle downward, otherwise it opens a new one.
@@ -1814,7 +1815,7 @@ function areaPickStart(onDone, onCancel) {
     b.onclick = fn; return b;
   }
   var flashT = null;
-  function status() { msg.textContent = '🖌 ' + d.count + ' უჯრა · 1 თითი ხატავს, 2 თითი გადააადგილებს/ზუმავს'; }
+  function status() { msg.textContent = '🖌 ' + d.count + ' უჯრა · ხანგრძლივი შეხება — ხატვა, სვიპი — გადაადგილება'; }
   function flash(t) { msg.textContent = t; clearTimeout(flashT); flashT = setTimeout(status, 2600); }
   bar.appendChild(msg);
   bar.appendChild(mkBtn('↶', function () {
@@ -1863,40 +1864,53 @@ function areaPickStart(onDone, onCancel) {
   function undoStroke(s) { s.forEach(function (i) { d.mask[i] = 0; d.count--; }); redraw(); }
   function mid(e) { var a = e.touches[0], b = e.touches[1]; return [(a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2]; }
 
+  // Gesture model: a plain swipe is the map's own pan (native scroll, untouched) and two fingers are
+  // the map's own pinch. Painting starts only after a short HOLD (finger down, not moving); from
+  // then on the touch is ours (preventDefault stops the scroll) and every cell it passes is painted.
+  var HOLD_MS = 350, SLOP = 6;                    // hold time (spot-link long-press is 600ms) / px that count as "moved"
+  var holdT = null, sx = 0, sy = 0;
+  function cancelHold() { if (holdT) { clearTimeout(holdT); holdT = null; } }
+
   function onStart(e) {
-    if (e.touches.length >= 2) {                  // second finger: this is navigation, not a stroke
+    cancelHold();
+    if (e.touches.length >= 2) {                  // pinch: never a stroke; drop one that was just started
       if (d.stroke) { undoStroke(d.stroke); d.stroke = null; d.last = null; status(); }
-      d.multi = true; d.mid = mid(e); return;
+      d.multi = true; return;
     }
     if (d.multi) return;
-    var p = cellAt(e.touches[0]);
-    d.stroke = []; paint(p[0], p[1]); d.last = p; status();
+    var t = e.touches[0]; sx = t.clientX; sy = t.clientY;
+    holdT = setTimeout(function () {
+      holdT = null;
+      if (!d.on) return;
+      var p = cellAt({ clientX: sx, clientY: sy });
+      d.stroke = []; paint(p[0], p[1]); d.last = p; status();
+      if (navigator.vibrate) { try { navigator.vibrate(25); } catch (er) {} }
+    }, HOLD_MS);
   }
   function onMove(e) {
-    if (e.touches.length >= 2) {                  // pan (zoom is handled by the map's own pinch code)
-      var m = mid(e);
-      if (d.mid) { wrap.scrollLeft -= (m[0] - d.mid[0]); wrap.scrollTop -= (m[1] - d.mid[1]); }
-      d.mid = m; if (e.cancelable) e.preventDefault(); return;
+    if (e.touches.length >= 2 || d.multi) return;
+    var t = e.touches[0];
+    if (!d.stroke) {                              // no hold yet: moving means "pan" — leave it to native scroll
+      if (holdT && Math.hypot(t.clientX - sx, t.clientY - sy) > SLOP) cancelHold();
+      return;
     }
-    if (d.multi || !d.stroke) return;
-    if (e.cancelable) e.preventDefault();
-    var p = cellAt(e.touches[0]);
+    if (e.cancelable) e.preventDefault();         // painting: keep the map from scrolling under the brush
+    var p = cellAt(t);
     if (p[0] === d.last[0] && p[1] === d.last[1]) return;
     line(d.last[0], d.last[1], p[0], p[1]); d.last = p; status();
   }
   function onEnd(e) {
+    cancelHold();
     if (e.touches.length === 0) {
       if (d.stroke) { if (d.stroke.length) d.strokes.push(d.stroke); d.stroke = null; d.last = null; if (e.cancelable) e.preventDefault(); }
-      d.multi = false; d.mid = null;
-    } else if (e.touches.length === 1) d.mid = null;
-    wrap.style.touchAction = 'none';              // the map's pinch code resets it to pan-x/pan-y on touchend
+      d.multi = false;
+    }
   }
   function noClick(e) { e.stopPropagation(); e.preventDefault(); }   // a tap-paint must not open area popups
   [['touchstart', onStart, { passive: false }], ['touchmove', onMove, { passive: false }],
    ['touchend', onEnd, { passive: false }], ['touchcancel', onEnd, { passive: false }],
-   ['click', noClick, true]].forEach(function (l) { d.listeners.push(l); wrap.addEventListener(l[0], l[1], l[2]); });
+   ['click', noClick, true], ['contextmenu', noClick, true]].forEach(function (l) { d.listeners.push(l); wrap.addEventListener(l[0], l[1], l[2]); });
   window._areaDrawActive = true;
-  wrap.style.touchAction = 'none';
 }
 window.areaPickStart = areaPickStart;
 window.areaPickClear = areaPickClear;
