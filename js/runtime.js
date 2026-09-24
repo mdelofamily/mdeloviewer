@@ -1738,58 +1738,165 @@ function copySlLink() {
 }
 function _slFb(text) { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;'; document.body.appendChild(ta); ta.focus(); ta.select(); try { document.execCommand('copy'); } catch (e) {} document.body.removeChild(ta); }
 
-// ── area pick mode ──
-// /არე (terminal.js) starts it: two long-presses (the same 600ms gesture as the
-// spot link) mark opposite corners of a rectangle. Coordinates follow the hotAreas
-// convention — x2/y2 exclusive — so the far corner's cell is included.
-var _areaPickHandler = null, _areaPickPrev = null, _areaPickBar = null;
-function areaPickClear() {
-  _areaPickHandler = null;
-  if (_areaPickPrev) { _areaPickPrev.remove(); _areaPickPrev = null; }
-  if (_areaPickBar) { _areaPickBar.remove(); _areaPickBar = null; }
-}
-function _areaPickBox(x1, y1, x2, y2) {
-  if (!_areaPickPrev) {
-    _areaPickPrev = document.createElement('div');
-    _areaPickPrev.style.cssText = 'position:absolute;z-index:6;pointer-events:none;box-sizing:border-box;' +
-      'border:2px dashed #ffd23f;background:rgba(255,210,63,.18);border-radius:4px;';
-    inner.appendChild(_areaPickPrev);
+// ── area draw mode (brush) ──
+// /არე (terminal.js) starts it. ONE finger paints cells like a brush (a tap = one cell, a drag =
+// every cell along the path); TWO fingers pan and zoom the map. Strokes accumulate into a single
+// cell set, so strokes that touch or overlap simply merge. ✓ converts the set into rectangles
+// (x2/y2 exclusive — the hotAreas convention) which all get the same name = one group; ↶ undoes
+// the last stroke; ✕ cancels. There is no eraser: undo, or delete the area and draw it again.
+var _AREA_MAX_RECTS = 120;   // safety cap: a scribble must not turn into hundreds of DB rows
+var _areaDraw = null;        // live session: { mask, count, strokes, stroke, last, multi, mid, on, listeners, cvs, cx, bar }
+
+// Greedy decomposition: per row find horizontal runs; a run identical (same x-range) to one that
+// ended on the previous row extends that rectangle downward, otherwise it opens a new one.
+function _areaCellsToRects(mask, cols, rows) {
+  var rects = [], open = {};
+  for (var r = 0; r <= rows; r++) {
+    var next = {};
+    if (r < rows) {
+      var c = 0;
+      while (c < cols) {
+        if (!mask[r * cols + c]) { c++; continue; }
+        var s = c; while (c < cols && mask[r * cols + c]) c++;
+        var k = s + ',' + c, o = open[k];
+        if (o) { o.y2 = r + 1; next[k] = o; }
+        else { o = { x1: s, y1: r, x2: c, y2: r + 1 }; rects.push(o); next[k] = o; }
+      }
+    }
+    open = next;
   }
-  var T = _TS;
-  _areaPickPrev.style.left = (x1 * T) + 'px'; _areaPickPrev.style.top = (y1 * T) + 'px';
-  _areaPickPrev.style.width = ((x2 - x1) * T) + 'px'; _areaPickPrev.style.height = ((y2 - y1) * T) + 'px';
+  return rects;
 }
-// onDone({x1,y1,x2,y2}) after the 2nd press; onCancel() if the banner's ✕ is tapped.
-// The preview rectangle stays on the map until areaPickClear() (save / cancel).
+window._areaCellsToRects = _areaCellsToRects;
+
+// Stop gesture handling (preview canvas stays — it is removed by areaPickClear).
+function _areaDrawStop() {
+  var d = _areaDraw; if (!d || !d.on) return;
+  d.on = false; window._areaDrawActive = false;
+  d.listeners.forEach(function (l) { wrap.removeEventListener(l[0], l[1], l[2]); });
+  wrap.style.touchAction = 'pan-x pan-y';
+}
+function areaPickClear() {
+  _areaDrawStop();
+  if (_areaDraw) {
+    if (_areaDraw.cvs) _areaDraw.cvs.remove();
+    if (_areaDraw.bar) _areaDraw.bar.remove();
+    _areaDraw = null;
+  }
+}
+
+// onDone({ rects:[{x1,y1,x2,y2}], cells:N }) after ✓; onCancel() if ✕ is tapped.
 function areaPickStart(onDone, onCancel) {
   areaPickClear();
-  var c1 = null, cols = (_CFG && _CFG.cols) || 9999, rows = (_CFG && _CFG.rows) || 9999;
-  _areaPickBar = document.createElement('div');
-  _areaPickBar.style.cssText = 'position:fixed;top:56px;left:50%;transform:translateX(-50%);z-index:35;display:flex;' +
-    'align-items:center;gap:10px;max-width:92vw;padding:8px 12px;border-radius:10px;background:rgba(13,17,23,.92);' +
-    'border:1px solid rgba(255,210,63,.55);color:#ffd23f;font:13px sans-serif;';
-  var msg = document.createElement('span'), x = document.createElement('button');
-  msg.textContent = '📍 არეალი 1/2 — დიდხანს დააჭირე პირველ უჯრას';
-  x.textContent = '✕';
-  x.style.cssText = 'background:none;border:none;color:#ffd23f;font-size:16px;cursor:pointer;padding:0 2px;';
-  x.onclick = function () { areaPickClear(); if (onCancel) onCancel(); };
-  _areaPickBar.appendChild(msg); _areaPickBar.appendChild(x);
-  document.body.appendChild(_areaPickBar);
-  _areaPickHandler = function (col, row) {
-    col = Math.min(col, cols - 1); row = Math.min(row, rows - 1);
+  var cols = (_CFG && _CFG.cols) || 1, rows = (_CFG && _CFG.rows) || 1, T = _TS;
+  var d = _areaDraw = { mask: new Uint8Array(cols * rows), count: 0, strokes: [], stroke: null, last: null,
+                        multi: false, mid: null, on: true, listeners: [], cvs: null, cx: null, bar: null };
+
+  // preview: one canvas pixel per cell, scaled up crisp, sitting on the map inside `inner`
+  var cvs = d.cvs = document.createElement('canvas');
+  cvs.width = cols; cvs.height = rows;
+  cvs.style.cssText = 'position:absolute;left:0;top:0;z-index:6;pointer-events:none;image-rendering:pixelated;' +
+    'width:' + (cols * T) + 'px;height:' + (rows * T) + 'px;';
+  inner.appendChild(cvs);
+  var cx = d.cx = cvs.getContext('2d'); cx.fillStyle = 'rgba(255,210,63,.5)';
+
+  // control bar
+  var bar = d.bar = document.createElement('div');
+  bar.style.cssText = 'position:fixed;top:56px;left:50%;transform:translateX(-50%);z-index:35;display:flex;flex-wrap:wrap;' +
+    'align-items:center;justify-content:center;gap:8px 12px;max-width:94vw;padding:8px 12px;border-radius:10px;' +
+    'background:rgba(13,17,23,.92);border:1px solid rgba(255,210,63,.55);color:#ffd23f;font:13px sans-serif;';
+  var msg = document.createElement('span');
+  function mkBtn(txt, fn) {
+    var b = document.createElement('button');
+    b.textContent = txt;
+    b.style.cssText = 'background:rgba(255,210,63,.14);border:1px solid rgba(255,210,63,.5);border-radius:8px;color:#ffd23f;' +
+      'font-size:18px;line-height:1;padding:6px 12px;cursor:pointer;';
+    b.onclick = fn; return b;
+  }
+  var flashT = null;
+  function status() { msg.textContent = '🖌 ' + d.count + ' უჯრა · 1 თითი ხატავს, 2 თითი გადააადგილებს/ზუმავს'; }
+  function flash(t) { msg.textContent = t; clearTimeout(flashT); flashT = setTimeout(status, 2600); }
+  bar.appendChild(msg);
+  bar.appendChild(mkBtn('↶', function () {
+    if (d.stroke) return;
+    var s = d.strokes.pop(); if (s) undoStroke(s); status();
+  }));
+  bar.appendChild(mkBtn('✓', function () {
+    if (!d.count) { flash('ჯერ დახატე არეალი'); return; }
+    var rects = _areaCellsToRects(d.mask, cols, rows);
+    if (rects.length > _AREA_MAX_RECTS) { flash('ფორმა ძალიან რთულია (' + rects.length + ' ნაწილი, მაქს. ' + _AREA_MAX_RECTS + ') — გაამარტივე'); return; }
+    _areaDrawStop();
+    bar.remove(); d.bar = null;
     if (navigator.vibrate) { try { navigator.vibrate(30); } catch (e) {} }
-    if (!c1) {
-      c1 = { col: col, row: row };
-      _areaPickBox(col, row, col + 1, row + 1);
-      msg.textContent = '📍 არეალი 2/2 — დიდხანს დააჭირე მოპირდაპირე კუთხეს';
-      return;
+    if (onDone) onDone({ rects: rects, cells: d.count });
+  }));
+  bar.appendChild(mkBtn('✕', function () { areaPickClear(); if (onCancel) onCancel(); }));
+  document.body.appendChild(bar);
+  status();
+
+  // ── painting ──
+  function cellAt(t) {
+    var r = wrap.getBoundingClientRect(), s = T * scale;
+    var c = Math.floor((t.clientX - r.left + wrap.scrollLeft) / s), rw = Math.floor((t.clientY - r.top + wrap.scrollTop) / s);
+    return [Math.max(0, Math.min(cols - 1, c)), Math.max(0, Math.min(rows - 1, rw))];
+  }
+  function paint(c, r) {
+    var i = r * cols + c; if (d.mask[i]) return;
+    d.mask[i] = 1; d.count++; d.stroke.push(i); cx.fillRect(c, r, 1, 1);
+  }
+  // Bresenham between two touch samples (a fast swipe skips cells); 4-connected so the stroke has no diagonal gaps
+  function line(c0, r0, c1, r1) {
+    var dx = Math.abs(c1 - c0), dy = -Math.abs(r1 - r0), sx = c0 < c1 ? 1 : -1, sy = r0 < r1 ? 1 : -1, err = dx + dy;
+    for (;;) {
+      paint(c0, r0);
+      if (c0 === c1 && r0 === r1) break;
+      var e2 = 2 * err, mx = false, my = false;
+      if (e2 >= dy) { err += dy; c0 += sx; mx = true; }
+      if (e2 <= dx) { err += dx; r0 += sy; my = true; }
+      if (mx && my) paint(c0, r0 - sy);
     }
-    var r = { x1: Math.min(c1.col, col), y1: Math.min(c1.row, row), x2: Math.max(c1.col, col) + 1, y2: Math.max(c1.row, row) + 1 };
-    _areaPickBox(r.x1, r.y1, r.x2, r.y2);
-    _areaPickHandler = null;
-    if (_areaPickBar) { _areaPickBar.remove(); _areaPickBar = null; }
-    if (onDone) onDone(r);
-  };
+  }
+  function redraw() {
+    cx.clearRect(0, 0, cols, rows);
+    for (var i = 0; i < d.mask.length; i++) if (d.mask[i]) cx.fillRect(i % cols, (i / cols) | 0, 1, 1);
+  }
+  function undoStroke(s) { s.forEach(function (i) { d.mask[i] = 0; d.count--; }); redraw(); }
+  function mid(e) { var a = e.touches[0], b = e.touches[1]; return [(a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2]; }
+
+  function onStart(e) {
+    if (e.touches.length >= 2) {                  // second finger: this is navigation, not a stroke
+      if (d.stroke) { undoStroke(d.stroke); d.stroke = null; d.last = null; status(); }
+      d.multi = true; d.mid = mid(e); return;
+    }
+    if (d.multi) return;
+    var p = cellAt(e.touches[0]);
+    d.stroke = []; paint(p[0], p[1]); d.last = p; status();
+  }
+  function onMove(e) {
+    if (e.touches.length >= 2) {                  // pan (zoom is handled by the map's own pinch code)
+      var m = mid(e);
+      if (d.mid) { wrap.scrollLeft -= (m[0] - d.mid[0]); wrap.scrollTop -= (m[1] - d.mid[1]); }
+      d.mid = m; if (e.cancelable) e.preventDefault(); return;
+    }
+    if (d.multi || !d.stroke) return;
+    if (e.cancelable) e.preventDefault();
+    var p = cellAt(e.touches[0]);
+    if (p[0] === d.last[0] && p[1] === d.last[1]) return;
+    line(d.last[0], d.last[1], p[0], p[1]); d.last = p; status();
+  }
+  function onEnd(e) {
+    if (e.touches.length === 0) {
+      if (d.stroke) { if (d.stroke.length) d.strokes.push(d.stroke); d.stroke = null; d.last = null; if (e.cancelable) e.preventDefault(); }
+      d.multi = false; d.mid = null;
+    } else if (e.touches.length === 1) d.mid = null;
+    wrap.style.touchAction = 'none';              // the map's pinch code resets it to pan-x/pan-y on touchend
+  }
+  function noClick(e) { e.stopPropagation(); e.preventDefault(); }   // a tap-paint must not open area popups
+  [['touchstart', onStart, { passive: false }], ['touchmove', onMove, { passive: false }],
+   ['touchend', onEnd, { passive: false }], ['touchcancel', onEnd, { passive: false }],
+   ['click', noClick, true]].forEach(function (l) { d.listeners.push(l); wrap.addEventListener(l[0], l[1], l[2]); });
+  window._areaDrawActive = true;
+  wrap.style.touchAction = 'none';
 }
 window.areaPickStart = areaPickStart;
 window.areaPickClear = areaPickClear;
@@ -1799,14 +1906,13 @@ window.areaPickClear = areaPickClear;
   const TS2 = _TS;
   let _ltTimer = null, _ltSuppress = false;
   wrap.addEventListener('touchstart', e => {
-    if (e.touches.length !== 1) return;
+    if (e.touches.length !== 1 || window._areaDrawActive) return;
     const t = e.touches[0], sx = t.clientX, sy = t.clientY;
     _ltTimer = setTimeout(() => {
       _ltTimer = null; _ltSuppress = true;
       const rect = wrap.getBoundingClientRect();
       const mx = sx - rect.left + wrap.scrollLeft, my = sy - rect.top + wrap.scrollTop;
       const pc = Math.max(0, Math.floor(mx / (TS2 * scale))), pr = Math.max(0, Math.floor(my / (TS2 * scale)));
-      if (_areaPickHandler) { _areaPickHandler(pc, pr); return; }   // /არე is waiting for a corner
       openSlPopup(pc, pr, sx, sy);
     }, 600);
   }, { passive: true });
@@ -2870,8 +2976,17 @@ function _areaRtApply(payload) {
   if (isDel) { if (i >= 0) _areaOvRows.splice(i, 1); else return; }
   else if (i >= 0) _areaOvRows[i] = row;
   else _areaOvRows.push(row);
-  _syncSnapSave('areas', _areaOvRows);
-  _applyAreaOverrides(_areaOvRows);
+  _areaApplySoon();
+}
+// A bulk write (brush area, group delete) fires one realtime event per row; rebuild once, not per event.
+var _areaApplyT = null;
+function _areaApplySoon() {
+  if (_areaApplyT) return;
+  _areaApplyT = setTimeout(function () {
+    _areaApplyT = null;
+    _syncSnapSave('areas', _areaOvRows);
+    _applyAreaOverrides(_areaOvRows);
+  }, 60);
 }
 function _areaRtEvent(payload) {
   if (!_areaOvReady) { _areaOvQueue.push(payload); return; }
@@ -2918,6 +3033,38 @@ window.areaOverrideSaveMany = async function (areaIds, fields) {
   } catch (e) { return { ok: false, status: 0, msg: e.message }; }
 };
 window.areaOverrideSave = function (areaId, fields) { return window.areaOverrideSaveMany([areaId], fields); };
+
+// Same as SaveMany but every row has its own fields: items = [{ id, fields }]. One request, so a
+// brush-drawn area (many rectangles) is saved all-or-nothing. All rows MUST carry the same keys
+// (PostgREST bulk-insert requirement) — terminal.js builds them that way.
+window.areaOverrideSaveRows = async function (items) {
+  try {
+    var now = new Date().toISOString();
+    var rows = items.map(function (it) {
+      return Object.assign({ map_id: _MAP_ID, area_id: it.id, updated_at: now }, it.fields);
+    });
+    var r = await fetch(SUPA_URL + '/rest/v1/area_overrides', {
+      method: 'POST',
+      headers: Object.assign({
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      }, _authHeaders()),
+      body: JSON.stringify(rows)
+    });
+    if (r.ok) {
+      items.forEach(function (it) {
+        var row = _areaOvRows.find(function (x) { return x.area_id === it.id; });
+        if (!row) { row = { map_id: _MAP_ID, area_id: it.id }; _areaOvRows.push(row); }
+        Object.assign(row, it.fields);
+      });
+      _syncSnapSave('areas', _areaOvRows);
+      _applyAreaOverrides(_areaOvRows);
+      return true;
+    }
+    var errBody = r.text ? await r.text().catch(function () { return ''; }) : '';
+    return { ok: false, status: r.status, msg: errBody.slice(0, 150) };
+  } catch (e) { return { ok: false, status: 0, msg: e.message }; }
+};
 
 // Soft-deleted areas, for /არე აღდგენა: [{ id, label, en, x1, y1, x2, y2, baked }] ordered by id.
 // A deleted baked area keeps its baked values plus any text/geometry overrides made before the
