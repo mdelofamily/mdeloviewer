@@ -1812,7 +1812,7 @@ function areaPickStart(onDone, onCancel) {
   cvs.style.cssText = 'position:absolute;left:0;top:0;z-index:6;pointer-events:none;image-rendering:pixelated;' +
     'width:' + (cols * T) + 'px;height:' + (rows * T) + 'px;';
   inner.appendChild(cvs);
-  var cx = d.cx = cvs.getContext('2d'); cx.fillStyle = 'rgba(255,210,63,.5)';
+  var cx = d.cx = cvs.getContext('2d'); cx.fillStyle = 'rgba(255,210,63,.2)';
 
   // control bar
   var bar = d.bar = document.createElement('div');
