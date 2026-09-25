@@ -379,7 +379,8 @@ var _TM_MIN_TIER = {
   'files':       'caretaker', // = ფაილები, new name
   'ფაილი':       'resident',  // delete an arbitrary bucket file by index/name (same severity as /rm)
   'სია':         'shadow_admin', // list logged-in users (nickname/name/email/tier)
-  'იუზერი':      'shadow_admin' // hard-delete a logged-in user (server re-checks in delete_user RPC)
+  'იუზერი':      'shadow_admin', // hard-delete a logged-in user (server re-checks in delete_user RPC)
+  'ობიექტი':     'resident'  // place/delete a catalog object on the map (object_overrides)
 };
 
 // Scoped elevation flag — true only while executing the commands *inside* a
@@ -491,6 +492,7 @@ async function _tmRun(raw) {
     'ზონები':      _tmAreas,
     'არე':         _tmArea,
     'ობიექტები':   _tmObjects,
+    'ობიექტი':     _tmObjectCmd,
     'დიალოგი':     _tmDlgEdit,
     'წასვლა':      _tmGo,
     'ლეგენდა':     _tmLegend,
@@ -560,6 +562,8 @@ function _tmHelp() {
     ['/ზონები',           'ზონების სია'],
     ['/არე [რედ|წაშ|აღდგენა|შევსება]', 'ზონები კონსოლიდან · /არე დახმარება'],
     ['/ობიექტები',        'ობიექტები + dialogue სტატუსი'],
+    ['/ობიექტი დადება <სახელი>', 'კატალოგის obj-ის დადება drag-ით (resident+)'],
+    ['/ობიექტი წაშ <სახელი>',    'კონსოლ-obj-ის წაშლა (resident+)'],
     ['/დიალოგი [სახელი]', 'DSL რედაქტირება · Ctrl+Enter შესანახად'],
     ['/წასვლა [N]',       'ზონაზე ნავიგაცია'],
     ['/ლეგენდა',          'აღწერას ჩვენა/დამალვა'],
@@ -665,6 +669,51 @@ function _tmObjects() {
     _tmL('tnf', '◆ ' + displayName + suffix);
   });
   _tmL('tdm', _SEP);
+}
+
+// /ობიექტი დადება <კატალოგის სახელი> — drag-and-drop placement (resident+).
+// /ობიექტი წაშ <instance-სახელი>      — hard delete (resident+); დიალოგი ცალკე
+//   ბრძანებით ემატება/იცვლება — /დიალოგი <instance-სახელი>, ისევე როგორც baked
+//   obj-ებზე (იხ. _dlgTargetByTitle/runtime.js).
+async function _tmObjectCmd(args) {
+  var sub = (args[0] || '').toLowerCase();
+
+  if (sub === 'დადება') {
+    var name = args.slice(1).join(' ').trim();
+    if (!name) { _tmL('ter', 'გამოყენება: /ობიექტი დადება <კატალოგის სახელი>'); return; }
+    var tile = (_CFG.custom || []).find(function (t) { return t.isObject && (t.lb === name || t.id === name); });
+    if (!tile) { _tmL('ter', 'კატალოგში ვერ მოიძებნა: "' + name + '"'); return; }
+    if (typeof window.objectPickStart !== 'function') { _tmL('ter', '✗ objectPickStart ვერ მოიძებნა (runtime.js?)'); return; }
+    _tmL('tdm', '🖐 ' + (tile.lb || tile.id) + ' — გადაათრიე ადგილზე, ✓ დასადებად, ✕ გასაუქმებლად');
+    window.objectPickStart(tile, function (pos) {
+      var instName = prompt('რა ვუწოდოთ ამ ' + (tile.lb || tile.id) + '-ს?');
+      if (instName == null) { _tmL('ter', 'გაუქმდა — სახელი არ იყო მითითებული'); return; }
+      instName = instName.trim();
+      if (!instName) { _tmL('ter', 'გაუქმდა — სახელი ცარიელია'); return; }
+      var objId = 'obj_console_' + Date.now();
+      window.objectOverrideSave(objId, {
+        tile_id: tile.id, x: pos.x, y: pos.y, cols: tile.cols || 1, rows: tile.rows || 1, title: instName
+      }).then(function (res) {
+        if (res === true) _tmL('tok', '✓ დაიდო: ' + instName + '  [/დიალოგი ' + instName + ' — დიალოგის მისაბმელად]');
+        else _tmL('ter', '✗ ვერ შეინახა' + (res && res.msg ? (' — ' + res.msg) : ''));
+      });
+    }, function () { _tmL('tdm', 'გაუქმდა'); });
+    return;
+  }
+
+  if (sub === 'წაშ') {
+    var target = args.slice(1).join(' ').trim();
+    if (!target) { _tmL('ter', 'გამოყენება: /ობიექტი წაშ <instance-სახელი>'); return; }
+    var hs = document.querySelector('.hotspot.hs-object[data-title="' + target.replace(/"/g, '\\"') + '"]');
+    if (!hs) { _tmL('ter', 'ვერ მოიძებნა კონსოლ-obj: "' + target + '" (ედიტორის obj-ების წაშლა ამ ბრძანებით არ ხდება)'); return; }
+    var objId = hs.dataset.objId;
+    var res = await window.objectOverrideDelete(objId);
+    if (res === true) _tmL('tok', '✓ წაიშალა: ' + target);
+    else _tmL('ter', '✗ ვერ წაიშალა' + (res && res.msg ? (' — ' + res.msg) : ''));
+    return;
+  }
+
+  _tmL('ter', 'გამოყენება: /ობიექტი დადება <სახელი> | /ობიექტი წაშ <სახელი>');
 }
 
 // /ლოგინი — თუ უკვე ხარ ავტორიზებული (access token ახლახან დამოწმებული),
@@ -1988,7 +2037,8 @@ function _tmDlgEdit(args) {
     return;
   }
 
-  // verify object exists — try data-title first, then obj.lb (renamed objects)
+  // verify object exists — try data-title first, then obj.lb (renamed objects); baked
+  // (_OBJS by oi) or console-placed (window._consoleObjs, by object_id) — both covered.
   var hs = document.querySelector('.hotspot[data-title="' + title.replace(/"/g, '\\"') + '"]:not(.hs-area):not(.no-interact)');
   if (!hs && typeof _OBJS !== 'undefined') {
     for (var _i = 0; _i < _OBJS.length; _i++) {
@@ -1997,6 +2047,15 @@ function _tmDlgEdit(args) {
         if (_c) { hs = _c; break; }
       }
     }
+  }
+  if (!hs && window._consoleObjs) {
+    window._consoleObjs.forEach(function (co, cid) {
+      if (hs) return;
+      if (typeof _lbMatches === 'function' && _lbMatches(co.lb, title)) {
+        var _c2 = document.querySelector('.hotspot.hs-object[data-obj-id="' + cid + '"]');
+        if (_c2) hs = _c2;
+      }
+    });
   }
   if (!hs) {
     _tmL('ter', 'ობიექტი ვერ მოიძებნა: "' + title + '"');
@@ -2010,8 +2069,8 @@ function _tmDlgEdit(args) {
   var dsl = '';
   if (typeof dlgGetCurrentDsl === 'function') dsl = dlgGetCurrentDsl(objKey, _tmEditLang);
 
-  var objForLb = (_OBJS && _OBJS[+hs.dataset.oi]) || null;
-  var dispLabel = (objForLb && typeof _objDisplayName === 'function' ? _objDisplayName(objForLb) : '') || objKey;
+  var tgtForLb = (typeof _dlgTargetByTitle === 'function') ? _dlgTargetByTitle(objKey) : null;
+  var dispLabel = (tgtForLb && tgtForLb.obj && typeof _objDisplayName === 'function' ? _objDisplayName(tgtForLb.obj) : '') || objKey;
 
   // fallback template if no dialogue exists yet — only valid in ka mode:
   // ka is authoritative, so a translation pass needs something to translate.
@@ -2177,8 +2236,8 @@ async function _tmSaveDlg(dsl) {
     return;
   }
 
-  var oi = (typeof _findOiByTitle === 'function') ? _findOiByTitle(title) : -1;
-  var existingNodes = (oi >= 0 && typeof _OBJS !== 'undefined' && _OBJS[oi] && Array.isArray(_OBJS[oi].dialogue)) ? _OBJS[oi].dialogue : [];
+  var tgt = (typeof _dlgTargetByTitle === 'function') ? _dlgTargetByTitle(title) : null;
+  var existingNodes = (tgt && tgt.obj && Array.isArray(tgt.obj.dialogue)) ? tgt.obj.dialogue : [];
 
   var merge = _tmMergeDlgNodes(existingNodes, nodes, _tmEditLang);
   if (merge.error) {
@@ -2193,7 +2252,7 @@ async function _tmSaveDlg(dsl) {
   // marker extraction and future ka edits sourced from this same field.
   var dslToSave = (_tmEditLang === 'en' && typeof dlgGetCurrentDsl === 'function') ? (dlgGetCurrentDsl(title, 'ka') || dsl) : dsl;
 
-  var existingLb = (oi >= 0 && typeof _OBJS !== 'undefined' && _OBJS[oi]) ? _OBJS[oi].lb : '';
+  var existingLb = (tgt && tgt.obj) ? tgt.obj.lb : '';
   var titleMerge = _tmMergeDlgTitle(existingLb, result.title, _tmEditLang);
   var titleEnToSave = titleMerge.en;
 
@@ -2956,7 +3015,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
 var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
-  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
+  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
 // ";" inside ordinary command args is left alone) — PLUS treats any [...]

@@ -127,6 +127,60 @@ function _mdeloRenderAreas(list) {
 window._mdeloMakeAreaEl = _mdeloMakeAreaEl;
 window._mdeloRenderAreas = _mdeloRenderAreas;
 
+// ── console-placed objects (dynamic, mdeloviewer terminal /ობიექტი) ──
+// Row shape (object_overrides): { object_id, tile_id, x, y, cols, rows, title, title_en }.
+// tile_id references a catalog tile in _CFG.custom (isObject:true) — the SAME catalog
+// baked objects draw from, so canvas-renderer.js needs no extra asset loading for these.
+// Pure additions on top of baked _CFG.objects (never merges/overrides one) — hard delete
+// only (see object_overrides in the migration SQL), unlike areas' soft-delete pattern.
+//
+// window._consoleObjs (object_id -> {lb,title,dialogue,requires,on_complete,marker}) caches
+// dialogue state patched in by _applyDlgOverride (dialogue_overrides is a separate table,
+// loaded independently) — without this cache a DOM rebuild here would wipe it, since this
+// function has no other memory of which console objects have a dialogue attached.
+window._consoleObjs = window._consoleObjs || new Map();
+
+function _mdeloMakeObjectEl(o) {
+  var TS = _TS;
+  var co = window._consoleObjs.get(o.object_id);
+  var hasDlg = !!(co && co.dialogue && co.dialogue.length);
+  var hasInteraction = !!(o.title || (co && co.marker) || (hasDlg && co.dialogue[0] && co.dialogue[0].text));
+  var el = document.createElement('div');
+  el.className = 'hotspot hs-object' + (hasInteraction ? '' : ' no-interact');
+  _mdeloPlace(el, o.x * TS, o.y * TS, (o.cols || 1) * TS, (o.rows || 1) * TS);
+  el.setAttribute('data-title', o.title || '');
+  if (o.title_en) el.setAttribute('data-title-en', o.title_en);
+  el.setAttribute('data-obj-id', o.object_id);
+  el.setAttribute('data-tile-id', o.tile_id);
+  if (hasDlg) el.setAttribute('data-dialog-id', 'dlg_obj_' + o.object_id);
+  if (hasInteraction) {
+    var mkChar = co && co.marker;
+    var markerCls = mkChar === '!' ? 'exc' : mkChar === '?' ? 'q' : mkChar === '...' ? 'chat' : '';
+    var mk = document.createElement('div');
+    if (markerCls) { mk.className = 'hs-marker ' + markerCls; mk.textContent = mkChar; }
+    else { mk.className = 'hs-dot'; }
+    el.appendChild(mk);
+  }
+  return el;
+}
+// (Re)build every .hs-object div from a list of object_overrides rows, and hand
+// canvas-renderer.js the plain {tile_id,x,y,cols,rows} it needs to paint them
+// (window._dynamicObjects, read by its composite() pass — see canvas-renderer.js).
+function _mdeloRenderObjects(list) {
+  var inner = document.getElementById('mapInner');
+  if (!inner) return;
+  inner.querySelectorAll('.hs-object').forEach(function (e) { e.remove(); });
+  var frag = document.createDocumentFragment();
+  (list || []).forEach(function (o) { frag.appendChild(_mdeloMakeObjectEl(o)); });
+  inner.appendChild(frag);
+  window._dynamicObjects = (list || []).map(function (o) {
+    return { tile_id: o.tile_id, x: o.x, y: o.y, cols: o.cols, rows: o.rows };
+  });
+  if (typeof window.redrawMap === 'function') window.redrawMap();
+}
+window._mdeloMakeObjectEl = _mdeloMakeObjectEl;
+window._mdeloRenderObjects = _mdeloRenderObjects;
+
 function _mdeloBuildMapDom() {
   var TS = _TS, cfg = _CFG;
   var inner = document.getElementById('mapInner');
@@ -887,7 +941,9 @@ wrap.addEventListener('click', e => {
       if (t) openAreaPopup(_areaDisp(hs, 'title') || t, _areaDisp(hs, 'tooltip'));
     } else {
       const oi = hs.dataset.oi;
-      const objData = (oi != null && _OBJS[+oi]) ? _OBJS[+oi] : null;
+      const cid = hs.dataset.objId;
+      const objData = (oi != null && _OBJS[+oi]) ? _OBJS[+oi]
+                     : (cid && window._consoleObjs.has(cid)) ? window._consoleObjs.get(cid) : null;
       const displayTitle = _objDisplayName(objData) || hs.dataset.title || '';
       const _dlgId = hs.dataset.dialogId;
       const _dlgEntry = (_dlgId && window.DIALOGS) ? window.DIALOGS[_dlgId] : null;
@@ -1812,7 +1868,7 @@ function areaPickStart(onDone, onCancel) {
   cvs.style.cssText = 'position:absolute;left:0;top:0;z-index:6;pointer-events:none;image-rendering:pixelated;' +
     'width:' + (cols * T) + 'px;height:' + (rows * T) + 'px;';
   inner.appendChild(cvs);
-  var cx = d.cx = cvs.getContext('2d'); cx.fillStyle = 'rgba(255,210,63,.2)';
+  var cx = d.cx = cvs.getContext('2d'); cx.fillStyle = 'rgba(255,210,63,.5)';
 
   // control bar
   var bar = d.bar = document.createElement('div');
@@ -1928,12 +1984,116 @@ function areaPickStart(onDone, onCancel) {
 window.areaPickStart = areaPickStart;
 window.areaPickClear = areaPickClear;
 
+// ── object placement (drag-and-drop, /ობიექტი დადება) ──
+// Drags a footprint-sized "carpet" — the exact same visual language as .hs-area,
+// just at .25 opacity instead of the area fill's .5 — that follows the finger,
+// snapped to the grid, turning red where the object doesn't fit. Deliberately NOT
+// a canvas ghost-sprite pass (that would need a new render mode); a plain absolute
+// DOM overlay is enough, same as areas already are.
+//
+// Collision = bounding-box overlap, checked against BOTH baked _CFG.objects AND
+// other console object_overrides rows, plus the map's own COLS/ROWS bounds.
+function _objFootprint(o) { return { x1: o.x, y1: o.y, x2: o.x + (o.cols || 1), y2: o.y + (o.rows || 1) }; }
+function _objAllFootprints(excludeId) {
+  var list = (_CFG.objects || []).map(_objFootprint);
+  (_objOvRows || []).forEach(function (o) { if (!excludeId || o.object_id !== excludeId) list.push(_objFootprint(o)); });
+  return list;
+}
+function _objFits(x, y, cols, rows, excludeId) {
+  var COLS = _CFG.cols, ROWS = _CFG.rows;
+  if (x < 0 || y < 0 || x + cols > COLS || y + rows > ROWS) return false;
+  return !_objAllFootprints(excludeId).some(function (f) {
+    return x < f.x2 && f.x1 < x + cols && y < f.y2 && f.y1 < y + rows;
+  });
+}
+window._objFits = _objFits;
+
+var _objDraw = null; // { cols, rows, ghost, bar, listeners, x, y, valid }
+function _objDrawStop() {
+  var d = _objDraw; if (!d) return;
+  d.listeners.forEach(function (l) { wrap.removeEventListener(l[0], l[1], l[2]); });
+}
+function objectPickClear() {
+  if (!_objDraw) return;
+  _objDrawStop();
+  if (_objDraw.ghost) _objDraw.ghost.remove();
+  if (_objDraw.bar) _objDraw.bar.remove();
+  _objDraw = null;
+  window._objDrawActive = false;
+}
+window.objectPickClear = objectPickClear;
+
+// tile = catalog custom-tile def ({id, lb, cols, rows, ...}, from _CFG.custom).
+// onDone({x,y}) fires only on a valid ✓ confirm; onCancel() on ✕.
+function objectPickStart(tile, onDone, onCancel) {
+  objectPickClear();
+  var T = _TS, cols = tile.cols || 1, rows = tile.rows || 1;
+  var d = _objDraw = { cols: cols, rows: rows, listeners: [], x: 0, y: 0, valid: false };
+  window._objDrawActive = true;
+
+  var ghost = d.ghost = document.createElement('div');
+  ghost.style.cssText = 'position:absolute;z-index:6;pointer-events:none;border-radius:4px;' +
+    'width:' + (cols * T) + 'px;height:' + (rows * T) + 'px;';
+  inner.appendChild(ghost);
+
+  var bar = d.bar = document.createElement('div');
+  bar.style.cssText = 'position:fixed;top:56px;left:50%;transform:translateX(-50%);z-index:35;display:flex;' +
+    'align-items:center;justify-content:center;gap:10px;padding:8px 12px;border-radius:10px;' +
+    'background:rgba(13,17,23,.92);border:1px solid rgba(255,210,63,.55);color:#ffd23f;font:13px sans-serif;';
+  var msg = document.createElement('span');
+  msg.textContent = '🖐 ' + (tile.lb || tile.id) + ' — გადაათრიე, ✓ დასადებად';
+  function mkBtn(txt) {
+    var b = document.createElement('button');
+    b.textContent = txt;
+    b.style.cssText = 'background:rgba(255,210,63,.14);border:1px solid rgba(255,210,63,.5);border-radius:8px;' +
+      'color:#ffd23f;font-size:18px;line-height:1;padding:6px 12px;cursor:pointer;';
+    return b;
+  }
+  var okBtn = mkBtn('✓'), noBtn = mkBtn('✕');
+  okBtn.onclick = function () {
+    if (!d.valid) { msg.textContent = '✗ ეს ადგილი არ ჯდება — გადაათრიე'; return; }
+    var pos = { x: d.x, y: d.y };
+    objectPickClear();
+    if (onDone) onDone(pos);
+  };
+  noBtn.onclick = function () { objectPickClear(); if (onCancel) onCancel(); };
+  bar.appendChild(msg); bar.appendChild(okBtn); bar.appendChild(noBtn);
+  document.body.appendChild(bar);
+
+  function place(cx, cy) {
+    d.x = cx; d.y = cy;
+    d.valid = _objFits(cx, cy, cols, rows);
+    ghost.style.left = (cx * T) + 'px'; ghost.style.top = (cy * T) + 'px';
+    ghost.style.background = d.valid ? 'rgba(255,210,63,.25)' : 'rgba(255,60,60,.35)';
+    ghost.style.border = '2px solid ' + (d.valid ? 'rgba(255,210,63,.7)' : 'rgba(255,60,60,.85)');
+  }
+  place(Math.max(0, ((_CFG.cols || 1) - cols) >> 1), Math.max(0, ((_CFG.rows || 1) - rows) >> 1));
+
+  function cellFromTouch(t) {
+    var r = wrap.getBoundingClientRect(), s = T * scale;
+    return [
+      Math.round((t.clientX - r.left + wrap.scrollLeft) / s - cols / 2),
+      Math.round((t.clientY - r.top + wrap.scrollTop) / s - rows / 2)
+    ];
+  }
+  function onTouch(e) {
+    if (e.touches.length !== 1) return;
+    if (e.cancelable) e.preventDefault();
+    var p = cellFromTouch(e.touches[0]);
+    place(p[0], p[1]);
+  }
+  function swallowClick(e) { e.stopPropagation(); e.preventDefault(); }
+  [['touchstart', onTouch, { passive: false }], ['touchmove', onTouch, { passive: false }],
+   ['click', swallowClick, true]].forEach(function (l) { d.listeners.push(l); wrap.addEventListener(l[0], l[1], l[2]); });
+}
+window.objectPickStart = objectPickStart;
+
 // ── long-press for spot link ──
 (function () {
   const TS2 = _TS;
   let _ltTimer = null, _ltSuppress = false;
   wrap.addEventListener('touchstart', e => {
-    if (e.touches.length !== 1 || window._areaDrawActive) return;
+    if (e.touches.length !== 1 || window._areaDrawActive || window._objDrawActive) return;
     const t = e.touches[0], sx = t.clientX, sy = t.clientY;
     _ltTimer = setTimeout(() => {
       _ltTimer = null; _ltSuppress = true;
@@ -2162,6 +2322,14 @@ function _startRealtime() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'area_overrides' }, _areaRtEvent)
       .subscribe(function (status) {
         if (status === 'SUBSCRIBED') { if (_areaRtSeen) loadAreaOverrides(); _areaRtSeen = true; }
+      });
+    // object overrides channel — every viewer sees /ობიექტი changes live, same
+    // reconnect-refetch pattern as area-overrides above.
+    var _objRtSeen = false;
+    client.channel('object-overrides')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'object_overrides' }, _objRtApply)
+      .subscribe(function (status) {
+        if (status === 'SUBSCRIBED') { if (_objRtSeen) loadObjectOverrides(); _objRtSeen = true; }
       });
   } catch (e) {}
 }
@@ -2563,6 +2731,24 @@ function _findOiByTitle(title) {
   return (hs && hs.dataset.oi != null) ? +hs.dataset.oi : -1;
 }
 
+// Unified dialogue-target lookup by title — a baked object (_OBJS[oi]) or a
+// console-placed one (window._consoleObjs, by object_id), behind one shape so the
+// dialogue pipeline (openHsPopup via the click dispatcher, _applyDlgOverride,
+// dlgGetCurrentDsl, _tmSaveDlg in terminal.js) never needs to know which kind it is.
+function _dlgTargetByTitle(title) {
+  var oi = _findOiByTitle(title);
+  if (oi >= 0 && typeof _OBJS !== 'undefined' && _OBJS[oi]) {
+    return { oi: oi, cid: null, obj: _OBJS[oi], dlgId: 'dlg_' + oi,
+      hs: document.querySelector('.hotspot[data-oi="' + oi + '"]:not(.hs-area)') };
+  }
+  var hs = document.querySelector('.hotspot.hs-object[data-title="' + title.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]');
+  var cid = hs && hs.dataset.objId;
+  if (!cid) return null;
+  if (!window._consoleObjs.has(cid)) window._consoleObjs.set(cid, { lb: title, title: title, dialogue: [] });
+  return { oi: -1, cid: cid, obj: window._consoleObjs.get(cid), dlgId: 'dlg_obj_' + cid, hs: hs };
+}
+window._dlgTargetByTitle = _dlgTargetByTitle;
+
 // Update hotspot DOM marker element.
 // mk = internal marker string: '!' | '?' | '💬' | ''
 // Creates .hs-marker if missing; hides/shows .hs-dot accordingly.
@@ -2613,11 +2799,13 @@ function _markerRestore() {
   } catch(e) { _mkRestoring = false; }
 }
 
-// Patch _OBJS[oi].dialogue with data from Supabase row
+// Patch a dialogue target (baked _OBJS[oi] OR console window._consoleObjs entry) with
+// data from a Supabase dialogue_overrides row. One code path for both — see
+// _dlgTargetByTitle above for why a console-placed object can share this at all.
 function _applyDlgOverride(row) {
   if (!row || !row.obj_title || !row.nodes_json) return;
-  var oi = _findOiByTitle(row.obj_title);
-  if (oi < 0 || typeof _OBJS === 'undefined' || !_OBJS[oi]) return;
+  var tgt = _dlgTargetByTitle(row.obj_title);
+  if (!tgt) return;
 
   var _dedupeObjPrefix = function (s) { return typeof s === 'string' ? s.replace(/__OBJ___OBJ__/g, '__OBJ__') : s; };
   var nodes = (Array.isArray(row.nodes_json) ? row.nodes_json : []).map(function(node) {
@@ -2627,7 +2815,7 @@ function _applyDlgOverride(row) {
       : { ka: _dedupeObjPrefix(node.text.ka), en: _dedupeObjPrefix(node.text.en) };
     return Object.assign({}, node, { text: fixedText });
   });
-  _OBJS[oi].dialogue = nodes;
+  tgt.obj.dialogue = nodes;
 
   if (row.dsl && typeof parseBulkDSL === 'function') {
     try {
@@ -2635,44 +2823,47 @@ function _applyDlgOverride(row) {
       if (typeof parseUnlockHeaders === 'function') {
         var unlockData = parseUnlockHeaders(dslRaw);
         dslRaw = unlockData.dsl;
-        _OBJS[oi].requires    = unlockData.requires;
-        _OBJS[oi].on_complete = unlockData.on_complete;
+        tgt.obj.requires    = unlockData.requires;
+        tgt.obj.on_complete = unlockData.on_complete;
         if (unlockData.on_complete && unlockData.on_complete.set_markers) {
           unlockData.on_complete.set_markers.forEach(function(m) {
             var el = document.querySelector('.hotspot[data-title="' + m.title + '"]:not(.hs-area)');
             if (el) _applyMarkerDom(el, m.mk);
             var tOi = el ? el.dataset.oi : null;
             if (tOi != null && _OBJS[+tOi]) _OBJS[+tOi].marker = m.mk === '~' ? '...' : m.mk;
+            var tCid = el ? el.dataset.objId : null;
+            if (tCid && window._consoleObjs.has(tCid)) window._consoleObjs.get(tCid).marker = m.mk === '~' ? '...' : m.mk;
           });
         }
       }
       var parsed = parseBulkDSL(dslRaw.trim() || '@0\n');
       var mk = parsed.marker === '...' ? '💬' : (parsed.marker || '');
-      if (mk) _OBJS[oi].marker = mk;
+      if (mk) tgt.obj.marker = mk;
       if (parsed.title) {
         // dsl is always the ka-canonical structure (see _tmSaveDlg), so
         // parsed.title is always the ka name here — title_en travels
         // separately since it never lives inside dsl.
-        var oldLb = _OBJS[oi].lb;
+        var oldLb = tgt.obj.lb;
         var oldTitleEn = (oldLb && typeof oldLb === 'object') ? (oldLb.en || '') : '';
         var newLb = { ka: parsed.title, en: (row.title_en != null ? row.title_en : oldTitleEn) };
-        _OBJS[oi].lb = newLb;
-        _OBJS[oi].title = newLb;
+        tgt.obj.lb = newLb;
+        tgt.obj.title = newLb;
       }
-      var hsEl = document.querySelector('.hotspot[data-oi="' + oi + '"]:not(.hs-area)');
+      var hsEl = tgt.hs;
       // only apply Supabase marker if: has marker AND user has no local override
+      // (console objects don't participate in the oi-keyed local marker override at all)
       var _mkStored = JSON.parse(localStorage.getItem(_MK_KEY) || '{}');
-      if (mk && !(_mkStored.hasOwnProperty(String(oi)))) {
+      if (mk && (tgt.oi < 0 || !_mkStored.hasOwnProperty(String(tgt.oi)))) {
         _applyMarkerDom(hsEl, mk);
       }
-      // sync window.DIALOGS so completeDialog sees updated requires/on_complete
+      if (hsEl && tgt.oi < 0) hsEl.setAttribute('data-dialog-id', tgt.dlgId);
+      // sync window.DIALOGS so completeDialog/canTrigger see updated requires/on_complete —
+      // baked objects already have a dlg_N entry from data.js; console ones get one here.
       if (window.DIALOGS) {
-        var _dlgKey = 'dlg_' + oi;
-        if (window.DIALOGS[_dlgKey]) {
-          window.DIALOGS[_dlgKey].requires    = _OBJS[oi].requires;
-          window.DIALOGS[_dlgKey].on_complete = _OBJS[oi].on_complete;
-          window.DIALOGS[_dlgKey].dialogue    = _OBJS[oi].dialogue;
-        }
+        if (!window.DIALOGS[tgt.dlgId]) window.DIALOGS[tgt.dlgId] = { id: tgt.dlgId };
+        window.DIALOGS[tgt.dlgId].requires    = tgt.obj.requires;
+        window.DIALOGS[tgt.dlgId].on_complete = tgt.obj.on_complete;
+        window.DIALOGS[tgt.dlgId].dialogue    = tgt.obj.dialogue;
       }
     } catch(e) {}
   }
@@ -2783,9 +2974,9 @@ window.dlgOverrideSave = async function(objTitle, nodesJson, dsl, titleEn) {
 
 // Get current DSL string for an object — called from terminal.js
 window.dlgGetCurrentDsl = function(objTitle, lang) {
-  var oi = _findOiByTitle(objTitle);
-  if (oi < 0 || typeof _OBJS === 'undefined' || !_OBJS[oi]) return '';
-  var obj = _OBJS[oi];
+  var tgt = _dlgTargetByTitle(objTitle);
+  if (!tgt) return '';
+  var obj = tgt.obj;
   var dsl = '';
   if (obj.dialogue && obj.dialogue.length && typeof unparseDialogue === 'function') {
     dsl = unparseDialogue({ lb: obj.lb || objTitle, dialogue: obj.dialogue, marker: obj.marker || '' }, lang);
@@ -3120,6 +3311,89 @@ window.areaDeletedList = function () {
   return out;
 };
 
+// ── object overrides (Supabase object_overrides) — console-placed catalog objects ──
+// Row: { map_id, object_id, tile_id, x, y, cols, rows, title, title_en }. Pure additions
+// on top of baked _CFG.objects (never merges/overrides one) — hard delete only, unlike
+// areas' soft-delete pattern (a removed console object is just re-placed if needed again).
+var _objOvRows = [];
+
+async function loadObjectOverrides() {
+  try {
+    var r = await fetch(
+      SUPA_URL + '/rest/v1/object_overrides?map_id=eq.' + encodeURIComponent(_MAP_ID),
+      { headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY } }
+    );
+    if (!r.ok) { _syncSnapRestore('objects', function (rows) { _objOvRows = rows; _mdeloRenderObjects(_objOvRows); }); return; }
+    var rows = await r.json();
+    _objOvRows = rows;
+    _mdeloRenderObjects(_objOvRows);
+    _syncSnapSave('objects', rows);
+  } catch (e) {
+    _syncSnapRestore('objects', function (rows) { _objOvRows = rows; _mdeloRenderObjects(_objOvRows); });
+  }
+}
+window.loadObjectOverrides = loadObjectOverrides;
+
+// ── object_overrides realtime (channel set up in _startRealtime) ──
+function _objRtApply(payload) {
+  var isDel = payload.eventType === 'DELETE';
+  var row = isDel ? payload.old : payload.new;
+  if (!row || row.map_id !== _MAP_ID || !row.object_id) return;
+  var i = _objOvRows.findIndex(function (x) { return x.object_id === row.object_id; });
+  if (isDel) {
+    if (i >= 0) _objOvRows.splice(i, 1); else return;
+    window._consoleObjs.delete(row.object_id);
+  } else if (i >= 0) _objOvRows[i] = row;
+  else _objOvRows.push(row);
+  _syncSnapSave('objects', _objOvRows);
+  _mdeloRenderObjects(_objOvRows);
+}
+window._objRtApply = _objRtApply;
+
+// Insert/upsert one console object — called from terminal.js (/ობიექტი დადება).
+window.objectOverrideSave = async function (objectId, fields) {
+  try {
+    var row = Object.assign({ map_id: _MAP_ID, object_id: objectId, updated_at: new Date().toISOString() }, fields);
+    var r = await fetch(SUPA_URL + '/rest/v1/object_overrides', {
+      method: 'POST',
+      headers: Object.assign({
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      }, _authHeaders()),
+      body: JSON.stringify([row])
+    });
+    if (r.ok) {
+      var i = _objOvRows.findIndex(function (x) { return x.object_id === objectId; });
+      if (i >= 0) Object.assign(_objOvRows[i], row); else _objOvRows.push(row);
+      _syncSnapSave('objects', _objOvRows);
+      _mdeloRenderObjects(_objOvRows);
+      return true;
+    }
+    var errBody = r.text ? await r.text().catch(function () { return ''; }) : '';
+    return { ok: false, status: r.status, msg: errBody.slice(0, 150) };
+  } catch (e) { return { ok: false, status: 0, msg: e.message }; }
+};
+
+// Hard delete — called from terminal.js (/ობიექტი წაშ).
+window.objectOverrideDelete = async function (objectId) {
+  try {
+    var r = await fetch(
+      SUPA_URL + '/rest/v1/object_overrides?map_id=eq.' + encodeURIComponent(_MAP_ID) + '&object_id=eq.' + encodeURIComponent(objectId),
+      { method: 'DELETE', headers: Object.assign({ 'Prefer': 'return=minimal' }, _authHeaders()) }
+    );
+    if (r.ok) {
+      var i = _objOvRows.findIndex(function (x) { return x.object_id === objectId; });
+      if (i >= 0) _objOvRows.splice(i, 1);
+      window._consoleObjs.delete(objectId);
+      _syncSnapSave('objects', _objOvRows);
+      _mdeloRenderObjects(_objOvRows);
+      return true;
+    }
+    var errBody = r.text ? await r.text().catch(function () { return ''; }) : '';
+    return { ok: false, status: r.status, msg: errBody.slice(0, 150) };
+  } catch (e) { return { ok: false, status: 0, msg: e.message }; }
+};
+
 // Partial upsert — called from terminal.js. `fields` may include any of:
 // parent_id, icon, title, items_json, deleted. Only the given keys are written;
 // PostgREST's merge-duplicates upsert leaves every other column untouched.
@@ -3430,7 +3704,10 @@ window.toggleTodoInExport = function(todoId) {
 window.addEventListener('load', async () => {
   await _authBoot();
   loadNotifs();
-  loadDialogueOverrides().then(_markerRestore);
+  // object overrides MUST render before dialogue overrides are applied — dialogue
+  // lookup for a console object finds it by its .hs-object DOM element (see
+  // _dlgTargetByTitle), which only exists once loadObjectOverrides() has run.
+  loadObjectOverrides().then(function () { loadDialogueOverrides().then(_markerRestore); });
   loadTodoState();
   loadMenuOverrides();
   loadMacroOverrides();

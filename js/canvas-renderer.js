@@ -7,6 +7,8 @@
 //                         images have loaded it is a no-op; the first paint happens by itself).
 //   window._areaFills   - [{ x1, y1, x2, y2, tile }] active fill overlays (x2/y2 exclusive),
 //                         maintained by runtime.js from area_overrides. Read on every paint.
+//   window._dynamicObjects - [{ tile_id, x, y, cols, rows }] console-placed objects (/ობიექტი),
+//                         maintained by runtime.js from object_overrides. Read on every paint.
 
 (function () {
   const cfg = _CFG, TS = _TS, COLS = cfg.cols, ROWS = cfg.rows;
@@ -115,7 +117,25 @@
     renderLayer(lmap, ids);
   }
 
-  // ── composite: base -> overlay -> fills -> objects ──
+  // ── console-placed objects (window._dynamicObjects, from object_overrides) ──
+  // tile_id references the SAME catalog (cfg.custom, isObject:true) baked objects
+  // draw from, so no extra asset loading is needed here — just another consumer
+  // of the tileMap/sheets/b64imgs already built above.
+  function renderDynamicObjects() {
+    (window._dynamicObjects || []).forEach(o => {
+      const def = tileMap.get(o.tile_id); if (!def) return;
+      const dx = o.x * TS, dy = o.y * TS, w = (o.cols || 1) * TS, h = (o.rows || 1) * TS;
+      if (def.sheetUrl) {
+        const sh = sheets.get(def.sheetUrl);
+        if (sh) ctx.drawImage(sh, def.x, def.y, def.w, def.h, dx, dy, w, h);
+      } else {
+        const im = b64imgs.get(def.id);
+        if (im) ctx.drawImage(im, dx, dy, w, h);
+      }
+    });
+  }
+
+  // ── composite: base -> overlay -> fills -> objects (baked, then console) ──
   function composite() {
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -136,6 +156,7 @@
         if (im) ctx.drawImage(im, dx, dy, w, h);
       }
     });
+    renderDynamicObjects();
   }
 
   function onAllLoaded() { ready = true; composite(); }
