@@ -486,7 +486,7 @@ function _tierCacheKey(userId) { return 'mdelo_tier_cache_' + userId; }
 function _tierCacheSave(userId, row) { try { localStorage.setItem(_tierCacheKey(userId), JSON.stringify(row)); } catch (e) {} }
 function _tierCacheLoad(userId) { try { return JSON.parse(localStorage.getItem(_tierCacheKey(userId)) || 'null'); } catch (e) { return null; } }
 
-async function _authLoadTier() {
+async function _authLoadTier(_retried) {
   const s = _authGetSession();
   if (!s || !s.user) { window._myTier = null; return null; }
   try {
@@ -502,6 +502,15 @@ async function _authLoadTier() {
       if (r.status !== 401 && r.status !== 403) {
         const cachedOnBadStatus = _tierCacheLoad(s.user.id);
         if (cachedOnBadStatus) { window._myTier = cachedOnBadStatus; return cachedOnBadStatus; }
+      } else if (!_retried) {
+        // 401/403 isn't necessarily a confirmed rejection either: expires_at
+        // is just a client-side timer, unaware of connectivity, so on flaky
+        // connections (metro, tunnels) the REST request can land AFTER the
+        // access_token has quietly expired while the refresh_token is still
+        // perfectly valid. Try one real refresh + a single retry before
+        // trusting this 401/403 as "Supabase confirms this token is dead".
+        await _authMaybeRefresh();
+        if (window.isLoggedIn()) return await _authLoadTier(true);
       }
       const errBody = await r.text().catch(() => '');
       if (typeof toast === 'function') toast('✗ tier GET ჩავარდა (' + r.status + '): ' + errBody.slice(0, 100));
@@ -536,6 +545,10 @@ async function _authLoadTier() {
       if (c.status !== 401 && c.status !== 403) {
         const cachedOnBadStatus2 = _tierCacheLoad(s.user.id);
         if (cachedOnBadStatus2) { window._myTier = cachedOnBadStatus2; return cachedOnBadStatus2; }
+      } else if (!_retried) {
+        // Same flaky-connectivity token-expiry risk as the GET branch above.
+        await _authMaybeRefresh();
+        if (window.isLoggedIn()) return await _authLoadTier(true);
       }
       const errBody = await c.text().catch(() => '');
       if (typeof toast === 'function') toast('✗ tier POST ჩავარდა (' + c.status + '): ' + errBody.slice(0, 100));
