@@ -2041,7 +2041,7 @@ function objectPickStart(tile, onDone, onCancel) {
     'align-items:center;justify-content:center;gap:10px;padding:8px 12px;border-radius:10px;' +
     'background:rgba(13,17,23,.92);border:1px solid rgba(255,210,63,.55);color:#ffd23f;font:13px sans-serif;';
   var msg = document.createElement('span');
-  msg.textContent = '🖐 ' + (tile.lb || tile.id) + ' — გადაათრიე, ✓ დასადებად';
+  msg.textContent = '🖐 ' + (tile.lb || tile.id) + ' — დაიჭირე და გადაათრიე, ✓ დასადებად';
   function mkBtn(txt) {
     var b = document.createElement('button');
     b.textContent = txt;
@@ -2076,14 +2076,43 @@ function objectPickStart(tile, onDone, onCancel) {
       Math.round((t.clientY - r.top + wrap.scrollTop) / s - rows / 2)
     ];
   }
-  function onTouch(e) {
-    if (e.touches.length !== 1) return;
-    if (e.cancelable) e.preventDefault();
-    var p = cellFromTouch(e.touches[0]);
-    place(p[0], p[1]);
+
+  // Same gesture model as areaPickStart's brush: a plain swipe is the map's own
+  // pan (native scroll, untouched) and two fingers are its own pinch — dragging
+  // the ghost only takes over the touch after a short HOLD, exactly like painting
+  // an area does. This is what lets you pan/zoom to the right spot before dropping.
+  var HOLD_MS = 350, SLOP = 6;
+  var holdT = null, sx = 0, sy = 0, dragging = false, multi = false;
+  function cancelHold() { if (holdT) { clearTimeout(holdT); holdT = null; } }
+
+  function onStart(e) {
+    cancelHold();
+    if (e.touches.length >= 2) { multi = true; return; }
+    if (multi) return;
+    var t = e.touches[0]; sx = t.clientX; sy = t.clientY;
+    holdT = setTimeout(function () {
+      holdT = null; dragging = true;
+      place.apply(null, cellFromTouch({ clientX: sx, clientY: sy }));
+      if (navigator.vibrate) { try { navigator.vibrate(25); } catch (er) {} }
+    }, HOLD_MS);
+  }
+  function onMove(e) {
+    if (e.touches.length >= 2 || multi) return;
+    var t = e.touches[0];
+    if (!dragging) {                                // no hold yet: moving means "pan" — leave it to native scroll
+      if (holdT && Math.hypot(t.clientX - sx, t.clientY - sy) > SLOP) cancelHold();
+      return;
+    }
+    if (e.cancelable) e.preventDefault();            // dragging the ghost: keep the map from scrolling under it
+    place.apply(null, cellFromTouch(t));
+  }
+  function onEnd(e) {
+    cancelHold();
+    if (e.touches.length === 0) { dragging = false; multi = false; }
   }
   function swallowClick(e) { e.stopPropagation(); e.preventDefault(); }
-  [['touchstart', onTouch, { passive: false }], ['touchmove', onTouch, { passive: false }],
+  [['touchstart', onStart, { passive: false }], ['touchmove', onMove, { passive: false }],
+   ['touchend', onEnd, { passive: false }], ['touchcancel', onEnd, { passive: false }],
    ['click', swallowClick, true]].forEach(function (l) { d.listeners.push(l); wrap.addEventListener(l[0], l[1], l[2]); });
 }
 window.objectPickStart = objectPickStart;
@@ -3141,6 +3170,22 @@ function _mdeloSyncFills(list) {
     return { x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, tile: a.fill_tile_id };
   });
   if (typeof window.redrawMap === 'function') window.redrawMap();
+
+  // A fill that just expired takes its whole area down with it — an expired fill
+  // shouldn't leave an empty area shell sitting on the map, it should disappear
+  // entirely, same as a manual /არე წაშ (deleted:true, no fill-field nulling needed —
+  // _mergedAreas already drops deleted rows before _mdeloSyncFills ever sees them).
+  // "Whole area" = every rectangle sharing the group's label, same rule /არე წაშ uses.
+  var expiredLabels = {};
+  list.forEach(function (a) {
+    if (a.fill_tile_id && a.filled_at && a.fill_days > 0 && !_areaFillActive(a)) expiredLabels[a.label] = true;
+  });
+  if (Object.keys(expiredLabels).length && typeof areaOverrideSaveRows === 'function') {
+    var toDelete = list.filter(function (a) { return expiredLabels[a.label]; })
+      .map(function (a) { return { id: a.id, fields: { deleted: true } }; });
+    if (toDelete.length) areaOverrideSaveRows(toDelete);
+  }
+
   // repaint once the earliest active fill expires (setTimeout max ~24.8 days — clamp, re-arms itself)
   clearTimeout(_areaFillTimer); _areaFillTimer = null;
   var next = null;

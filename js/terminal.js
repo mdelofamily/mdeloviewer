@@ -684,7 +684,7 @@ async function _tmObjectCmd(args) {
     var tile = (_CFG.custom || []).find(function (t) { return t.isObject && (t.lb === name || t.id === name); });
     if (!tile) { _tmL('ter', 'კატალოგში ვერ მოიძებნა: "' + name + '"'); return; }
     if (typeof window.objectPickStart !== 'function') { _tmL('ter', '✗ objectPickStart ვერ მოიძებნა (runtime.js?)'); return; }
-    _tmL('tdm', '🖐 ' + (tile.lb || tile.id) + ' — გადაათრიე ადგილზე, ✓ დასადებად, ✕ გასაუქმებლად');
+    _tmL('tdm', '🖐 ' + (tile.lb || tile.id) + ' — რუკაზე გადაადგილება ჩვეულებრივია, ადგილზე დაიჭირე და გადაათრიე, ✓ დასადებად, ✕ გასაუქმებლად');
     window.objectPickStart(tile, function (pos) {
       var instName = prompt('რა ვუწოდოთ ამ ' + (tile.lb || tile.id) + '-ს?');
       if (instName == null) { _tmL('ter', 'გაუქმდა — სახელი არ იყო მითითებული'); return; }
