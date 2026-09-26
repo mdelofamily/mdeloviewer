@@ -483,6 +483,16 @@ async function _tmRun(raw) {
     return;
   }
 
+  // ── "/<obj-სახელი> შესვლა" — ინტერიერის სცენაში შესვლა (interior-scenes.js) ──
+  // Dynamic-name command: obj/scene name comes FIRST, fixed keyword "შესვლა" last —
+  // unlike every other command here, so it's matched before the parts[0]-keyed
+  // dispatch table below (which would otherwise treat the name as an unknown cmd).
+  // Matches interior_scenes.title_ka against the SAME name used to place/name the
+  // outdoor object (objects.interior_scene_id linking is a separate, not-yet-built
+  // sub-scope — this name-match is the v1 stand-in).
+  var sceneEnterM = full.match(/^(.+?)\s+შესვლა$/);
+  if (sceneEnterM) { await _tmSceneEnter(sceneEnterM[1].trim()); return; }
+
   var parts = full.split(/\s+/), cmd = parts[0], args = parts.slice(1);
   var map = {
     'დახმარება':   _tmHelp,
@@ -552,6 +562,23 @@ async function _tmRun(raw) {
   _tmL('ter', 'უცნობი ბრძანება: "/' + cmd + '" — სცადე: /დახმარება');
 }
 
+// /<obj-სახელი> შესვლა — ინტერიერის სცენაში შესვლა. Tier-შეზღუდვის გარეშე
+// (ნებისმიერ ვიზიტორს შეუძლია უკვე დახატულ სცენაში შესვლა/ნახვა — resident+
+// მხოლოდ სცენის/hotspot-ის შექმნას/რედაქტირებას ეხება, ცალკე scope-ია).
+async function _tmSceneEnter(name) {
+  if (!name) { _tmL('ter', 'გამოყენება: /<სახელი> შესვლა'); return; }
+  if (typeof window.sceneEnterByTitle !== 'function') {
+    _tmL('ter', '✗ sceneEnterByTitle ვერ მოიძებნა (interior-scenes.js?)');
+    return;
+  }
+  var res;
+  try { res = await window.sceneEnterByTitle(name); }
+  catch (e) { _tmL('ter', '✗ შეცდომა სცენის ჩატვირთვისას'); return; }
+  if (res === true) { closeTerm(); }
+  else if (res === false) { _tmL('tnf', 'სცენა ვერ მოიძებნა: ' + name); }
+  else { _tmL('ter', '✗ ' + ((res && res.error) || 'შეცდომა')); }
+}
+
 // ── built-in commands ──
 function _tmHelp() {
   var list = [
@@ -566,6 +593,7 @@ function _tmHelp() {
     ['/ობიექტი დადება <სახელი>', 'კატალოგის obj-ის დადება drag-ით (resident+)'],
     ['/ობიექტი წაშ <სახელი>',    'კონსოლ-obj-ის წაშლა (resident+)'],
     ['/დიალოგი [სახელი]', 'DSL რედაქტირება · Ctrl+Enter შესანახად'],
+    ['/<სახელი> შესვლა', 'ინტერიერის სცენაში შესვლა (მაგ. /ბოსტანი შესვლა)'],
     ['/წასვლა [N]',       'ზონაზე ნავიგაცია'],
     ['/ლეგენდა',          'აღწერას ჩვენა/დამალვა'],
     ['/ლეგენდა რედაქტირება', 'მთავარი ლეგენდის ტექსტის რედაქტირება'],
