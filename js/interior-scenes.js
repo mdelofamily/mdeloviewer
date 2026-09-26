@@ -128,6 +128,11 @@
       _fetchNodeById(row.target_id).then(function (n) { if (n) _showNode(n); });
     } else if (row.kind === 'link') {
       sceneEnterById(row.target_id);
+    } else if (row.kind === 'canvas') {
+      // exit straight to the outdoor canvas map — it was never unmounted, it's
+      // sitting right under this overlay the whole time (see INSTRUCTION.md #12:
+      // one canvas per viewer, so there is nothing else to pick between yet)
+      interiorSceneClose();
     }
   }
 
