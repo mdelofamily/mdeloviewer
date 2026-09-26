@@ -713,7 +713,18 @@ async function _tmObjectCmd(args) {
     return;
   }
 
-  _tmL('ter', 'გამოყენება: /ობიექტი დადება <სახელი> | /ობიექტი წაშ <სახელი>');
+  if (sub === 'debug') {
+    var allEls = document.querySelectorAll('.hs-object');
+    if (!allEls.length) { _tmL('ter', 'DOM-ში .hs-object არცერთი არაა — მაშინ /ობიექტი დადება საერთოდ ვერ ინახავს, ან loadObjectOverrides ვერ იტვირთება'); return; }
+    _tmL('tdm', _SEP);
+    allEls.forEach(function (el) {
+      _tmL('tnf', '· title="' + (el.dataset.title || '') + '" cls=[' + el.className + '] obj-id=' + el.dataset.objId + ' tile-id=' + el.dataset.tileId + ' dlg-id=' + (el.dataset.dialogId || '-'));
+    });
+    _tmL('tdm', _SEP);
+    return;
+  }
+
+  _tmL('ter', 'გამოყენება: /ობიექტი დადება <სახელი> | /ობიექტი წაშ <სახელი> | /ობიექტი debug');
 }
 
 // /ლოგინი — თუ უკვე ხარ ავტორიზებული (access token ახლახან დამოწმებული),
