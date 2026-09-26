@@ -562,6 +562,7 @@ function _tmHelp() {
     ['/ზონები',           'ზონების სია'],
     ['/არე [რედ|წაშ|აღდგენა|შევსება]', 'ზონები კონსოლიდან · /არე დახმარება'],
     ['/ობიექტები',        'ობიექტები + dialogue სტატუსი'],
+    ['/ობიექტები კატალოგი', 'დასადებად ხელმისაწვდომი obj-ების სია'],
     ['/ობიექტი დადება <სახელი>', 'კატალოგის obj-ის დადება drag-ით (resident+)'],
     ['/ობიექტი წაშ <სახელი>',    'კონსოლ-obj-ის წაშლა (resident+)'],
     ['/დიალოგი [სახელი]', 'DSL რედაქტირება · Ctrl+Enter შესანახად'],
@@ -652,7 +653,18 @@ function _tmAreas() {
   _tmL('tdm', _SEP); _tmL('tdm', 'გამოიყენე: წასვლა [სახელი]');
 }
 
-function _tmObjects() {
+function _tmObjects(args) {
+  if (args && args[0] && (args[0] === 'კატალოგი' || args[0] === 'catalog')) {
+    var cat = (_CFG.custom || []).filter(function (t) { return t.isObject; });
+    if (!cat.length) { _tmL('tdm', 'obj-კატალოგი: ცარიელია'); return; }
+    _tmL('tdm', _SEP);
+    _tmL('tsy', 'obj-კატალოგი  [/ობიექტი დადება <სახელი>]');
+    cat.forEach(function (t) {
+      _tmL('tnf', '◇ ' + (t.lb || t.id) + '  (' + (t.cols || 1) + '×' + (t.rows || 1) + ')');
+    });
+    _tmL('tdm', _SEP);
+    return;
+  }
   var els = document.querySelectorAll('.hotspot:not(.hs-area):not(.no-interact)');
   if (!els.length) { _tmL('tdm', 'ობიექტები: ცარიელია'); return; }
   _tmL('tdm', _SEP);
