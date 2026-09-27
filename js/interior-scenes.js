@@ -10,23 +10,27 @@
 //     matched by interior_scenes.title_ka === <name> — NOT objects.interior_scene_id
 //     (that FK link is a separate, not-yet-built sub-scope; this name-match is the
 //     v1 stand-in the user confirmed).
-//   - Render: background image, scaled to fit the viewport with the aspect ratio
-//     preserved (no letterboxing math needed elsewhere since the stage box is sized
-//     to exactly match the scaled image).
+//   - Render: background image, default "cover" fit (fills the screen,
+//     crops overflow) with pinch-to-zoom and drag-to-pan (Pointer Events).
 //   - Hit-testing: manual point-in-polygon (ray casting) against interior_hotspots
-//     .polygon_points, no visible outlines drawn — smallest-polygon-wins when two
-//     hotspots overlap (per user decision).
+//     .polygon_points, no visible outlines drawn during normal browsing —
+//     smallest-polygon-wins when two hotspots overlap (per user decision).
 //   - Item popup: reuses the EXISTING #hsPopup via openHsPopup(null, title, body,
 //     null) / closeHsPopup() — "one design line" per user request, no new popup UI.
+//   - Hotspot placement (Sub-scope 4/5, merged): "/წერტილი დადება ..." arms
+//     placement, then a single-finger freehand stroke on the stage draws the
+//     hotspot's exact polygon (closed automatically start-to-end); a dashed
+//     preview of existing hotspots plus the live stroke render via an SVG
+//     overlay (_refreshPlaceOverlay) while armed. Delete-picking stays a
+//     plain tap (point-in-polygon).
 //
 // Explicitly OUT of scope here (left for later sub-scopes, not decided yet):
 //   - interior_hotspots.node_id nesting vs. inventory_nodes.parent_id (open question
 //     #4 in the architecture doc) — a kind='item' hotspot just shows its target
 //     inventory_nodes row directly; no tree drill-down / breadcrumb UI.
-//   - Any polygon-drawing tool — polygon_points is ASSUMED to be a JSON array of
-//     [x, y] pixel pairs in the background image's own natural pixel space, e.g.
-//     [[120,80],[240,80],[240,200],[120,200]]. This is a new format decision (no
-//     drawing tool exists yet to produce it), flag if a different shape is wanted.
+//   - Any polygon-drawing tool — polygon_points is a JSON array of [x, y] pixel
+//     pairs in the background image's own natural pixel space, produced now by
+//     the freehand stroke above (see _drawPath/_onPointerUp).
 //   - Realtime sync while a visitor is inside a scene (DB publication exists per the
 //     schema scope, but no subscribe/rebuild wiring here yet).
 
@@ -38,7 +42,8 @@
   var _hots = [];         // [{ row, points:[[x,y],...], area }]
   var _dom = null;
   var _placeMode = null;    // null | {kind,target_id} (placing) | {del:true} (delete-picking)
-  var _pendingCorner = null; // [x,y] of the first tap while placing a rectangle
+  var _drawing = false;      // true while a freehand placement stroke is in progress
+  var _drawPath = [];        // [[x,y],...] accumulated stroke points, natural pixel space
 
   // ── zoom/pan state ──
   // _zoom is a multiplier ON TOP OF the default "cover" fit (which already
@@ -66,8 +71,7 @@
       '#interiorScene.show{display:flex;}' +
       '#isStage{position:absolute;left:0;top:0;touch-action:none;}' +
       '#isImg{display:block;width:100%;height:100%;cursor:pointer;user-select:none;' +
-        '-webkit-user-drag:none;image-rendering:auto;pointer-events:none;}' +
-      '#isPlaceOverlay div.isRect{box-sizing:border-box;}';
+        '-webkit-user-drag:none;image-rendering:auto;pointer-events:none;}';
     document.head.appendChild(style);
 
     var wrap = document.createElement('div');
@@ -160,9 +164,27 @@
   function _dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
   function _mid(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 
+  function _toImg(clientX, clientY) {
+    var img = document.getElementById('isImg');
+    var r = img.getBoundingClientRect();
+    var nw = img.naturalWidth, nh = img.naturalHeight;
+    return [(clientX - r.left) / r.width * nw, (clientY - r.top) / r.height * nh];
+  }
+
   function _onPointerDown(evt) {
     document.getElementById('isStage').setPointerCapture(evt.pointerId);
     _pointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+    // Placing (not deleting): a single finger draws a freehand shape
+    // directly — no competing "pan" interpretation to disambiguate here
+    // (unlike the outdoor /არე brush), since pan is only meaningful when
+    // NOT placing. Delete-mode and normal browsing keep the tap/drag/pinch
+    // path below.
+    if (_placeMode && !_placeMode.del && _pointers.size === 1) {
+      _drawing = true;
+      _drawPath = [_toImg(evt.clientX, evt.clientY)];
+      _refreshPlaceOverlay();
+      return;
+    }
     if (_pointers.size === 2) {
       var pts = Array.from(_pointers.values());
       _pinch = { dist: _dist(pts[0], pts[1]), zoom: _zoom };
@@ -174,6 +196,15 @@
   function _onPointerMove(evt) {
     if (!_pointers.has(evt.pointerId)) return;
     _pointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+    if (_drawing) {
+      var p = _toImg(evt.clientX, evt.clientY);
+      var last = _drawPath[_drawPath.length - 1];
+      if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) >= 6) {
+        _drawPath.push(p);
+        _refreshPlaceOverlay();
+      }
+      return;
+    }
     if (_pinch && _pointers.size === 2) {
       var pts = Array.from(_pointers.values());
       var d = _dist(pts[0], pts[1]);
@@ -189,6 +220,18 @@
     }
   }
   function _onPointerUp(evt) {
+    if (_drawing) {
+      _pointers.delete(evt.pointerId);
+      var path = _drawPath, mode = _placeMode;
+      _drawing = false; _drawPath = [];
+      if (path.length < 3) { _refreshPlaceOverlay(); _say('ter', 'ძალიან პატარა — თავიდან სცადე'); return; }
+      _placeMode = null; _refreshPlaceOverlay();
+      _hotspotCreate(mode.kind, mode.target_id, path).then(function (res) {
+        if (res === true) _say('tok', '✓ hotspot დაემატა');
+        else _say('ter', '✗ ვერ შეინახა' + (res && res.msg ? (' — ' + res.msg) : ''));
+      });
+      return;
+    }
     var wasDrag = _drag && !_pinch && _pointers.size === 1;
     var tapPos = _pointers.get(evt.pointerId);
     _pointers.delete(evt.pointerId);
@@ -201,14 +244,10 @@
   }
 
   function _handleTap(clientX, clientY) {
-    var img = document.getElementById('isImg');
-    var r = img.getBoundingClientRect();
-    if (!r.width || !r.height) return;
-    var nw = img.naturalWidth, nh = img.naturalHeight;
-    var x = (clientX - r.left) / r.width * nw;
-    var y = (clientY - r.top) / r.height * nh;
+    var p = _toImg(clientX, clientY);
+    var x = p[0], y = p[1];
 
-    if (_placeMode) { _handlePlaceTap(x, y); return; }
+    if (_placeMode) { _handlePlaceTap(x, y); return; } // only del-mode reaches here now
 
     var best = null;
     for (var i = 0; i < _hots.length; i++) {
@@ -221,75 +260,61 @@
   function _say(cls, msg) { if (typeof global._tmL === 'function') global._tmL(cls, msg); }
 
   // Visible feedback while placing/deleting a hotspot: every existing
-  // hotspot's rectangle gets a dashed outline (so you can see what's already
-  // there and avoid overlap), plus a dot marking the first tap. Cleared the
-  // instant placement isn't active — normal browsing stays outline-free per
-  // the original hit-testing design (no visible shapes when just visiting).
+  // hotspot gets a dashed outline (so you can see what's already there and
+  // avoid overlap), plus the in-progress freehand stroke as it's drawn.
+  // Cleared the instant placement isn't active — normal browsing stays
+  // outline-free per the original hit-testing design.
   function _placeOverlayEl() {
     var el = document.getElementById('isPlaceOverlay');
     if (!el) {
-      el = document.createElement('div');
+      el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       el.id = 'isPlaceOverlay';
-      el.style.cssText = 'position:absolute;inset:0;pointer-events:none;';
+      el.setAttribute('style', 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;');
       document.getElementById('isStage').appendChild(el);
     }
+    var img = document.getElementById('isImg');
+    if (img.naturalWidth) el.setAttribute('viewBox', '0 0 ' + img.naturalWidth + ' ' + img.naturalHeight);
     return el;
-  }
-  function _rectBoundsPct(pts) {
-    var img = document.getElementById('isImg'), nw = img.naturalWidth, nh = img.naturalHeight;
-    var xs = pts.map(function (p) { return p[0]; }), ys = pts.map(function (p) { return p[1]; });
-    var x1 = Math.min.apply(null, xs), x2 = Math.max.apply(null, xs);
-    var y1 = Math.min.apply(null, ys), y2 = Math.max.apply(null, ys);
-    return { left: x1 / nw * 100, top: y1 / nh * 100, w: (x2 - x1) / nw * 100, h: (y2 - y1) / nh * 100 };
   }
   function _refreshPlaceOverlay() {
     var el = _placeOverlayEl();
     while (el.lastChild) el.removeChild(el.lastChild);
     if (!_placeMode) return;
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var img = document.getElementById('isImg');
+    var sw = Math.max(1, (img.naturalWidth || 1000) / 400); // stroke scales with image resolution
     _hots.forEach(function (h) {
-      var b = _rectBoundsPct(h.points);
-      var d = document.createElement('div');
-      d.className = 'isRect';
-      d.style.cssText = 'position:absolute;left:' + b.left + '%;top:' + b.top + '%;width:' + b.w + '%;height:' + b.h + '%;' +
-        'border:1px dashed rgba(88,166,255,.65);background:rgba(88,166,255,.10);';
-      el.appendChild(d);
+      var poly = document.createElementNS(svgNS, 'polygon');
+      poly.setAttribute('points', h.points.map(function (pt) { return pt[0] + ',' + pt[1]; }).join(' '));
+      poly.setAttribute('fill', 'rgba(88,166,255,.10)');
+      poly.setAttribute('stroke', 'rgba(88,166,255,.65)');
+      poly.setAttribute('stroke-width', sw);
+      poly.setAttribute('stroke-dasharray', (sw * 4) + ',' + (sw * 3));
+      el.appendChild(poly);
     });
-    if (_pendingCorner) {
-      var img = document.getElementById('isImg'), nw = img.naturalWidth, nh = img.naturalHeight;
-      var m = document.createElement('div');
-      m.style.cssText = 'position:absolute;left:' + (_pendingCorner[0] / nw * 100) + '%;top:' + (_pendingCorner[1] / nh * 100) + '%;' +
-        'width:12px;height:12px;margin:-6px;border-radius:50%;background:#00ff88;box-shadow:0 0 0 2px rgba(0,0,0,.5);';
-      el.appendChild(m);
+    if (_drawing && _drawPath.length > 1) {
+      var live = document.createElementNS(svgNS, 'polyline');
+      live.setAttribute('points', _drawPath.map(function (pt) { return pt[0] + ',' + pt[1]; }).join(' '));
+      live.setAttribute('fill', 'rgba(0,255,136,.15)');
+      live.setAttribute('stroke', '#00ff88');
+      live.setAttribute('stroke-width', sw);
+      el.appendChild(live);
     }
   }
 
-  // Sub-scope 4 (CRUD), temporary geometry input: two taps = a rectangle's
-  // opposite corners. Stands in for the freehand polygon-drawing tool
-  // (Sub-scope 5, not built yet) — a real drawing tool would replace this
-  // function's body without touching anything else (create/edit/delete API
-  // below stays the same either way).
+  // Delete-picking is still a plain tap (point-in-polygon against existing
+  // hotspots) — only "დადება" placement uses the freehand stroke above.
   function _handlePlaceTap(x, y) {
-    if (_placeMode.del) {
-      var best = null;
-      for (var i = 0; i < _hots.length; i++) {
-        var h = _hots[i];
-        if (_pointInPoly(x, y, h.points) && (!best || h.area < best.area)) best = h;
-      }
-      _placeMode = null; _refreshPlaceOverlay();
-      if (!best) { _say('ter', 'ამ წერტილში hotspot ვერ მოიძებნა'); return; }
-      _hotspotDeleteRow(best.row.id).then(function (res) {
-        if (res === true) { _hots = _hots.filter(function (hh) { return hh !== best; }); _say('tok', '✓ წაიშალა hotspot'); }
-        else _say('ter', '✗ ვერ წაიშალა' + (res && res.msg ? (' — ' + res.msg) : ''));
-      });
-      return;
+    var best = null;
+    for (var i = 0; i < _hots.length; i++) {
+      var h = _hots[i];
+      if (_pointInPoly(x, y, h.points) && (!best || h.area < best.area)) best = h;
     }
-    if (!_pendingCorner) { _pendingCorner = [x, y]; _refreshPlaceOverlay(); _say('tdm', 'კუთხე 1 მონიშნულია — დააჭირე მეორე კუთხეს'); return; }
-    var pts = [[_pendingCorner[0], _pendingCorner[1]], [x, _pendingCorner[1]], [x, y], [_pendingCorner[0], y]];
-    var mode = _placeMode;
-    _pendingCorner = null; _placeMode = null; _refreshPlaceOverlay();
-    _hotspotCreate(mode.kind, mode.target_id, pts).then(function (res) {
-      if (res === true) _say('tok', '✓ hotspot დაემატა');
-      else _say('ter', '✗ ვერ შეინახა' + (res && res.msg ? (' — ' + res.msg) : ''));
+    _placeMode = null; _refreshPlaceOverlay();
+    if (!best) { _say('ter', 'ამ წერტილში hotspot ვერ მოიძებნა'); return; }
+    _hotspotDeleteRow(best.row.id).then(function (res) {
+      if (res === true) { _hots = _hots.filter(function (hh) { return hh !== best; }); _say('tok', '✓ წაიშალა hotspot'); }
+      else _say('ter', '✗ ვერ წაიშალა' + (res && res.msg ? (' — ' + res.msg) : ''));
     });
   }
 
@@ -444,6 +469,14 @@
       return true;
     } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
   }
+  // For "/კვანძი სია" — so the user can see what names already exist in the
+  // open scene before running "ტექსტი"/"წაშ"/"წერტილი დადება კვანძი".
+  function nodeList() {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    var arr = [];
+    _nodes.forEach(function (n) { arr.push({ title: n.title_ka, hasText: !!(n.instruction_ka || n.instruction_en) }); });
+    return arr;
+  }
   async function nodeDelete(name) {
     var err = _requireOpenScene(); if (err) return { msg: err };
     try {
@@ -492,7 +525,7 @@
     var node = null;
     _nodes.forEach(function (n) { if (n.title_ka === nodeName) node = n; });
     if (!node) return { msg: 'კვანძი ვერ მოიძებნა ამ სცენაში: ' + nodeName };
-    _placeMode = { kind: 'item', target_id: node.id }; _pendingCorner = null;
+    _placeMode = { kind: 'item', target_id: node.id }; _drawing = false; _drawPath = [];
     _refreshPlaceOverlay();
     return true;
   }
@@ -500,24 +533,24 @@
     var err = _requireOpenScene(); if (err) return { msg: err };
     var target = await _fetchSceneRow('map_id=eq.' + encodeURIComponent(_MAP_ID) + '&title_ka=eq.' + encodeURIComponent(sceneName));
     if (!target) return { msg: 'სცენა ვერ მოიძებნა: ' + sceneName };
-    _placeMode = { kind: 'link', target_id: target.id }; _pendingCorner = null;
+    _placeMode = { kind: 'link', target_id: target.id }; _drawing = false; _drawPath = [];
     _refreshPlaceOverlay();
     return true;
   }
   function hotspotPlaceCanvas() {
     var err = _requireOpenScene(); if (err) return { msg: err };
-    _placeMode = { kind: 'canvas', target_id: null }; _pendingCorner = null;
+    _placeMode = { kind: 'canvas', target_id: null }; _drawing = false; _drawPath = [];
     _refreshPlaceOverlay();
     return true;
   }
   function hotspotPlaceDelete() {
     var err = _requireOpenScene(); if (err) return { msg: err };
-    _placeMode = { del: true }; _pendingCorner = null;
+    _placeMode = { del: true }; _drawing = false; _drawPath = [];
     _refreshPlaceOverlay();
     return true;
   }
   function hotspotPlaceCancel() {
-    _placeMode = null; _pendingCorner = null;
+    _placeMode = null; _drawing = false; _drawPath = [];
     _refreshPlaceOverlay();
     return true;
   }
@@ -547,7 +580,7 @@
     if (_dom) _dom.classList.remove('show');
     _setBreadcrumb(null);
     _scene = null; _nodes = new Map(); _hots = [];
-    _placeMode = null; _pendingCorner = null;
+    _placeMode = null; _drawing = false; _drawPath = [];
     _refreshPlaceOverlay();
   }
 
@@ -563,6 +596,7 @@
   global.sceneRename = sceneRename;
   global.sceneSetBackground = sceneSetBackground;
   global.nodeAdd = nodeAdd;
+  global.nodeList = nodeList;
   global.nodeDelete = nodeDelete;
   global.nodeEdit = nodeEdit;
   global.hotspotPlaceItem = hotspotPlaceItem;
