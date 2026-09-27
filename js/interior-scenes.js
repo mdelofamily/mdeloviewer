@@ -37,6 +37,8 @@
   var _nodes = new Map(); // id -> inventory_nodes row (current scene only)
   var _hots = [];         // [{ row, points:[[x,y],...], area }]
   var _dom = null;
+  var _placeMode = null;    // null | {kind,target_id} (placing) | {del:true} (delete-picking)
+  var _pendingCorner = null; // [x,y] of the first tap while placing a rectangle
 
   // ── DOM (built once, lazily, on first scene entry — never touches index.html) ──
   function _build() {
@@ -113,12 +115,47 @@
     var nw = img.naturalWidth, nh = img.naturalHeight;
     var x = (evt.clientX - r.left) / r.width * nw;
     var y = (evt.clientY - r.top) / r.height * nh;
+
+    if (_placeMode) { _handlePlaceTap(x, y); return; }
+
     var best = null;
     for (var i = 0; i < _hots.length; i++) {
       var h = _hots[i];
       if (_pointInPoly(x, y, h.points) && (!best || h.area < best.area)) best = h;
     }
     if (best) _activate(best.row);
+  }
+
+  function _say(cls, msg) { if (typeof global._tmL === 'function') global._tmL(cls, msg); }
+
+  // Sub-scope 4 (CRUD), temporary geometry input: two taps = a rectangle's
+  // opposite corners. Stands in for the freehand polygon-drawing tool
+  // (Sub-scope 5, not built yet) — a real drawing tool would replace this
+  // function's body without touching anything else (create/edit/delete API
+  // below stays the same either way).
+  function _handlePlaceTap(x, y) {
+    if (_placeMode.del) {
+      var best = null;
+      for (var i = 0; i < _hots.length; i++) {
+        var h = _hots[i];
+        if (_pointInPoly(x, y, h.points) && (!best || h.area < best.area)) best = h;
+      }
+      _placeMode = null;
+      if (!best) { _say('ter', 'ამ წერტილში hotspot ვერ მოიძებნა'); return; }
+      _hotspotDeleteRow(best.row.id).then(function (res) {
+        if (res === true) { _hots = _hots.filter(function (hh) { return hh !== best; }); _say('tok', '✓ წაიშალა hotspot'); }
+        else _say('ter', '✗ ვერ წაიშალა' + (res && res.msg ? (' — ' + res.msg) : ''));
+      });
+      return;
+    }
+    if (!_pendingCorner) { _pendingCorner = [x, y]; _say('tdm', 'კუთხე 1 მონიშნულია — დააჭირე მეორე კუთხეს'); return; }
+    var pts = [[_pendingCorner[0], _pendingCorner[1]], [x, _pendingCorner[1]], [x, y], [_pendingCorner[0], y]];
+    var mode = _placeMode;
+    _pendingCorner = null; _placeMode = null;
+    _hotspotCreate(mode.kind, mode.target_id, pts).then(function (res) {
+      if (res === true) _say('tok', '✓ hotspot დაემატა');
+      else _say('ter', '✗ ვერ შეინახა' + (res && res.msg ? (' — ' + res.msg) : ''));
+    });
   }
 
   function _activate(row) {
@@ -198,6 +235,152 @@
     return true;
   }
 
+  // ── CRUD (Sub-scope 4, resident+ gated in terminal.js — RLS itself stays
+  //    open per the DB-schema scope's confirmed decision) ──
+  function _authHdr() { return (typeof global._authHeaders === 'function') ? global._authHeaders() : _headers(); }
+  function _requireOpenScene() { return _scene ? null : 'ჯერ შედი სცენაში: /<სახელი> შესვლა'; }
+
+  async function sceneCreate(name) {
+    name = String(name || '').trim();
+    if (!name) return { msg: 'სახელი ცარიელია' };
+    if (typeof global.mdMediaOpen !== 'function') return { msg: 'mdMediaOpen ვერ მოიძებნა (upload.js?)' };
+    var files = await global.mdMediaOpen();
+    var img = (files || []).find(function (f) { return f.type === 'image'; });
+    if (!img) return { msg: 'სურათი არ აირჩა' };
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/interior_scenes', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, _authHdr()),
+        body: JSON.stringify({ map_id: _MAP_ID, title_ka: name, background_image_url: img.url })
+      });
+      if (!r.ok) { var t = await r.text().catch(function () { return ''; }); return { msg: 'HTTP ' + r.status + ' ' + t.slice(0, 150) }; }
+      return true;
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
+  async function sceneDelete(name) {
+    name = String(name || '').trim();
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/interior_scenes?map_id=eq.' + encodeURIComponent(_MAP_ID) + '&title_ka=eq.' + encodeURIComponent(name),
+        { method: 'DELETE', headers: _authHdr() });
+      return r.ok ? true : { msg: 'HTTP ' + r.status };
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
+  async function sceneRename(oldName, newName) {
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/interior_scenes?map_id=eq.' + encodeURIComponent(_MAP_ID) + '&title_ka=eq.' + encodeURIComponent(oldName), {
+        method: 'PATCH', headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, _authHdr()),
+        body: JSON.stringify({ title_ka: newName })
+      });
+      return r.ok ? true : { msg: 'HTTP ' + r.status };
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
+  async function sceneSetBackground(name) {
+    if (typeof global.mdMediaOpen !== 'function') return { msg: 'mdMediaOpen ვერ მოიძებნა (upload.js?)' };
+    var files = await global.mdMediaOpen();
+    var img = (files || []).find(function (f) { return f.type === 'image'; });
+    if (!img) return { msg: 'სურათი არ აირჩა' };
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/interior_scenes?map_id=eq.' + encodeURIComponent(_MAP_ID) + '&title_ka=eq.' + encodeURIComponent(name), {
+        method: 'PATCH', headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, _authHdr()),
+        body: JSON.stringify({ background_image_url: img.url })
+      });
+      if (!r.ok) return { msg: 'HTTP ' + r.status };
+      if (_scene && _scene.title_ka === name) {
+        _scene.background_image_url = img.url;
+        var im = document.getElementById('isImg'); if (im) im.src = img.url;
+      }
+      return true;
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
+
+  async function nodeAdd(name, instruction) {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    name = String(name || '').trim();
+    if (!name) return { msg: 'სახელი ცარიელია' };
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/inventory_nodes', {
+        method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, _authHdr()),
+        body: JSON.stringify({ scene_id: _scene.id, title_ka: name, instruction_ka: instruction || null })
+      });
+      if (!r.ok) return { msg: 'HTTP ' + r.status };
+      var rows = await r.json();
+      if (rows[0]) _nodes.set(rows[0].id, rows[0]);
+      return true;
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
+  async function nodeDelete(name) {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/inventory_nodes?scene_id=eq.' + encodeURIComponent(_scene.id) + '&title_ka=eq.' + encodeURIComponent(name),
+        { method: 'DELETE', headers: _authHdr() });
+      return r.ok ? true : { msg: 'HTTP ' + r.status };
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
+  async function nodeEdit(name, instruction) {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/inventory_nodes?scene_id=eq.' + encodeURIComponent(_scene.id) + '&title_ka=eq.' + encodeURIComponent(name), {
+        method: 'PATCH', headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, _authHdr()),
+        body: JSON.stringify({ instruction_ka: instruction })
+      });
+      return r.ok ? true : { msg: 'HTTP ' + r.status };
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
+
+  async function _hotspotCreate(kind, target_id, pts) {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/interior_hotspots', {
+        method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, _authHdr()),
+        body: JSON.stringify({ scene_id: _scene.id, kind: kind, target_id: target_id || null, polygon_points: pts })
+      });
+      if (!r.ok) { var t = await r.text().catch(function () { return ''; }); return { msg: 'HTTP ' + r.status + ' ' + t.slice(0, 150) }; }
+      var rows = await r.json();
+      if (rows[0]) _hots.push({ row: rows[0], points: pts, area: _polyArea(pts) });
+      return true;
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
+  async function _hotspotDeleteRow(id) {
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/interior_hotspots?id=eq.' + encodeURIComponent(id), { method: 'DELETE', headers: _authHdr() });
+      return r.ok ? true : { msg: 'HTTP ' + r.status };
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
+
+  // Arm placement mode; the NEXT one or two taps on the stage (see
+  // _handlePlaceTap) supply the geometry. hotspotPlaceItem/Canvas resolve
+  // synchronously (local lookup / no target); hotspotPlaceLink is async
+  // (looks the target scene up by name first).
+  function hotspotPlaceItem(nodeName) {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    var node = null;
+    _nodes.forEach(function (n) { if (n.title_ka === nodeName) node = n; });
+    if (!node) return { msg: 'კვანძი ვერ მოიძებნა ამ სცენაში: ' + nodeName };
+    _placeMode = { kind: 'item', target_id: node.id }; _pendingCorner = null;
+    return true;
+  }
+  async function hotspotPlaceLink(sceneName) {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    var target = await _fetchSceneRow('map_id=eq.' + encodeURIComponent(_MAP_ID) + '&title_ka=eq.' + encodeURIComponent(sceneName));
+    if (!target) return { msg: 'სცენა ვერ მოიძებნა: ' + sceneName };
+    _placeMode = { kind: 'link', target_id: target.id }; _pendingCorner = null;
+    return true;
+  }
+  function hotspotPlaceCanvas() {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    _placeMode = { kind: 'canvas', target_id: null }; _pendingCorner = null;
+    return true;
+  }
+  function hotspotPlaceDelete() {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    _placeMode = { del: true }; _pendingCorner = null;
+    return true;
+  }
+  function hotspotPlaceCancel() {
+    _placeMode = null; _pendingCorner = null;
+    return true;
+  }
+
   // ── public API ──
   // Returns true (entered), false (no such scene), or { error } on a network failure.
   async function sceneEnterByTitle(name) {
@@ -222,6 +405,7 @@
     if (typeof global.closeHsPopup === 'function') global.closeHsPopup();
     if (_dom) _dom.classList.remove('show');
     _scene = null; _nodes = new Map(); _hots = [];
+    _placeMode = null; _pendingCorner = null;
   }
 
   document.addEventListener('keydown', function (e) {
@@ -231,5 +415,17 @@
   global.sceneEnterByTitle = sceneEnterByTitle;
   global.sceneEnterById = sceneEnterById;
   global.interiorSceneClose = interiorSceneClose;
+  global.sceneCreate = sceneCreate;
+  global.sceneDelete = sceneDelete;
+  global.sceneRename = sceneRename;
+  global.sceneSetBackground = sceneSetBackground;
+  global.nodeAdd = nodeAdd;
+  global.nodeDelete = nodeDelete;
+  global.nodeEdit = nodeEdit;
+  global.hotspotPlaceItem = hotspotPlaceItem;
+  global.hotspotPlaceLink = hotspotPlaceLink;
+  global.hotspotPlaceCanvas = hotspotPlaceCanvas;
+  global.hotspotPlaceDelete = hotspotPlaceDelete;
+  global.hotspotPlaceCancel = hotspotPlaceCancel;
 
 }(window));

@@ -380,7 +380,10 @@ var _TM_MIN_TIER = {
   'ფაილი':       'resident',  // delete an arbitrary bucket file by index/name (same severity as /rm)
   'სია':         'shadow_admin', // list logged-in users (nickname/name/email/tier)
   'იუზერი':      'shadow_admin', // hard-delete a logged-in user (server re-checks in delete_user RPC)
-  'ობიექტი':     'resident'  // place/delete a catalog object on the map (object_overrides)
+  'ობიექტი':     'resident', // place/delete a catalog object on the map (object_overrides)
+  'სცენა':       'resident', // interior/world-view scene create/delete/rename/background
+  'კვანძი':      'resident', // inventory_nodes create/delete/edit within the currently open scene
+  'წერტილი':     'resident'  // interior_hotspots placement/deletion (temporary 2-tap rectangle)
 };
 
 // Scoped elevation flag — true only while executing the commands *inside* a
@@ -503,6 +506,9 @@ async function _tmRun(raw) {
     'არე':         _tmArea,
     'ობიექტები':   _tmObjects,
     'ობიექტი':     _tmObjectCmd,
+    'სცენა':       _tmScene,
+    'კვანძი':      _tmNode,
+    'წერტილი':     _tmSpot,
     'დიალოგი':     _tmDlgEdit,
     'წასვლა':      _tmGo,
     'ლეგენდა':     _tmLegend,
@@ -579,6 +585,125 @@ async function _tmSceneEnter(name) {
   else { _tmL('ter', '✗ ' + ((res && res.error) || 'შეცდომა')); }
 }
 
+// /სცენა შექმნა|წაშ|რედ|ფონი — interior-scenes.js-ის CRUD wrapper (Sub-scope 4).
+// "შექმნა"/"ფონი" ორივე ხსნის მედია-ატვირთვის მოდალს (window.mdMediaOpen,
+// upload.js) და პირველ image-შედეგს იყენებს ფონად.
+async function _tmScene(args) {
+  var sub = (args[0] || '').toLowerCase();
+  if (typeof window.sceneCreate !== 'function') { _tmL('ter', '✗ interior-scenes.js ვერ მოიძებნა'); return; }
+
+  if (sub === 'შექმნა') {
+    var name = args.slice(1).join(' ').trim();
+    if (!name) { _tmL('ter', 'გამოყენება: /სცენა შექმნა <სახელი>'); return; }
+    _tmL('tdm', '⏳ აირჩიე ფონის სურათი...');
+    var res = await window.sceneCreate(name);
+    if (res === true) _tmL('tok', '✓ სცენა შეიქმნა: ' + name + '  [/' + name + ' შესვლა]');
+    else _tmL('ter', '✗ ვერ შეიქმნა' + (res && res.msg ? (' — ' + res.msg) : ''));
+    return;
+  }
+  if (sub === 'წაშ') {
+    var name2 = args.slice(1).join(' ').trim();
+    if (!name2) { _tmL('ter', 'გამოყენება: /სცენა წაშ <სახელი>'); return; }
+    var res2 = await window.sceneDelete(name2);
+    if (res2 === true) _tmL('tok', '✓ წაიშალა: ' + name2);
+    else _tmL('ter', '✗ ვერ წაიშალა' + (res2 && res2.msg ? (' — ' + res2.msg) : ''));
+    return;
+  }
+  if (sub === 'რედ') {
+    var rest = args.slice(1).join(' ');
+    var m = rest.match(/^(.+?)\s*->\s*(.+)$/);
+    if (!m) { _tmL('ter', 'გამოყენება: /სცენა რედ <ძველი სახელი> -> <ახალი სახელი>'); return; }
+    var res3 = await window.sceneRename(m[1].trim(), m[2].trim());
+    if (res3 === true) _tmL('tok', '✓ გადარქმეულია: ' + m[1].trim() + ' → ' + m[2].trim());
+    else _tmL('ter', '✗ ვერ შეიცვალა' + (res3 && res3.msg ? (' — ' + res3.msg) : ''));
+    return;
+  }
+  if (sub === 'ფონი') {
+    var name4 = args.slice(1).join(' ').trim();
+    if (!name4) { _tmL('ter', 'გამოყენება: /სცენა ფონი <სახელი>'); return; }
+    _tmL('tdm', '⏳ აირჩიე ახალი ფონის სურათი...');
+    var res4 = await window.sceneSetBackground(name4);
+    if (res4 === true) _tmL('tok', '✓ ფონი განახლდა: ' + name4);
+    else _tmL('ter', '✗ ვერ განახლდა' + (res4 && res4.msg ? (' — ' + res4.msg) : ''));
+    return;
+  }
+  _tmL('ter', 'გამოყენება: /სცენა შექმნა|წაშ|რედ|ფონი <სახელი>');
+}
+
+// /კვანძი დამატება|წაშ|რედ — ყოველთვის მიმდინარე ღია სცენაზე მოქმედებს
+// (interior-scenes.js-ის შიდა _scene, არა terminal.js-ის საქმე).
+async function _tmNode(args) {
+  var sub = (args[0] || '').toLowerCase();
+  if (typeof window.nodeAdd !== 'function') { _tmL('ter', '✗ interior-scenes.js ვერ მოიძებნა'); return; }
+
+  if (sub === 'დამატება') {
+    var parts2 = args.slice(1).join(' ').split(/\s+/);
+    var name = parts2.shift() || '';
+    var instruction = parts2.join(' ').trim();
+    if (!name) { _tmL('ter', 'გამოყენება: /კვანძი დამატება <სახელი> [ტექსტი]'); return; }
+    var res = await window.nodeAdd(name, instruction);
+    if (res === true) _tmL('tok', '✓ კვანძი დაემატა: ' + name);
+    else _tmL('ter', '✗ ვერ დაემატა' + (res && res.msg ? (' — ' + res.msg) : ''));
+    return;
+  }
+  if (sub === 'წაშ') {
+    var name2 = args.slice(1).join(' ').trim();
+    if (!name2) { _tmL('ter', 'გამოყენება: /კვანძი წაშ <სახელი>'); return; }
+    var res2 = await window.nodeDelete(name2);
+    if (res2 === true) _tmL('tok', '✓ წაიშალა: ' + name2);
+    else _tmL('ter', '✗ ვერ წაიშალა' + (res2 && res2.msg ? (' — ' + res2.msg) : ''));
+    return;
+  }
+  if (sub === 'რედ') {
+    var parts3 = args.slice(1).join(' ').split(/\s+/);
+    var name3 = parts3.shift() || '';
+    var text = parts3.join(' ').trim();
+    if (!name3) { _tmL('ter', 'გამოყენება: /კვანძი რედ <სახელი> <ახალი ტექსტი>'); return; }
+    var res3 = await window.nodeEdit(name3, text);
+    if (res3 === true) _tmL('tok', '✓ განახლდა: ' + name3);
+    else _tmL('ter', '✗ ვერ განახლდა' + (res3 && res3.msg ? (' — ' + res3.msg) : ''));
+    return;
+  }
+  _tmL('ter', 'გამოყენება: /კვანძი დამატება|წაშ|რედ <სახელი> ...  (მიმდინარე ღია სცენაზე)');
+}
+
+// /წერტილი დადება <კვანძი|სცენა|გასვლა> [სახელი] | წაშ | გაუქმება — ტესტის
+// hotspot-geometry ორ-tap მართკუთხედით (დროებითი, სანამ Sub-scope 5-ის
+// freehand polygon-tool არ არსებობს).
+async function _tmSpot(args) {
+  var sub = (args[0] || '').toLowerCase();
+  if (typeof window.hotspotPlaceItem !== 'function') { _tmL('ter', '✗ interior-scenes.js ვერ მოიძებნა'); return; }
+
+  if (sub === 'დადება') {
+    var kind = (args[1] || '').toLowerCase();
+    var target = args.slice(2).join(' ').trim();
+    var res;
+    if (kind === 'კვანძი') {
+      if (!target) { _tmL('ter', 'გამოყენება: /წერტილი დადება კვანძი <სახელი>'); return; }
+      res = window.hotspotPlaceItem(target);
+    } else if (kind === 'სცენა') {
+      if (!target) { _tmL('ter', 'გამოყენება: /წერტილი დადება სცენა <სახელი>'); return; }
+      res = await window.hotspotPlaceLink(target);
+    } else if (kind === 'გასვლა') {
+      res = window.hotspotPlaceCanvas();
+    } else {
+      _tmL('ter', 'გამოყენება: /წერტილი დადება <კვანძი|სცენა|გასვლა> [სახელი]'); return;
+    }
+    if (res === true) _tmL('tdm', '🖐 დააჭირე ორ კუთხეს (მართკუთხედი) სცენის სურათზე — /წერტილი გაუქმება გასაუქმებლად');
+    else _tmL('ter', '✗ ' + ((res && res.msg) || 'ვერ დაიწყო'));
+    return;
+  }
+  if (sub === 'წაშ') {
+    var res2 = window.hotspotPlaceDelete();
+    if (res2 === true) _tmL('tdm', '🖐 დააჭირე hotspot-ს წასაშლელად — /წერტილი გაუქმება გასაუქმებლად');
+    else _tmL('ter', '✗ ' + ((res2 && res2.msg) || 'ვერ დაიწყო'));
+    return;
+  }
+  if (sub === 'გაუქმება') { window.hotspotPlaceCancel(); _tmL('tdm', 'გაუქმდა'); return; }
+
+  _tmL('ter', 'გამოყენება: /წერტილი დადება <კვანძი|სცენა|გასვლა> [სახელი] | /წერტილი წაშ | /წერტილი გაუქმება');
+}
+
 // ── built-in commands ──
 function _tmHelp() {
   var list = [
@@ -594,6 +719,9 @@ function _tmHelp() {
     ['/ობიექტი წაშ <სახელი>',    'კონსოლ-obj-ის წაშლა (resident+)'],
     ['/დიალოგი [სახელი]', 'DSL რედაქტირება · Ctrl+Enter შესანახად'],
     ['/<სახელი> შესვლა', 'ინტერიერის სცენაში შესვლა (მაგ. /ბოსტანი შესვლა)'],
+    ['/სცენა შექმნა|წაშ|რედ|ფონი', 'ინტერიერი/world-view სცენის მართვა'],
+    ['/კვანძი დამატება|წაშ|რედ', 'ღია სცენაში ინვენტარის კვანძი'],
+    ['/წერტილი დადება|წაშ|გაუქმება', 'hotspot-ის დადება (დროებით: 2 tap = მართკუთხედი)'],
     ['/წასვლა [N]',       'ზონაზე ნავიგაცია'],
     ['/ლეგენდა',          'აღწერას ჩვენა/დამალვა'],
     ['/ლეგენდა რედაქტირება', 'მთავარი ლეგენდის ტექსტის რედაქტირება'],
@@ -3066,7 +3194,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
 var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
-  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
+  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
 // ";" inside ordinary command args is left alone) — PLUS treats any [...]
