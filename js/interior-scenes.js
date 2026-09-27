@@ -40,6 +40,15 @@
   var _placeMode = null;    // null | {kind,target_id} (placing) | {del:true} (delete-picking)
   var _pendingCorner = null; // [x,y] of the first tap while placing a rectangle
 
+  // ── zoom/pan state ──
+  // _zoom is a multiplier ON TOP OF the default "cover" fit (which already
+  // fills the screen, cropping overflow, per user request) — 1 = default.
+  var _zoom = 1, _stageX = 0, _stageY = 0;
+  var MIN_ZOOM = 1, MAX_ZOOM = 4;
+  var _pointers = new Map(); // pointerId -> {x,y} (live)
+  var _pinch = null;         // {dist, zoom, midX, midY} while 2 fingers are down
+  var _drag = null;          // {x,y,stageX,stageY,moved} while 1 finger/pointer is down
+
   // ── DOM (built once, lazily, on first scene entry — never touches index.html) ──
   function _build() {
     if (_dom) return _dom;
@@ -53,12 +62,11 @@
       // 2026-09-27: z-index:45 hid both.) No header/close button of our own —
       // fully fullscreen; #topbar's "~" label doubles as the breadcrumb
       // (see _setBreadcrumb) and exit is the "/გასვლა" terminal command.
-      '#interiorScene{display:none;position:fixed;inset:0;z-index:6;background:#0d1117;' +
-        'align-items:center;justify-content:center;flex-direction:column;}' +
+      '#interiorScene{display:none;position:fixed;inset:0;z-index:6;background:#0d1117;overflow:hidden;}' +
       '#interiorScene.show{display:flex;}' +
-      '#isStage{position:relative;}' +
+      '#isStage{position:absolute;left:0;top:0;touch-action:none;}' +
       '#isImg{display:block;width:100%;height:100%;cursor:pointer;user-select:none;' +
-        '-webkit-user-drag:none;image-rendering:auto;}' +
+        '-webkit-user-drag:none;image-rendering:auto;pointer-events:none;}' +
       '#isPlaceOverlay div.isRect{box-sizing:border-box;}';
     document.head.appendChild(style);
 
@@ -67,7 +75,11 @@
     wrap.innerHTML = '<div id="isStage"><img id="isImg" draggable="false" alt=""></div>';
     document.body.appendChild(wrap);
 
-    document.getElementById('isImg').addEventListener('click', _onStageClick);
+    var stage = document.getElementById('isStage');
+    stage.addEventListener('pointerdown', _onPointerDown);
+    stage.addEventListener('pointermove', _onPointerMove);
+    stage.addEventListener('pointerup', _onPointerUp);
+    stage.addEventListener('pointercancel', _onPointerUp);
     window.addEventListener('resize', _layout);
 
     _dom = wrap;
@@ -92,18 +104,36 @@
     if (mt) mt.textContent = sceneTitle ? (base + '/' + sceneTitle) : base;
   }
 
-  // Scale the image to fit the viewport, aspect ratio preserved. The stage box is
-  // sized to exactly the scaled image, so getBoundingClientRect() on #isImg IS the
-  // visible picture — no object-fit letterbox math needed anywhere else.
+  // Default fit is "cover" (fills the screen, crops overflow) per user
+  // request — was "contain" (letterboxed) before. _zoom multiplies on top of
+  // that; _stageX/_stageY are the stage's top-left in viewport px, clamped so
+  // the image never leaves a gap at the edges.
+  function _baseSize() {
+    var img = document.getElementById('isImg');
+    var nw = img.naturalWidth, nh = img.naturalHeight;
+    if (!nw || !nh) return null;
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var cover = Math.max(vw / nw, vh / nh);
+    return { nw: nw, nh: nh, w: nw * cover * _zoom, h: nh * cover * _zoom };
+  }
+  function _clampStage(w, h) {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    _stageX = Math.min(0, Math.max(vw - w, _stageX));
+    _stageY = Math.min(0, Math.max(vh - h, _stageY));
+  }
   function _layout() {
     if (!_dom || !_dom.classList.contains('show')) return;
-    var img = document.getElementById('isImg'), stage = document.getElementById('isStage');
-    var nw = img.naturalWidth, nh = img.naturalHeight;
-    if (!nw || !nh) return;
-    var vw = window.innerWidth, vh = window.innerHeight; // fullscreen, no header to clear anymore
-    var scale = Math.min(vw / nw, vh / nh);
-    stage.style.width = Math.round(nw * scale) + 'px';
-    stage.style.height = Math.round(nh * scale) + 'px';
+    var sz = _baseSize(); if (!sz) return;
+    _clampStage(sz.w, sz.h);
+    var stage = document.getElementById('isStage');
+    stage.style.width = Math.round(sz.w) + 'px';
+    stage.style.height = Math.round(sz.h) + 'px';
+    stage.style.transform = 'translate(' + Math.round(_stageX) + 'px,' + Math.round(_stageY) + 'px)';
+  }
+  function _resetZoomPan() {
+    _zoom = 1; _stageX = 0; _stageY = 0;
+    var sz = _baseSize();
+    if (sz) { _stageX = (window.innerWidth - sz.w) / 2; _stageY = (window.innerHeight - sz.h) / 2; }
   }
 
   // ── point-in-polygon (ray casting) + shoelace area, for smallest-wins priority ──
@@ -124,13 +154,59 @@
     return Math.abs(a / 2);
   }
 
-  function _onStageClick(evt) {
+  // ── pointer gestures: 1 finger = tap (hit-test/place) or drag-to-pan;
+  //    2 fingers = pinch-to-zoom. A single pointer only pans once it has
+  //    moved past a small threshold — short taps still activate hotspots. ──
+  function _dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+  function _mid(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+
+  function _onPointerDown(evt) {
+    document.getElementById('isStage').setPointerCapture(evt.pointerId);
+    _pointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+    if (_pointers.size === 2) {
+      var pts = Array.from(_pointers.values());
+      _pinch = { dist: _dist(pts[0], pts[1]), zoom: _zoom };
+      _drag = null;
+    } else if (_pointers.size === 1) {
+      _drag = { x: evt.clientX, y: evt.clientY, stageX: _stageX, stageY: _stageY, moved: false };
+    }
+  }
+  function _onPointerMove(evt) {
+    if (!_pointers.has(evt.pointerId)) return;
+    _pointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+    if (_pinch && _pointers.size === 2) {
+      var pts = Array.from(_pointers.values());
+      var d = _dist(pts[0], pts[1]);
+      _zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, _pinch.zoom * (d / _pinch.dist)));
+      _layout();
+    } else if (_drag && _pointers.size === 1) {
+      var dx = evt.clientX - _drag.x, dy = evt.clientY - _drag.y;
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) _drag.moved = true;
+      if (_drag.moved) {
+        _stageX = _drag.stageX + dx; _stageY = _drag.stageY + dy;
+        var sz = _baseSize(); if (sz) { _clampStage(sz.w, sz.h); _layout(); }
+      }
+    }
+  }
+  function _onPointerUp(evt) {
+    var wasDrag = _drag && !_pinch && _pointers.size === 1;
+    var tapPos = _pointers.get(evt.pointerId);
+    _pointers.delete(evt.pointerId);
+    if (_pointers.size < 2) _pinch = null;
+    if (_pointers.size === 0) {
+      var isTap = wasDrag && _drag && !_drag.moved;
+      _drag = null;
+      if (isTap && tapPos) _handleTap(tapPos.x, tapPos.y);
+    }
+  }
+
+  function _handleTap(clientX, clientY) {
     var img = document.getElementById('isImg');
     var r = img.getBoundingClientRect();
     if (!r.width || !r.height) return;
     var nw = img.naturalWidth, nh = img.naturalHeight;
-    var x = (evt.clientX - r.left) / r.width * nw;
-    var y = (evt.clientY - r.top) / r.height * nh;
+    var x = (clientX - r.left) / r.width * nw;
+    var y = (clientY - r.top) / r.height * nh;
 
     if (_placeMode) { _handlePlaceTap(x, y); return; }
 
@@ -287,10 +363,10 @@
     _build();
     _setBreadcrumb(_txt(scene.title_ka, scene.title_en));
     var img = document.getElementById('isImg');
-    img.onload = _layout;
+    img.onload = function () { _resetZoomPan(); _layout(); };
     img.src = scene.background_image_url;
     _dom.classList.add('show');
-    if (img.complete && img.naturalWidth) _layout();
+    if (img.complete && img.naturalWidth) { _resetZoomPan(); _layout(); }
     _refreshPlaceOverlay();
     return true;
   }
