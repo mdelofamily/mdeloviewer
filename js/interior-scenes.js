@@ -50,38 +50,46 @@
       // anyway) but BELOW #topbar (10, has the "~" terminal toggle) and
       // #menuBtn (30, ☰) — both must stay reachable while a scene is open, or
       // there's no way back into the terminal/menu once inside. (Bug found
-      // 2026-09-27: z-index:45 hid both.)
+      // 2026-09-27: z-index:45 hid both.) No header/close button of our own —
+      // fully fullscreen; #topbar's "~" label doubles as the breadcrumb
+      // (see _setBreadcrumb) and exit is the "/გასვლა" terminal command.
       '#interiorScene{display:none;position:fixed;inset:0;z-index:6;background:#0d1117;' +
         'align-items:center;justify-content:center;flex-direction:column;}' +
       '#interiorScene.show{display:flex;}' +
-      // top:42px, not 0 — clears #topbar (index.html, the outdoor "~"/map-name
-      // strip), which now renders above this overlay too (see z-index note
-      // above) and would otherwise visually double up with this bar.
-      '#isHdr{position:fixed;top:42px;left:0;right:0;z-index:1;display:flex;align-items:center;' +
-        'justify-content:space-between;padding:7px 14px;background:rgba(13,17,23,0.6);' +
-        'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);' +
-        'border-bottom:1px solid rgba(48,54,61,0.35);}' +
-      '#isTitle{font:13px sans-serif;color:rgba(230,237,243,0.85);}' +
-      '#isClose{background:none;border:none;color:#8b949e;font-size:20px;cursor:pointer;' +
-        'line-height:1;padding:0 4px;}' +
       '#isStage{position:relative;}' +
       '#isImg{display:block;width:100%;height:100%;cursor:pointer;user-select:none;' +
-        '-webkit-user-drag:none;image-rendering:auto;}';
+        '-webkit-user-drag:none;image-rendering:auto;}' +
+      '#isPlaceOverlay div.isRect{box-sizing:border-box;}';
     document.head.appendChild(style);
 
     var wrap = document.createElement('div');
     wrap.id = 'interiorScene';
-    wrap.innerHTML =
-      '<div id="isHdr"><span id="isTitle"></span><button id="isClose">\u2715</button></div>' +
-      '<div id="isStage"><img id="isImg" draggable="false" alt=""></div>';
+    wrap.innerHTML = '<div id="isStage"><img id="isImg" draggable="false" alt=""></div>';
     document.body.appendChild(wrap);
 
-    document.getElementById('isClose').addEventListener('click', interiorSceneClose);
     document.getElementById('isImg').addEventListener('click', _onStageClick);
     window.addEventListener('resize', _layout);
 
     _dom = wrap;
     return wrap;
+  }
+
+  // #topbar's "~" button (index.html) doubles as the breadcrumb while inside
+  // a scene: "~მდელო" becomes "~მდელო/<სცენა>". Reset to plain "მდელო" on exit.
+  function _setBreadcrumb(sceneTitle) {
+    var base = (typeof _MAP_ID !== 'undefined' && _MAP_ID) ? _MAP_ID : 'მდელო';
+    var btn = document.getElementById('termBtn');
+    if (btn) {
+      var tilde = btn.querySelector('.tm-tilde');
+      while (btn.lastChild) btn.removeChild(btn.lastChild);
+      if (tilde) btn.appendChild(tilde);
+      btn.appendChild(document.createTextNode(sceneTitle ? (base + '/' + sceneTitle) : base));
+    }
+    // #mapTitle is the visible label outside standalone-PWA mode (no click
+    // handler either way) — mirror the same text there so the breadcrumb
+    // shows regardless of which of the two is actually on screen.
+    var mt = document.getElementById('mapTitle');
+    if (mt) mt.textContent = sceneTitle ? (base + '/' + sceneTitle) : base;
   }
 
   // Scale the image to fit the viewport, aspect ratio preserved. The stage box is
@@ -92,7 +100,7 @@
     var img = document.getElementById('isImg'), stage = document.getElementById('isStage');
     var nw = img.naturalWidth, nh = img.naturalHeight;
     if (!nw || !nh) return;
-    var vw = window.innerWidth, vh = window.innerHeight - 80; // #topbar + #isHdr clearance
+    var vw = window.innerWidth, vh = window.innerHeight; // fullscreen, no header to clear anymore
     var scale = Math.min(vw / nw, vh / nh);
     stage.style.width = Math.round(nw * scale) + 'px';
     stage.style.height = Math.round(nh * scale) + 'px';
@@ -136,6 +144,49 @@
 
   function _say(cls, msg) { if (typeof global._tmL === 'function') global._tmL(cls, msg); }
 
+  // Visible feedback while placing/deleting a hotspot: every existing
+  // hotspot's rectangle gets a dashed outline (so you can see what's already
+  // there and avoid overlap), plus a dot marking the first tap. Cleared the
+  // instant placement isn't active — normal browsing stays outline-free per
+  // the original hit-testing design (no visible shapes when just visiting).
+  function _placeOverlayEl() {
+    var el = document.getElementById('isPlaceOverlay');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'isPlaceOverlay';
+      el.style.cssText = 'position:absolute;inset:0;pointer-events:none;';
+      document.getElementById('isStage').appendChild(el);
+    }
+    return el;
+  }
+  function _rectBoundsPct(pts) {
+    var img = document.getElementById('isImg'), nw = img.naturalWidth, nh = img.naturalHeight;
+    var xs = pts.map(function (p) { return p[0]; }), ys = pts.map(function (p) { return p[1]; });
+    var x1 = Math.min.apply(null, xs), x2 = Math.max.apply(null, xs);
+    var y1 = Math.min.apply(null, ys), y2 = Math.max.apply(null, ys);
+    return { left: x1 / nw * 100, top: y1 / nh * 100, w: (x2 - x1) / nw * 100, h: (y2 - y1) / nh * 100 };
+  }
+  function _refreshPlaceOverlay() {
+    var el = _placeOverlayEl();
+    while (el.lastChild) el.removeChild(el.lastChild);
+    if (!_placeMode) return;
+    _hots.forEach(function (h) {
+      var b = _rectBoundsPct(h.points);
+      var d = document.createElement('div');
+      d.className = 'isRect';
+      d.style.cssText = 'position:absolute;left:' + b.left + '%;top:' + b.top + '%;width:' + b.w + '%;height:' + b.h + '%;' +
+        'border:1px dashed rgba(88,166,255,.65);background:rgba(88,166,255,.10);';
+      el.appendChild(d);
+    });
+    if (_pendingCorner) {
+      var img = document.getElementById('isImg'), nw = img.naturalWidth, nh = img.naturalHeight;
+      var m = document.createElement('div');
+      m.style.cssText = 'position:absolute;left:' + (_pendingCorner[0] / nw * 100) + '%;top:' + (_pendingCorner[1] / nh * 100) + '%;' +
+        'width:12px;height:12px;margin:-6px;border-radius:50%;background:#00ff88;box-shadow:0 0 0 2px rgba(0,0,0,.5);';
+      el.appendChild(m);
+    }
+  }
+
   // Sub-scope 4 (CRUD), temporary geometry input: two taps = a rectangle's
   // opposite corners. Stands in for the freehand polygon-drawing tool
   // (Sub-scope 5, not built yet) — a real drawing tool would replace this
@@ -148,7 +199,7 @@
         var h = _hots[i];
         if (_pointInPoly(x, y, h.points) && (!best || h.area < best.area)) best = h;
       }
-      _placeMode = null;
+      _placeMode = null; _refreshPlaceOverlay();
       if (!best) { _say('ter', 'ამ წერტილში hotspot ვერ მოიძებნა'); return; }
       _hotspotDeleteRow(best.row.id).then(function (res) {
         if (res === true) { _hots = _hots.filter(function (hh) { return hh !== best; }); _say('tok', '✓ წაიშალა hotspot'); }
@@ -156,10 +207,10 @@
       });
       return;
     }
-    if (!_pendingCorner) { _pendingCorner = [x, y]; _say('tdm', 'კუთხე 1 მონიშნულია — დააჭირე მეორე კუთხეს'); return; }
+    if (!_pendingCorner) { _pendingCorner = [x, y]; _refreshPlaceOverlay(); _say('tdm', 'კუთხე 1 მონიშნულია — დააჭირე მეორე კუთხეს'); return; }
     var pts = [[_pendingCorner[0], _pendingCorner[1]], [x, _pendingCorner[1]], [x, y], [_pendingCorner[0], y]];
     var mode = _placeMode;
-    _pendingCorner = null; _placeMode = null;
+    _pendingCorner = null; _placeMode = null; _refreshPlaceOverlay();
     _hotspotCreate(mode.kind, mode.target_id, pts).then(function (res) {
       if (res === true) _say('tok', '✓ hotspot დაემატა');
       else _say('ter', '✗ ვერ შეინახა' + (res && res.msg ? (' — ' + res.msg) : ''));
@@ -234,12 +285,13 @@
     });
 
     _build();
-    document.getElementById('isTitle').textContent = _txt(scene.title_ka, scene.title_en);
+    _setBreadcrumb(_txt(scene.title_ka, scene.title_en));
     var img = document.getElementById('isImg');
     img.onload = _layout;
     img.src = scene.background_image_url;
     _dom.classList.add('show');
     if (img.complete && img.naturalWidth) _layout();
+    _refreshPlaceOverlay();
     return true;
   }
 
@@ -365,6 +417,7 @@
     _nodes.forEach(function (n) { if (n.title_ka === nodeName) node = n; });
     if (!node) return { msg: 'კვანძი ვერ მოიძებნა ამ სცენაში: ' + nodeName };
     _placeMode = { kind: 'item', target_id: node.id }; _pendingCorner = null;
+    _refreshPlaceOverlay();
     return true;
   }
   async function hotspotPlaceLink(sceneName) {
@@ -372,20 +425,24 @@
     var target = await _fetchSceneRow('map_id=eq.' + encodeURIComponent(_MAP_ID) + '&title_ka=eq.' + encodeURIComponent(sceneName));
     if (!target) return { msg: 'სცენა ვერ მოიძებნა: ' + sceneName };
     _placeMode = { kind: 'link', target_id: target.id }; _pendingCorner = null;
+    _refreshPlaceOverlay();
     return true;
   }
   function hotspotPlaceCanvas() {
     var err = _requireOpenScene(); if (err) return { msg: err };
     _placeMode = { kind: 'canvas', target_id: null }; _pendingCorner = null;
+    _refreshPlaceOverlay();
     return true;
   }
   function hotspotPlaceDelete() {
     var err = _requireOpenScene(); if (err) return { msg: err };
     _placeMode = { del: true }; _pendingCorner = null;
+    _refreshPlaceOverlay();
     return true;
   }
   function hotspotPlaceCancel() {
     _placeMode = null; _pendingCorner = null;
+    _refreshPlaceOverlay();
     return true;
   }
 
@@ -412,8 +469,10 @@
   function interiorSceneClose() {
     if (typeof global.closeHsPopup === 'function') global.closeHsPopup();
     if (_dom) _dom.classList.remove('show');
+    _setBreadcrumb(null);
     _scene = null; _nodes = new Map(); _hots = [];
     _placeMode = null; _pendingCorner = null;
+    _refreshPlaceOverlay();
   }
 
   document.addEventListener('keydown', function (e) {

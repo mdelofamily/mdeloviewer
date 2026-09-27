@@ -500,6 +500,7 @@ async function _tmRun(raw) {
   var map = {
     'დახმარება':   _tmHelp,
     'გასუფთავება': tmClear,
+    'გასვლა':      _tmSceneExit,
     'ინფო':        _tmInfo,
     'მასშტაბი':    _tmZoom,
     'ზონები':      _tmAreas,
@@ -571,6 +572,15 @@ async function _tmRun(raw) {
 // /<obj-სახელი> შესვლა — ინტერიერის სცენაში შესვლა. Tier-შეზღუდვის გარეშე
 // (ნებისმიერ ვიზიტორს შეუძლია უკვე დახატულ სცენაში შესვლა/ნახვა — resident+
 // მხოლოდ სცენის/hotspot-ის შექმნას/რედაქტირებას ეხება, ცალკე scope-ია).
+// /გასვლა — ინტერიერის სცენიდან გამოსვლა outdoor canvas-ზე. ტიერის გარეშე
+// (ნებისმიერს შეუძლია გამოსვლა, ისევე როგორც შესვლა).
+function _tmSceneExit() {
+  if (typeof window.interiorSceneClose !== 'function') { _tmL('ter', '✗ interior-scenes.js ვერ მოიძებნა'); return; }
+  window.interiorSceneClose();
+  _tmL('tok', '✓ გამოხვედი');
+  closeTerm();
+}
+
 async function _tmSceneEnter(name) {
   if (!name) { _tmL('ter', 'გამოყენება: /<სახელი> შესვლა'); return; }
   if (typeof window.sceneEnterByTitle !== 'function') {
@@ -630,20 +640,29 @@ async function _tmScene(args) {
   _tmL('ter', 'გამოყენება: /სცენა შექმნა|წაშ|რედ|ფონი <სახელი>');
 }
 
-// /კვანძი დამატება|წაშ|რედ — ყოველთვის მიმდინარე ღია სცენაზე მოქმედებს
+// /კვანძი დამატება|ტექსტი|წაშ|რედ — ყოველთვის მიმდინარე ღია სცენაზე მოქმედებს
 // (interior-scenes.js-ის შიდა _scene, არა terminal.js-ის საქმე).
 async function _tmNode(args) {
   var sub = (args[0] || '').toLowerCase();
   if (typeof window.nodeAdd !== 'function') { _tmL('ter', '✗ interior-scenes.js ვერ მოიძებნა'); return; }
 
   if (sub === 'დამატება') {
-    var parts2 = args.slice(1).join(' ').split(/\s+/);
-    var name = parts2.shift() || '';
-    var instruction = parts2.join(' ').trim();
-    if (!name) { _tmL('ter', 'გამოყენება: /კვანძი დამატება <სახელი> [ტექსტი]'); return; }
-    var res = await window.nodeAdd(name, instruction);
+    // მხოლოდ სახელი (შეიძლება მრავალსიტყვიანიც) — ტექსტი ცალკე,
+    // "/კვანძი ტექსტი"-ით, რომ "მთავარი ეზო" არ გაიჭრას "მთავარი"+"ეზო"-დ.
+    var name = args.slice(1).join(' ').trim();
+    if (!name) { _tmL('ter', 'გამოყენება: /კვანძი დამატება <სახელი>'); return; }
+    var res = await window.nodeAdd(name);
     if (res === true) _tmL('tok', '✓ კვანძი დაემატა: ' + name);
     else _tmL('ter', '✗ ვერ დაემატა' + (res && res.msg ? (' — ' + res.msg) : ''));
+    return;
+  }
+  if (sub === 'ტექსტი' || sub === 'რედ') {
+    var rest = args.slice(1).join(' ');
+    var m = rest.match(/^(.+?)\s*->\s*(.+)$/);
+    if (!m) { _tmL('ter', 'გამოყენება: /კვანძი ტექსტი <სახელი> -> <ტექსტი>'); return; }
+    var res3 = await window.nodeEdit(m[1].trim(), m[2].trim());
+    if (res3 === true) _tmL('tok', '✓ განახლდა: ' + m[1].trim());
+    else _tmL('ter', '✗ ვერ განახლდა' + (res3 && res3.msg ? (' — ' + res3.msg) : ''));
     return;
   }
   if (sub === 'წაშ') {
@@ -654,17 +673,7 @@ async function _tmNode(args) {
     else _tmL('ter', '✗ ვერ წაიშალა' + (res2 && res2.msg ? (' — ' + res2.msg) : ''));
     return;
   }
-  if (sub === 'რედ') {
-    var parts3 = args.slice(1).join(' ').split(/\s+/);
-    var name3 = parts3.shift() || '';
-    var text = parts3.join(' ').trim();
-    if (!name3) { _tmL('ter', 'გამოყენება: /კვანძი რედ <სახელი> <ახალი ტექსტი>'); return; }
-    var res3 = await window.nodeEdit(name3, text);
-    if (res3 === true) _tmL('tok', '✓ განახლდა: ' + name3);
-    else _tmL('ter', '✗ ვერ განახლდა' + (res3 && res3.msg ? (' — ' + res3.msg) : ''));
-    return;
-  }
-  _tmL('ter', 'გამოყენება: /კვანძი დამატება|წაშ|რედ <სახელი> ...  (მიმდინარე ღია სცენაზე)');
+  _tmL('ter', 'გამოყენება: /კვანძი დამატება <სახელი> | ტექსტი <სახელი> -> <ტექსტი> | წაშ <სახელი>  (მიმდინარე ღია სცენაზე)');
 }
 
 // /წერტილი დადება <კვანძი|სცენა|გასვლა> [სახელი] | წაშ | გაუქმება — ტესტის
@@ -719,8 +728,9 @@ function _tmHelp() {
     ['/ობიექტი წაშ <სახელი>',    'კონსოლ-obj-ის წაშლა (resident+)'],
     ['/დიალოგი [სახელი]', 'DSL რედაქტირება · Ctrl+Enter შესანახად'],
     ['/<სახელი> შესვლა', 'ინტერიერის სცენაში შესვლა (მაგ. /ბოსტანი შესვლა)'],
+    ['/გასვლა', 'სცენიდან გამოსვლა outdoor რუკაზე'],
     ['/სცენა შექმნა|წაშ|რედ|ფონი', 'ინტერიერი/world-view სცენის მართვა'],
-    ['/კვანძი დამატება|წაშ|რედ', 'ღია სცენაში ინვენტარის კვანძი'],
+    ['/კვანძი დამატება|ტექსტი|წაშ', 'ღია სცენაში ინვენტარის კვანძი'],
     ['/წერტილი დადება|წაშ|გაუქმება', 'hotspot-ის დადება (დროებით: 2 tap = მართკუთხედი)'],
     ['/წასვლა [N]',       'ზონაზე ნავიგაცია'],
     ['/ლეგენდა',          'აღწერას ჩვენა/დამალვა'],
@@ -3194,7 +3204,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
 var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
-  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
+  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
 // ";" inside ordinary command args is left alone) — PLUS treats any [...]
