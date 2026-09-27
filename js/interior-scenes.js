@@ -44,6 +44,7 @@
   var _placeMode = null;    // null | {kind,target_id} (placing) | {del:true} (delete-picking)
   var _drawing = false;      // true while a freehand placement stroke is in progress
   var _drawPath = [];        // [[x,y],...] accumulated stroke points, natural pixel space
+  var _pending = null;       // {kind:'create',path} | {kind:'delete',hotspot} — awaiting ✓/✕ confirm
 
   // ── zoom/pan state ──
   // _zoom is a multiplier ON TOP OF the default "cover" fit (which already
@@ -179,7 +180,7 @@
     // (unlike the outdoor /არე brush), since pan is only meaningful when
     // NOT placing. Delete-mode and normal browsing keep the tap/drag/pinch
     // path below.
-    if (_placeMode && !_placeMode.del && _pointers.size === 1) {
+    if (_placeMode && !_placeMode.del && !_pending && _pointers.size === 1) {
       _drawing = true;
       _drawPath = [_toImg(evt.clientX, evt.clientY)];
       _refreshPlaceOverlay();
@@ -222,14 +223,11 @@
   function _onPointerUp(evt) {
     if (_drawing) {
       _pointers.delete(evt.pointerId);
-      var path = _drawPath, mode = _placeMode;
+      var path = _drawPath;
       _drawing = false; _drawPath = [];
       if (path.length < 3) { _refreshPlaceOverlay(); _say('ter', 'ძალიან პატარა — თავიდან სცადე'); return; }
-      _placeMode = null; _refreshPlaceOverlay();
-      _hotspotCreate(mode.kind, mode.target_id, path).then(function (res) {
-        if (res === true) _say('tok', '✓ hotspot დაემატა');
-        else _say('ter', '✗ ვერ შეინახა' + (res && res.msg ? (' — ' + res.msg) : ''));
-      });
+      _pending = { kind: 'create', path: path };
+      _refreshPlaceOverlay(); _renderBanner();
       return;
     }
     var wasDrag = _drag && !_pinch && _pointers.size === 1;
@@ -247,7 +245,9 @@
     var p = _toImg(clientX, clientY);
     var x = p[0], y = p[1];
 
-    if (_placeMode) { _handlePlaceTap(x, y); return; } // only del-mode reaches here now
+    if (_pending) return; // awaiting ✓/✕ on the banner — ignore stray taps elsewhere
+    if (_placeMode && _placeMode.del) { _handlePlaceTap(x, y); return; }
+    if (_placeMode) return; // armed for create but not currently drawing
 
     var best = null;
     for (var i = 0; i < _hots.length; i++) {
@@ -283,7 +283,9 @@
     var svgNS = 'http://www.w3.org/2000/svg';
     var img = document.getElementById('isImg');
     var sw = Math.max(1, (img.naturalWidth || 1000) / 400); // stroke scales with image resolution
+    var pendingDelHots = (_pending && _pending.kind === 'delete') ? _pending.hotspot : null;
     _hots.forEach(function (h) {
+      if (h === pendingDelHots) return; // drawn separately, highlighted, below
       var poly = document.createElementNS(svgNS, 'polygon');
       poly.setAttribute('points', h.points.map(function (pt) { return pt[0] + ',' + pt[1]; }).join(' '));
       poly.setAttribute('fill', 'rgba(88,166,255,.10)');
@@ -300,22 +302,108 @@
       live.setAttribute('stroke-width', sw);
       el.appendChild(live);
     }
+    // Awaiting ✓/✕: the finished-but-unsaved shape (create), or the
+    // hotspot targeted for removal (delete) — both drawn solid/highlighted
+    // so it's unambiguous what the banner's buttons act on.
+    if (_pending && _pending.kind === 'create') {
+      var done = document.createElementNS(svgNS, 'polygon');
+      done.setAttribute('points', _pending.path.map(function (pt) { return pt[0] + ',' + pt[1]; }).join(' '));
+      done.setAttribute('fill', 'rgba(0,255,136,.22)');
+      done.setAttribute('stroke', '#00ff88');
+      done.setAttribute('stroke-width', sw * 1.5);
+      el.appendChild(done);
+    } else if (pendingDelHots) {
+      var del = document.createElementNS(svgNS, 'polygon');
+      del.setAttribute('points', pendingDelHots.points.map(function (pt) { return pt[0] + ',' + pt[1]; }).join(' '));
+      del.setAttribute('fill', 'rgba(255,80,80,.25)');
+      del.setAttribute('stroke', '#ff5050');
+      del.setAttribute('stroke-width', sw * 1.5);
+      el.appendChild(del);
+    }
+  }
+
+  // ── confirm banner (✓/↶/✕) — mirrors the outdoor /არე brush's finish
+  // panel, so placement always has an explicit start (arming a mode shows
+  // this immediately) and an explicit end (nothing saves/deletes until ✓). ──
+  function _bannerEl() {
+    var el = document.getElementById('isBanner');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'isBanner';
+      el.style.cssText = 'display:none;position:fixed;left:50%;bottom:18px;transform:translateX(-50%);' +
+        'z-index:7;align-items:center;gap:10px;padding:8px 14px;border-radius:10px;' +
+        'background:rgba(13,17,23,.88);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);' +
+        'border:1px solid rgba(48,54,61,.5);font:13px sans-serif;color:#e6edf3;white-space:nowrap;';
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+  function _bannerBtn(label, title, onClick) {
+    var b = document.createElement('button');
+    b.textContent = label;
+    if (title) b.title = title;
+    b.style.cssText = 'background:none;border:1px solid rgba(139,148,158,.45);color:#e6edf3;' +
+      'border-radius:6px;padding:2px 10px;font-size:15px;line-height:1.4;cursor:pointer;';
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  function _renderBanner() {
+    var el = _bannerEl();
+    while (el.lastChild) el.removeChild(el.lastChild);
+    if (!_placeMode) { el.style.display = 'none'; return; }
+    el.style.display = 'flex';
+    var label = document.createElement('span');
+    if (_pending) {
+      label.textContent = _pending.kind === 'delete' ? 'წავშალო ეს hotspot?' : 'დავამატო ეს hotspot?';
+      el.appendChild(label);
+      if (_pending.kind === 'create') el.appendChild(_bannerBtn('↶', 'თავიდან დახატვა', _redoPending));
+      el.appendChild(_bannerBtn('✓', 'დადასტურება', _confirmPending));
+      el.appendChild(_bannerBtn('✕', 'გაუქმება', hotspotPlaceCancel));
+    } else if (_placeMode.del) {
+      label.textContent = 'წაშლა — შეეხე hotspot-ს';
+      el.appendChild(label);
+      el.appendChild(_bannerBtn('✕', 'გაუქმება', hotspotPlaceCancel));
+    } else {
+      label.textContent = 'დახატე hotspot თითით და აუშვი';
+      el.appendChild(label);
+      el.appendChild(_bannerBtn('✕', 'გაუქმება', hotspotPlaceCancel));
+    }
+  }
+  function _redoPending() {
+    _pending = null;
+    _refreshPlaceOverlay(); _renderBanner();
+  }
+  function _confirmPending() {
+    if (!_pending) return;
+    if (_pending.kind === 'create') {
+      var mode = _placeMode, path = _pending.path;
+      _placeMode = null; _pending = null; _refreshPlaceOverlay(); _renderBanner();
+      _hotspotCreate(mode.kind, mode.target_id, path).then(function (res) {
+        if (res === true) _say('tok', '✓ hotspot დაემატა');
+        else _say('ter', '✗ ვერ შეინახა' + (res && res.msg ? (' — ' + res.msg) : ''));
+      });
+    } else if (_pending.kind === 'delete') {
+      var hs = _pending.hotspot;
+      _placeMode = null; _pending = null; _refreshPlaceOverlay(); _renderBanner();
+      _hotspotDeleteRow(hs.row.id).then(function (res) {
+        if (res === true) { _hots = _hots.filter(function (hh) { return hh !== hs; }); _say('tok', '✓ წაიშალა hotspot'); }
+        else _say('ter', '✗ ვერ წაიშალა' + (res && res.msg ? (' — ' + res.msg) : ''));
+      });
+    }
   }
 
   // Delete-picking is still a plain tap (point-in-polygon against existing
-  // hotspots) — only "დადება" placement uses the freehand stroke above.
+  // hotspots) — finds the target, then waits for the ✓ on the banner
+  // (mirrors the create flow, so nothing is destructive on a single tap).
   function _handlePlaceTap(x, y) {
     var best = null;
     for (var i = 0; i < _hots.length; i++) {
       var h = _hots[i];
       if (_pointInPoly(x, y, h.points) && (!best || h.area < best.area)) best = h;
     }
-    _placeMode = null; _refreshPlaceOverlay();
     if (!best) { _say('ter', 'ამ წერტილში hotspot ვერ მოიძებნა'); return; }
-    _hotspotDeleteRow(best.row.id).then(function (res) {
-      if (res === true) { _hots = _hots.filter(function (hh) { return hh !== best; }); _say('tok', '✓ წაიშალა hotspot'); }
-      else _say('ter', '✗ ვერ წაიშალა' + (res && res.msg ? (' — ' + res.msg) : ''));
-    });
+    _pending = { kind: 'delete', hotspot: best };
+    _refreshPlaceOverlay(); _renderBanner();
   }
 
   function _activate(row) {
@@ -525,33 +613,33 @@
     var node = null;
     _nodes.forEach(function (n) { if (n.title_ka === nodeName) node = n; });
     if (!node) return { msg: 'კვანძი ვერ მოიძებნა ამ სცენაში: ' + nodeName };
-    _placeMode = { kind: 'item', target_id: node.id }; _drawing = false; _drawPath = [];
-    _refreshPlaceOverlay();
+    _placeMode = { kind: 'item', target_id: node.id }; _drawing = false; _drawPath = []; _pending = null;
+    _refreshPlaceOverlay(); _renderBanner();
     return true;
   }
   async function hotspotPlaceLink(sceneName) {
     var err = _requireOpenScene(); if (err) return { msg: err };
     var target = await _fetchSceneRow('map_id=eq.' + encodeURIComponent(_MAP_ID) + '&title_ka=eq.' + encodeURIComponent(sceneName));
     if (!target) return { msg: 'სცენა ვერ მოიძებნა: ' + sceneName };
-    _placeMode = { kind: 'link', target_id: target.id }; _drawing = false; _drawPath = [];
-    _refreshPlaceOverlay();
+    _placeMode = { kind: 'link', target_id: target.id }; _drawing = false; _drawPath = []; _pending = null;
+    _refreshPlaceOverlay(); _renderBanner();
     return true;
   }
   function hotspotPlaceCanvas() {
     var err = _requireOpenScene(); if (err) return { msg: err };
-    _placeMode = { kind: 'canvas', target_id: null }; _drawing = false; _drawPath = [];
-    _refreshPlaceOverlay();
+    _placeMode = { kind: 'canvas', target_id: null }; _drawing = false; _drawPath = []; _pending = null;
+    _refreshPlaceOverlay(); _renderBanner();
     return true;
   }
   function hotspotPlaceDelete() {
     var err = _requireOpenScene(); if (err) return { msg: err };
-    _placeMode = { del: true }; _drawing = false; _drawPath = [];
-    _refreshPlaceOverlay();
+    _placeMode = { del: true }; _drawing = false; _drawPath = []; _pending = null;
+    _refreshPlaceOverlay(); _renderBanner();
     return true;
   }
   function hotspotPlaceCancel() {
-    _placeMode = null; _drawing = false; _drawPath = [];
-    _refreshPlaceOverlay();
+    _placeMode = null; _drawing = false; _drawPath = []; _pending = null;
+    _refreshPlaceOverlay(); _renderBanner();
     return true;
   }
 
@@ -580,8 +668,8 @@
     if (_dom) _dom.classList.remove('show');
     _setBreadcrumb(null);
     _scene = null; _nodes = new Map(); _hots = [];
-    _placeMode = null; _drawing = false; _drawPath = [];
-    _refreshPlaceOverlay();
+    _placeMode = null; _drawing = false; _drawPath = []; _pending = null;
+    _refreshPlaceOverlay(); _renderBanner();
   }
 
   document.addEventListener('keydown', function (e) {
