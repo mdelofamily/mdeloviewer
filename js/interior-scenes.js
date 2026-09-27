@@ -46,10 +46,18 @@
 
     var style = document.createElement('style');
     style.textContent =
-      '#interiorScene{display:none;position:fixed;inset:0;z-index:45;background:#0d1117;' +
+      // z-index 6: above outdoor hotspots/areas (5/4, doesn't matter — opaque
+      // anyway) but BELOW #topbar (10, has the "~" terminal toggle) and
+      // #menuBtn (30, ☰) — both must stay reachable while a scene is open, or
+      // there's no way back into the terminal/menu once inside. (Bug found
+      // 2026-09-27: z-index:45 hid both.)
+      '#interiorScene{display:none;position:fixed;inset:0;z-index:6;background:#0d1117;' +
         'align-items:center;justify-content:center;flex-direction:column;}' +
       '#interiorScene.show{display:flex;}' +
-      '#isHdr{position:fixed;top:0;left:0;right:0;z-index:1;display:flex;align-items:center;' +
+      // top:42px, not 0 — clears #topbar (index.html, the outdoor "~"/map-name
+      // strip), which now renders above this overlay too (see z-index note
+      // above) and would otherwise visually double up with this bar.
+      '#isHdr{position:fixed;top:42px;left:0;right:0;z-index:1;display:flex;align-items:center;' +
         'justify-content:space-between;padding:7px 14px;background:rgba(13,17,23,0.6);' +
         'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);' +
         'border-bottom:1px solid rgba(48,54,61,0.35);}' +
@@ -84,7 +92,7 @@
     var img = document.getElementById('isImg'), stage = document.getElementById('isStage');
     var nw = img.naturalWidth, nh = img.naturalHeight;
     if (!nw || !nh) return;
-    var vw = window.innerWidth, vh = window.innerHeight - 40; // ~#isHdr height
+    var vw = window.innerWidth, vh = window.innerHeight - 80; // #topbar + #isHdr clearance
     var scale = Math.min(vw / nw, vh / nh);
     stage.style.width = Math.round(nw * scale) + 'px';
     stage.style.height = Math.round(nh * scale) + 'px';
