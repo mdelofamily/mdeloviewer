@@ -45,6 +45,7 @@
   var _drawing = false;      // true while a freehand placement stroke is in progress
   var _drawPath = [];        // [[x,y],...] accumulated stroke points, natural pixel space
   var _pending = null;       // {kind:'create',path} | {kind:'delete',hotspot} — awaiting ✓/✕ confirm
+  var _reviewMode = false;   // resident-only toggle: show all hotspot outlines while just browsing
 
   // ── zoom/pan state ──
   // _zoom is a multiplier ON TOP OF the default "cover" fit (which already
@@ -175,24 +176,32 @@
   function _onPointerDown(evt) {
     document.getElementById('isStage').setPointerCapture(evt.pointerId);
     _pointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+
+    // A second finger joining ALWAYS means pinch-zoom, even mid-stroke — a
+    // bare "size===1 → draw" check misread the second finger's contact as
+    // another point in the SAME freehand stroke, producing zig-zag lines
+    // when the person actually meant to zoom (bug found 2026-09-27). Any
+    // in-progress draw is aborted (discarded, not saved) the instant a
+    // second pointer appears.
+    if (_pointers.size === 2) {
+      if (_drawing) { _drawing = false; _drawPath = []; _refreshPlaceOverlay(); }
+      var pts = Array.from(_pointers.values());
+      _pinch = { dist: _dist(pts[0], pts[1]), zoom: _zoom };
+      _drag = null;
+      return;
+    }
+
     // Placing (not deleting): a single finger draws a freehand shape
     // directly — no competing "pan" interpretation to disambiguate here
     // (unlike the outdoor /არე brush), since pan is only meaningful when
-    // NOT placing. Delete-mode and normal browsing keep the tap/drag/pinch
-    // path below.
-    if (_placeMode && !_placeMode.del && !_pending && _pointers.size === 1) {
+    // NOT placing. Delete-mode and normal browsing keep the tap/drag path.
+    if (_placeMode && !_placeMode.del && !_pending) {
       _drawing = true;
       _drawPath = [_toImg(evt.clientX, evt.clientY)];
       _refreshPlaceOverlay();
       return;
     }
-    if (_pointers.size === 2) {
-      var pts = Array.from(_pointers.values());
-      _pinch = { dist: _dist(pts[0], pts[1]), zoom: _zoom };
-      _drag = null;
-    } else if (_pointers.size === 1) {
-      _drag = { x: evt.clientX, y: evt.clientY, stageX: _stageX, stageY: _stageY, moved: false };
-    }
+    _drag = { x: evt.clientX, y: evt.clientY, stageX: _stageX, stageY: _stageY, moved: false };
   }
   function _onPointerMove(evt) {
     if (!_pointers.has(evt.pointerId)) return;
@@ -279,7 +288,7 @@
   function _refreshPlaceOverlay() {
     var el = _placeOverlayEl();
     while (el.lastChild) el.removeChild(el.lastChild);
-    if (!_placeMode) return;
+    if (!_placeMode && !_reviewMode) return;
     var svgNS = 'http://www.w3.org/2000/svg';
     var img = document.getElementById('isImg');
     var sw = Math.max(1, (img.naturalWidth || 1000) / 400); // stroke scales with image resolution
@@ -637,6 +646,16 @@
     _refreshPlaceOverlay(); _renderBanner();
     return true;
   }
+  // "/წერტილი ნახვა" — resident-only debug toggle: show every hotspot's
+  // outline even while just browsing (not placing). Doesn't affect what an
+  // ordinary visitor sees; only this viewer's own overlay.
+  function hotspotReviewToggle() {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    _reviewMode = !_reviewMode;
+    _refreshPlaceOverlay();
+    return _reviewMode;
+  }
+
   function hotspotPlaceCancel() {
     _placeMode = null; _drawing = false; _drawPath = []; _pending = null;
     _refreshPlaceOverlay(); _renderBanner();
@@ -668,7 +687,7 @@
     if (_dom) _dom.classList.remove('show');
     _setBreadcrumb(null);
     _scene = null; _nodes = new Map(); _hots = [];
-    _placeMode = null; _drawing = false; _drawPath = []; _pending = null;
+    _placeMode = null; _drawing = false; _drawPath = []; _pending = null; _reviewMode = false;
     _refreshPlaceOverlay(); _renderBanner();
   }
 
@@ -692,5 +711,6 @@
   global.hotspotPlaceCanvas = hotspotPlaceCanvas;
   global.hotspotPlaceDelete = hotspotPlaceDelete;
   global.hotspotPlaceCancel = hotspotPlaceCancel;
+  global.hotspotReviewToggle = hotspotReviewToggle;
 
 }(window));
