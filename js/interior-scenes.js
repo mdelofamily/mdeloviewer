@@ -54,6 +54,8 @@
   var MIN_ZOOM = 1, MAX_ZOOM = 4;
   var _pointers = new Map(); // pointerId -> {x,y} (live)
   var _pinch = null;         // {dist, zoom, midX, midY} while 2 fingers are down
+  var HOLD_MS = 350;         // hold-still time before a single finger starts DRAWING (same as /არე brush)
+  var _holdTimer = null;
   var _drag = null;          // {x,y,stageX,stageY,moved} while 1 finger/pointer is down
 
   // ── DOM (built once, lazily, on first scene entry — never touches index.html) ──
@@ -184,6 +186,7 @@
     // in-progress draw is aborted (discarded, not saved) the instant a
     // second pointer appears.
     if (_pointers.size === 2) {
+      _clearHold();
       if (_drawing) { _drawing = false; _drawPath = []; _refreshPlaceOverlay(); }
       var pts = Array.from(_pointers.values());
       _pinch = { dist: _dist(pts[0], pts[1]), zoom: _zoom };
@@ -191,18 +194,27 @@
       return;
     }
 
-    // Placing (not deleting): a single finger draws a freehand shape
-    // directly — no competing "pan" interpretation to disambiguate here
-    // (unlike the outdoor /არე brush), since pan is only meaningful when
-    // NOT placing. Delete-mode and normal browsing keep the tap/drag path.
-    if (_placeMode && !_placeMode.del && !_pending) {
-      _drawing = true;
-      _drawPath = [_toImg(evt.clientX, evt.clientY)];
-      _refreshPlaceOverlay();
-      return;
-    }
+    // Single finger. Always starts as a pan/tap candidate; while placing
+    // (not deleting), holding still for HOLD_MS upgrades it to DRAWING
+    // (same hold-then-drag model as the outdoor /არე brush), so a bare
+    // swipe still pans and never leaves stray lines.
     _drag = { x: evt.clientX, y: evt.clientY, stageX: _stageX, stageY: _stageY, moved: false };
+    if (_placeMode && !_placeMode.del && !_pending) {
+      var pid = evt.pointerId;
+      _clearHold();
+      _holdTimer = setTimeout(function () {
+        _holdTimer = null;
+        var cur = _pointers.get(pid);
+        if (!cur || _pointers.size !== 1 || !_drag || _drag.moved || !_placeMode || _pending) return;
+        _drag = null;
+        _drawing = true;
+        _drawPath = [_toImg(cur.x, cur.y)];
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) {} }
+        _refreshPlaceOverlay();
+      }, HOLD_MS);
+    }
   }
+  function _clearHold() { if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = null; } }
   function _onPointerMove(evt) {
     if (!_pointers.has(evt.pointerId)) return;
     _pointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
@@ -222,7 +234,7 @@
       _layout();
     } else if (_drag && _pointers.size === 1) {
       var dx = evt.clientX - _drag.x, dy = evt.clientY - _drag.y;
-      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) _drag.moved = true;
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) { _drag.moved = true; _clearHold(); }
       if (_drag.moved) {
         _stageX = _drag.stageX + dx; _stageY = _drag.stageY + dy;
         var sz = _baseSize(); if (sz) { _clampStage(sz.w, sz.h); _layout(); }
@@ -230,6 +242,7 @@
     }
   }
   function _onPointerUp(evt) {
+    _clearHold();
     if (_drawing) {
       _pointers.delete(evt.pointerId);
       var path = _drawPath;
@@ -303,6 +316,14 @@
       poly.setAttribute('stroke-dasharray', (sw * 4) + ',' + (sw * 3));
       el.appendChild(poly);
     });
+    if (_drawing && _drawPath.length === 1) {
+      var dot = document.createElementNS(svgNS, 'circle');
+      dot.setAttribute('cx', _drawPath[0][0]);
+      dot.setAttribute('cy', _drawPath[0][1]);
+      dot.setAttribute('r', sw * 3);
+      dot.setAttribute('fill', '#00ff88');
+      el.appendChild(dot);
+    }
     if (_drawing && _drawPath.length > 1) {
       var live = document.createElementNS(svgNS, 'polyline');
       live.setAttribute('points', _drawPath.map(function (pt) { return pt[0] + ',' + pt[1]; }).join(' '));
@@ -373,7 +394,7 @@
       el.appendChild(label);
       el.appendChild(_bannerBtn('✕', 'გაუქმება', hotspotPlaceCancel));
     } else {
-      label.textContent = 'დახატე hotspot თითით და აუშვი';
+      label.textContent = 'გააჩერე თითი — ხატვა დაიწყება · სვაიპი = გადაადგილება';
       el.appendChild(label);
       el.appendChild(_bannerBtn('✕', 'გაუქმება', hotspotPlaceCancel));
     }
