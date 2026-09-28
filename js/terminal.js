@@ -14,6 +14,7 @@ var _tmEditObj = null;     // truthy sentinel while an edit session is open (dlg
 var _tmEditMode = null;    // 'dlg' | 'menuItem' | null
 var _tmEditMenuCtx = null; // { node, idx, type } — set only when _tmEditMode === 'menuItem'
 var _tmEditLabel = null;   // human-readable label shown in cancel/header messages
+var _tmNodeCtx = null;    // { kind:'node'|'scene', name, ka, en } — set only when _tmEditMode === 'nodeText'
 var _tmEditBuf = null;     // raw content buffered from a chain segment, consumed by /შეყვანა
 var _tmEditLang = (typeof _mdeloLang !== 'undefined' && _mdeloLang === 'en') ? 'en' : 'ka'; // 'ka' | 'en' — session-wide dialogue/menu edit-language target,
                             // set by /ენა. Drives the prompt text (see _tmApplyLangPrompt) and
@@ -139,6 +140,7 @@ function tmSend() {
     if (_tmEditMode === 'menuTitle') { _tmSaveMenuTitle(v); return; }
     if (_tmEditMode === 'legend')    { _tmSaveLegend(v); return; }
     if (_tmEditMode === 'area')      { _tmSaveArea(v); return; }
+    if (_tmEditMode === 'nodeText')  { _tmSaveNodeText(v); return; }
     _tmSaveDlg(v); return;
   }
 
@@ -572,6 +574,46 @@ async function _tmRun(raw) {
 // /<obj-სახელი> შესვლა — ინტერიერის სცენაში შესვლა. Tier-შეზღუდვის გარეშე
 // (ნებისმიერ ვიზიტორს შეუძლია უკვე დახატულ სცენაში შესვლა/ნახვა — resident+
 // მხოლოდ სცენის/hotspot-ის შექმნას/რედაქტირებას ეხება, ცალკე scope-ია).
+// ── multiline text editor for a node's / scene's own text (same edit-session
+// machinery as /დიალოგი and the legend: Ctrl+Enter saves, Esc cancels) ──
+async function _tmTextEditOpen(kind, name) {
+  var getter = window.nodeGetText;
+  if (typeof getter !== 'function') { _tmL('ter', '✗ interior-scenes.js ვერ მოიძებნა'); return; }
+  var cur = await getter(name);
+  if (cur && cur.msg) { _tmL('ter', '✗ ' + cur.msg); return; }
+  if (_tmEditLang === 'en' && !cur.ka) {
+    _tmL('ter', '✗ ჯერ საჭიროა ქართული ტექსტის შექმნა (/ენა ka), მერე — თარგმნა');
+    return;
+  }
+  var current = (_tmEditLang === 'en') ? (cur.en || cur.ka) : cur.ka;
+  if (!_tmMulti) tmToggleMulti();
+  document.getElementById('tmTa').value = current;
+  _tmTaResize();
+  var label = 'კვანძი: ' + name;
+  _tmEditObj = '__nodetext__'; _tmEditMode = 'nodeText'; _tmEditLabel = label;
+  _tmNodeCtx = { kind: kind, name: name, ka: cur.ka, en: cur.en };
+  _tmL('tsy', '─── ' + label + ' ' + (_tmEditLang === 'en' ? '(EN)' : '') + ' ──────────────');
+  _tmL('tdm', 'DSL როგორც /დიალოგში (@0, [სახელი], -> ღილაკი =>N) · უბრალო ტექსტიც მუშაობს');
+  _tmL('tdm', 'Ctrl+Enter — შენახვა · Esc — გაუქმება');
+}
+
+async function _tmSaveNodeText(text) {
+  var ctx = _tmNodeCtx, label = _tmEditLabel;
+  var newKa = ctx ? ctx.ka : '', newEn = ctx ? ctx.en : '';
+  if (_tmEditLang === 'en') { if (text !== newKa) newEn = text; } // untouched ka-reference never saved as a false translation
+  else newKa = text;
+  _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; _tmEditMediaBuf = []; _tmNodeCtx = null;
+  document.getElementById('tmTa').value = '';
+  if (_tmMulti) tmToggleMulti();
+  if (!ctx) return;
+  var saver = window.nodeSaveText;
+  if (typeof saver !== 'function') { _tmL('ter', '✗ interior-scenes.js ვერ მოიძებნა'); return; }
+  _tmL('tdm', '↑ ' + label + ' — ვინახავ...');
+  var res = await saver(ctx.name, newKa, newEn);
+  if (res === true) _tmL('tok', label + ' — შენახულია ✓');
+  else _tmL('ter', '✗ ვერ შეინახა' + (res && res.msg ? (' — ' + res.msg) : ''));
+}
+
 // /გასვლა — ინტერიერის სცენიდან გამოსვლა outdoor canvas-ზე. ტიერის გარეშე
 // (ნებისმიერს შეუძლია გამოსვლა, ისევე როგორც შესვლა).
 function _tmSceneExit() {
@@ -640,7 +682,7 @@ async function _tmScene(args) {
   _tmL('ter', 'გამოყენება: /სცენა შექმნა|წაშ|რედ|ფონი <სახელი>');
 }
 
-// /კვანძი დამატება|ტექსტი|წაშ|რედ — ყოველთვის მიმდინარე ღია სცენაზე მოქმედებს
+// /კვანძი დამატება|დიალოგი|წაშ|სია — ყოველთვის მიმდინარე ღია სცენაზე მოქმედებს
 // (interior-scenes.js-ის შიდა _scene, არა terminal.js-ის საქმე).
 async function _tmNode(args) {
   var sub = (args[0] || '').toLowerCase();
@@ -655,7 +697,7 @@ async function _tmNode(args) {
   }
   if (sub === 'დამატება') {
     // მხოლოდ სახელი (შეიძლება მრავალსიტყვიანიც) — ტექსტი ცალკე,
-    // "/კვანძი ტექსტი"-ით, რომ "მთავარი ეზო" არ გაიჭრას "მთავარი"+"ეზო"-დ.
+    // "/კვანძი დიალოგი"-თი, რომ "მთავარი ეზო" არ გაიჭრას "მთავარი"+"ეზო"-დ.
     var name = args.slice(1).join(' ').trim();
     if (!name) { _tmL('ter', 'გამოყენება: /კვანძი დამატება <სახელი>'); return; }
     var res = await window.nodeAdd(name);
@@ -663,13 +705,17 @@ async function _tmNode(args) {
     else _tmL('ter', '✗ ვერ დაემატა' + (res && res.msg ? (' — ' + res.msg) : ''));
     return;
   }
-  if (sub === 'ტექსტი' || sub === 'რედ') {
-    var rest = args.slice(1).join(' ');
+  if (sub === 'დიალოგი') {
+    var rest = args.slice(1).join(' ').trim();
+    if (!rest) { _tmL('ter', 'გამოყენება: /კვანძი დიალოგი <სახელი>  (ხსნის რედაქტორს)'); return; }
     var m = rest.match(/^(.+?)\s*->\s*(.+)$/);
-    if (!m) { _tmL('ter', 'გამოყენება: /კვანძი ტექსტი <სახელი> -> <ტექსტი>'); return; }
-    var res3 = await window.nodeEdit(m[1].trim(), m[2].trim());
-    if (res3 === true) _tmL('tok', '✓ განახლდა: ' + m[1].trim());
-    else _tmL('ter', '✗ ვერ განახლდა' + (res3 && res3.msg ? (' — ' + res3.msg) : ''));
+    if (m) { // quick inline form kept as a shortcut for one-liners
+      var res3 = await window.nodeEdit(m[1].trim(), m[2].trim());
+      if (res3 === true) _tmL('tok', '✓ განახლდა: ' + m[1].trim());
+      else _tmL('ter', '✗ ვერ განახლდა' + (res3 && res3.msg ? (' — ' + res3.msg) : ''));
+      return;
+    }
+    _tmTextEditOpen('node', rest);
     return;
   }
   if (sub === 'წაშ') {
@@ -680,7 +726,7 @@ async function _tmNode(args) {
     else _tmL('ter', '✗ ვერ წაიშალა' + (res2 && res2.msg ? (' — ' + res2.msg) : ''));
     return;
   }
-  _tmL('ter', 'გამოყენება: /კვანძი სია | დამატება <სახელი> | ტექსტი <სახელი> -> <ტექსტი> | წაშ <სახელი>');
+  _tmL('ter', 'გამოყენება: /კვანძი სია | დამატება <სახელი> | დიალოგი <სახელი> | წაშ <სახელი>');
 }
 
 // /წერტილი დადება <კვანძი|სცენა|გასვლა> [სახელი] | წაშ | გაუქმება — hotspot-ის
@@ -743,7 +789,7 @@ function _tmHelp() {
     ['/<სახელი> შესვლა', 'ინტერიერის სცენაში შესვლა (მაგ. /ბოსტანი შესვლა)'],
     ['/გასვლა', 'სცენიდან გამოსვლა outdoor რუკაზე'],
     ['/სცენა შექმნა|წაშ|რედ|ფონი', 'ინტერიერი/world-view სცენის მართვა'],
-    ['/კვანძი სია|დამატება|ტექსტი|წაშ', 'ღია სცენაში ინვენტარის კვანძი'],
+    ['/კვანძი სია|დამატება|დიალოგი|წაშ', 'ღია სცენაში ინვენტარის კვანძი'],
     ['/წერტილი დადება|წაშ|ნახვა|გაუქმება', 'hotspot-ის დადება (თითით თავისუფალი ხატვა)'],
     ['/წასვლა [N]',       'ზონაზე ნავიგაცია'],
     ['/ლეგენდა',          'აღწერას ჩვენა/დამალვა'],
@@ -2308,7 +2354,7 @@ function _tmEditCancel() {
   _tmEditMode = null;
   _tmEditMenuCtx = null;
   _tmEditLabel = null;
-  _tmEditBuf = null; _tmEditMediaBuf = [];
+  _tmEditBuf = null; _tmEditMediaBuf = []; _tmNodeCtx = null;
   document.getElementById('tmTa').value = '';
   if (_tmMulti) tmToggleMulti();
   _tmL('tdm', label + ' — გაუქმდა');

@@ -276,7 +276,10 @@
       var h = _hots[i];
       if (_pointInPoly(x, y, h.points) && (!best || h.area < best.area)) best = h;
     }
-    if (best) _activate(best.row);
+    if (best) { _activate(best.row); return; }
+    // No hotspot under the tap: just dismiss any open dialogue, same as
+    // tapping empty ground on the outdoor map.
+    if (typeof global.closeHsPopup === 'function') global.closeHsPopup();
   }
 
   function _say(cls, msg) { if (typeof global._tmL === 'function') global._tmL(cls, msg); }
@@ -384,17 +387,17 @@
     el.style.display = 'flex';
     var label = document.createElement('span');
     if (_pending) {
-      label.textContent = _pending.kind === 'delete' ? 'წავშალო ეს hotspot?' : 'დავამატო ეს hotspot?';
+      label.textContent = _pending.kind === 'delete' ? 'წავშალო?' : 'შევინახო?';
       el.appendChild(label);
       if (_pending.kind === 'create') el.appendChild(_bannerBtn('↶', 'თავიდან დახატვა', _redoPending));
       el.appendChild(_bannerBtn('✓', 'დადასტურება', _confirmPending));
       el.appendChild(_bannerBtn('✕', 'გაუქმება', hotspotPlaceCancel));
     } else if (_placeMode.del) {
-      label.textContent = 'წაშლა — შეეხე hotspot-ს';
+      label.textContent = 'წერტილის წაშლა';
       el.appendChild(label);
       el.appendChild(_bannerBtn('✕', 'გაუქმება', hotspotPlaceCancel));
     } else {
-      label.textContent = 'გააჩერე თითი — ხატვა დაიწყება · სვაიპი = გადაადგილება';
+      label.textContent = 'წერტილის შექმნა';
       el.appendChild(label);
       el.appendChild(_bannerBtn('✕', 'გაუქმება', hotspotPlaceCancel));
     }
@@ -451,11 +454,24 @@
     }
   }
 
-  function _showNode(node) {
+  // Node / scene text is stored as bulk-DSL (see bulk-parser.js). Text with no
+  // "@N" header is wrapped as a single @0 node, so plain text saved earlier
+  // renders exactly as before. ka/en are two whole DSL documents — en is used
+  // when the viewer language is en and an en version exists, else ka.
+  function _openDialogue(title, ka, en) {
+    var raw = _txt(ka, en);
+    if (!raw) return;
     if (typeof global.closeHsPopup === 'function') global.closeHsPopup();
-    var title = _txt(node.title_ka, node.title_en);
-    var body = _txt(node.instruction_ka, node.instruction_en);
-    if (typeof global.openHsPopup === 'function') global.openHsPopup(null, title, body, null);
+    if (typeof global.openHsPopup !== 'function') return;
+    var nodes = null;
+    if (typeof global.parseBulkDSL === 'function') {
+      try { nodes = global.parseBulkDSL(/^@\d/m.test(raw) ? raw : '@0\n' + raw).nodes; } catch (e) { nodes = null; }
+    }
+    if (nodes && nodes.length) global.openHsPopup(null, title, raw, { title: title, lb: title, dialogue: nodes });
+    else global.openHsPopup(null, title, raw, null);
+  }
+  function _showNode(node) {
+    _openDialogue(_txt(node.title_ka, node.title_en), node.instruction_ka, node.instruction_en);
   }
 
   // Same ka/en fallback rule as runtime.js's _i18n, but for separate _ka/_en text
@@ -595,6 +611,33 @@
     _nodes.forEach(function (n) { arr.push({ title: n.title_ka, hasText: !!(n.instruction_ka || n.instruction_en) }); });
     return arr;
   }
+  // ── multiline text editing support (terminal.js opens its text editor with
+  //    these; ka is authoritative, en is an additive translation) ──
+  function _findNode(name) {
+    var node = null;
+    _nodes.forEach(function (n) { if (n.title_ka === name) node = n; });
+    return node;
+  }
+  function nodeGetText(name) {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    var node = _findNode(name);
+    if (!node) return { msg: 'კვანძი ვერ მოიძებნა ამ სცენაში: ' + name };
+    return { ka: node.instruction_ka || '', en: node.instruction_en || '' };
+  }
+  async function nodeSaveText(name, ka, en) {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    var node = _findNode(name);
+    if (!node) return { msg: 'კვანძი ვერ მოიძებნა ამ სცენაში: ' + name };
+    try {
+      var r = await fetch(SUPA_URL + '/rest/v1/inventory_nodes?id=eq.' + encodeURIComponent(node.id), {
+        method: 'PATCH', headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, _authHdr()),
+        body: JSON.stringify({ instruction_ka: ka || null, instruction_en: en || null })
+      });
+      if (!r.ok) return { msg: 'HTTP ' + r.status };
+      node.instruction_ka = ka || null; node.instruction_en = en || null;
+      return true;
+    } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
+  }
   async function nodeDelete(name) {
     var err = _requireOpenScene(); if (err) return { msg: err };
     try {
@@ -725,6 +768,8 @@
   global.sceneSetBackground = sceneSetBackground;
   global.nodeAdd = nodeAdd;
   global.nodeList = nodeList;
+  global.nodeGetText = nodeGetText;
+  global.nodeSaveText = nodeSaveText;
   global.nodeDelete = nodeDelete;
   global.nodeEdit = nodeEdit;
   global.hotspotPlaceItem = hotspotPlaceItem;
