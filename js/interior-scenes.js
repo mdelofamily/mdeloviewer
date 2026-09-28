@@ -554,10 +554,30 @@
   }
   async function sceneDelete(name) {
     name = String(name || '').trim();
+    var filter = 'map_id=eq.' + encodeURIComponent(_MAP_ID) + '&title_ka=eq.' + encodeURIComponent(name);
     try {
-      var r = await fetch(SUPA_URL + '/rest/v1/interior_scenes?map_id=eq.' + encodeURIComponent(_MAP_ID) + '&title_ka=eq.' + encodeURIComponent(name),
-        { method: 'DELETE', headers: _authHdr() });
-      return r.ok ? true : { msg: 'HTTP ' + r.status };
+      // read the background URL(s) first — once the row is gone we can't.
+      var g = await fetch(SUPA_URL + '/rest/v1/interior_scenes?' + filter + '&select=id,background_image_url', { headers: _authHdr() });
+      var gone = g.ok ? await g.json() : [];
+      var r = await fetch(SUPA_URL + '/rest/v1/interior_scenes?' + filter, { method: 'DELETE', headers: _authHdr() });
+      if (!r.ok) return { msg: 'HTTP ' + r.status };
+      if (_scene && _scene.title_ka === name) interiorSceneClose();
+      // Best-effort storage cleanup (mdMediaDelete never throws): the file goes
+      // with the scene, unless another scene still uses the same file (the
+      // upload picker can re-pick an existing file). Other kinds of use
+      // (e.g. a dialogue illustration) can't be checked from here.
+      if (typeof global.mdMediaDelete === 'function') {
+        var urls = [];
+        for (var k = 0; k < gone.length; k++) {
+          var u = gone[k].background_image_url;
+          if (!u || urls.indexOf(u) >= 0) continue;
+          var c = await fetch(SUPA_URL + '/rest/v1/interior_scenes?background_image_url=eq.' + encodeURIComponent(u) + '&select=id&limit=1', { headers: _authHdr() });
+          var still = c.ok ? await c.json() : [{}]; // if the check fails, keep the file
+          if (!still.length) urls.push(u);
+        }
+        if (urls.length) await global.mdMediaDelete(urls);
+      }
+      return true;
     } catch (e) { return { msg: 'ქსელის შეცდომა' }; }
   }
   async function sceneRename(oldName, newName) {
