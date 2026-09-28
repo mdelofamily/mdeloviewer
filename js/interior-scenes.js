@@ -782,6 +782,7 @@
   global.sceneEnterByTitle = sceneEnterByTitle;
   global.sceneEnterById = sceneEnterById;
   global.interiorSceneClose = interiorSceneClose;
+  global.interiorSceneIsOpen = function () { return !!_scene; }; // used by terminal.js to route "/დიალოგი" while inside a scene
   global.sceneCreate = sceneCreate;
   global.sceneDelete = sceneDelete;
   global.sceneRename = sceneRename;

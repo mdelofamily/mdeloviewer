@@ -512,7 +512,7 @@ async function _tmRun(raw) {
     'სცენა':       _tmScene,
     'კვანძი':      _tmNode,
     'წერტილი':     _tmSpot,
-    'დიალოგი':     _tmDlgEdit,
+    'დიალოგი':     _tmDlgOrNode,
     'წასვლა':      _tmGo,
     'ლეგენდა':     _tmLegend,
     'მენიუ':       _tmMenu,
@@ -2277,6 +2277,16 @@ function _tmVada(args) {
 // ── dialogue DSL editor ──
 
 // Open DSL edit mode for an object
+// Inside an open interior scene, "/დიალოგი <name>" means the SCENE's own
+// node (there's no outdoor object hotspot visible to target anyway) — routes
+// to "/კვანძი დიალოგი <name>" instead of the outdoor object-dialogue editor.
+function _tmDlgOrNode(args) {
+  if (typeof window.interiorSceneIsOpen === 'function' && window.interiorSceneIsOpen()) {
+    return _tmNode(['დიალოგი'].concat(args));
+  }
+  return _tmDlgEdit(args);
+}
+
 function _tmDlgEdit(args) {
   var title = args.join(' ').trim();
   if (!title) {
