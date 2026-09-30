@@ -937,7 +937,11 @@ wrap.addEventListener('click', e => {
     closeHsPopup(); closeAreaPopup();
     if (hs.classList.contains('hs-area')) {
       const t = hs.dataset.title || '', grp = hs.dataset.group || '';
-      blinkAreasByGroupOrTitle(grp, t);
+      // a filled area already reads visually from the overlay tile itself — the blink outline
+      // would just be a redundant yellow border on top of it, so skip it (popup still opens)
+      const filled = !!hs.dataset.fillTile && (typeof window._areaFillActive !== 'function' ||
+        window._areaFillActive({ fill_tile_id: hs.dataset.fillTile, fill_days: +hs.dataset.fillDays || 0, filled_at: hs.dataset.filledAt || '' }));
+      if (!filled) blinkAreasByGroupOrTitle(grp, t);
       if (t) openAreaPopup(_areaDisp(hs, 'title') || t, _areaDisp(hs, 'tooltip'));
     } else {
       const oi = hs.dataset.oi;
