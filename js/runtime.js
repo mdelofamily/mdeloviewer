@@ -934,7 +934,7 @@ wrap.addEventListener('click', e => {
   if (e.target.closest('#menuBtn') || e.target.closest('#gameMenu')) return;
   const hs = e.target.closest('.hotspot');
   if (hs && !hs.classList.contains('no-interact')) {
-    closeHsPopup(); closeAreaPopup();
+    closeHsPopup(); closeAreaPopup(); if (typeof closeTerm === 'function' && typeof _tmOpen !== 'undefined' && _tmOpen) closeTerm();
     if (hs.classList.contains('hs-area')) {
       const t = hs.dataset.title || '', grp = hs.dataset.group || '';
       // a filled area already reads visually from the overlay tile itself — the blink outline
