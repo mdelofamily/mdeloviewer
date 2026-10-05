@@ -934,7 +934,8 @@ wrap.addEventListener('click', e => {
   if (e.target.closest('#menuBtn') || e.target.closest('#gameMenu')) return;
   const hs = e.target.closest('.hotspot');
   if (hs && !hs.classList.contains('no-interact')) {
-    closeHsPopup(); closeAreaPopup(); if (typeof closeTerm === 'function' && typeof _tmOpen !== 'undefined' && _tmOpen) closeTerm();
+    closeHsPopup(); closeAreaPopup();
+    if (typeof closeTerm === 'function' && typeof _tmOpen !== 'undefined' && _tmOpen) closeTerm();
     if (hs.classList.contains('hs-area')) {
       const t = hs.dataset.title || '', grp = hs.dataset.group || '';
       // a filled area already reads visually from the overlay tile itself — the blink outline
@@ -1861,6 +1862,7 @@ function areaPickClear() {
 
 // onDone({ rects:[{x1,y1,x2,y2}], cells:N }) after ✓; onCancel() if ✕ is tapped.
 function areaPickStart(onDone, onCancel) {
+  if (typeof closeTerm === 'function' && typeof _tmOpen !== 'undefined' && _tmOpen) closeTerm();
   areaPickClear();
   var cols = (_CFG && _CFG.cols) || 1, rows = (_CFG && _CFG.rows) || 1, T = _TS;
   var d = _areaDraw = { mask: new Uint8Array(cols * rows), count: 0, strokes: [], stroke: null, last: null,
@@ -2030,6 +2032,7 @@ window.objectPickClear = objectPickClear;
 // tile = catalog custom-tile def ({id, lb, cols, rows, ...}, from _CFG.custom).
 // onDone({x,y}) fires only on a valid ✓ confirm; onCancel() on ✕.
 function objectPickStart(tile, onDone, onCancel) {
+  if (typeof closeTerm === 'function' && typeof _tmOpen !== 'undefined' && _tmOpen) closeTerm();
   objectPickClear();
   var T = _TS, cols = tile.cols || 1, rows = tile.rows || 1;
   var d = _objDraw = { cols: cols, rows: rows, listeners: [], x: 0, y: 0, valid: false };
