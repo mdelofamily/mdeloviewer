@@ -940,10 +940,13 @@ wrap.addEventListener('click', e => {
       const t = hs.dataset.title || '', grp = hs.dataset.group || '';
       // a filled area already reads visually from the overlay tile itself — the blink outline
       // would just be a redundant yellow border on top of it, so skip it (popup still opens)
-      const filled = !!hs.dataset.fillTile && (typeof window._areaFillActive !== 'function' ||
-        window._areaFillActive({ fill_tile_id: hs.dataset.fillTile, fill_days: +hs.dataset.fillDays || 0, filled_at: hs.dataset.filledAt || '' }));
+      const frow = { fill_tile_id: hs.dataset.fillTile || null, fill_days: +hs.dataset.fillDays || 0, filled_at: hs.dataset.filledAt || '' };
+      const fillExp = hs.dataset.fillTile && typeof window._areaFillExpiry === 'function' ? window._areaFillExpiry(frow) : null;
+      const filled = fillExp != null && fillExp > Date.now();
       if (!filled) blinkAreasByGroupOrTitle(grp, t);
-      if (t) openAreaPopup(_areaDisp(hs, 'title') || t, _areaDisp(hs, 'tooltip'));
+      // whole days left, rounded up so "დარჩა: 1 დღე" never reads as already-expired
+      const daysLeft = filled ? Math.max(1, Math.ceil((fillExp - Date.now()) / 86400000)) : null;
+      if (t) openAreaPopup(_areaDisp(hs, 'title') || t, _areaDisp(hs, 'tooltip'), daysLeft);
     } else {
       const oi = hs.dataset.oi;
       const cid = hs.dataset.objId;
@@ -1004,11 +1007,17 @@ function _areaDisp(el, key) {
   var en = (typeof _mdeloLang !== 'undefined' && _mdeloLang === 'en') ? (el.getAttribute('data-' + key + '-en') || '') : '';
   return en || el.getAttribute('data-' + key) || '';
 }
-function openAreaPopup(title, tip) {
+function openAreaPopup(title, tip, daysLeft) {
   closeHsPopup();
   document.getElementById('areaPopupTitle').textContent = title || '';
   const tipEl = document.getElementById('areaPopupTip');
   tipEl.textContent = tip || ''; tipEl.style.display = tip ? '' : 'none';
+  // fill overlay countdown — only shown when the area currently has an active fill (daysLeft set)
+  const expEl = document.getElementById('areaPopupExpiry');
+  if (expEl) {
+    if (daysLeft != null) { expEl.textContent = 'დარჩა: ' + daysLeft + ' დღე.'; expEl.style.display = ''; }
+    else { expEl.textContent = ''; expEl.style.display = 'none'; }
+  }
   const pop = document.getElementById('areaPopup');
   const pw = Math.min(window.innerWidth * 0.88, 320);
   pop.style.cssText = 'left:' + ((window.innerWidth - pw) / 2) + 'px;top:' + Math.max(60, (window.innerHeight - 180) / 2) + 'px;max-width:' + pw + 'px;';
