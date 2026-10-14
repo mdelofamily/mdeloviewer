@@ -3187,17 +3187,16 @@ function _mdeloSyncFills(list) {
   });
   if (typeof window.redrawMap === 'function') window.redrawMap();
 
-  // A fill that just expired takes its whole area down with it — an expired fill
-  // shouldn't leave an empty area shell sitting on the map, it should disappear
+  // A fill that just expired takes its own rectangle down with it — an expired fill
+  // shouldn't leave an empty patch shell sitting on the map, it should disappear
   // entirely, same as a manual /არე წაშ (deleted:true, no fill-field nulling needed —
   // _mergedAreas already drops deleted rows before _mdeloSyncFills ever sees them).
-  // "Whole area" = every rectangle sharing the group's label, same rule /არე წაშ uses.
-  var expiredLabels = {};
-  list.forEach(function (a) {
-    if (a.fill_tile_id && a.filled_at && a.fill_days > 0 && !_areaFillActive(a)) expiredLabels[a.label] = true;
-  });
-  if (Object.keys(expiredLabels).length && typeof areaOverrideSaveRows === 'function') {
-    var toDelete = list.filter(function (a) { return expiredLabels[a.label]; })
+  // Per-ROW, not per-name: a group (shared label) can hold patches filled at different
+  // times (one /არე <name> შევსება run only fills the group's not-yet-active rows — see
+  // terminal.js), so one patch's expiry must not take a sibling patch's still-running
+  // timer down with it.
+  if (typeof areaOverrideSaveRows === 'function') {
+    var toDelete = list.filter(function (a) { return a.fill_tile_id && a.filled_at && a.fill_days > 0 && !_areaFillActive(a); })
       .map(function (a) { return { id: a.id, fields: { deleted: true } }; });
     if (toDelete.length) areaOverrideSaveRows(toDelete);
   }

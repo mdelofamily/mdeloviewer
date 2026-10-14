@@ -1688,13 +1688,15 @@ function _tmAreaEdit(argsArr) {
 }
 
 // ── /არე სახელი შევსება ფილა ვადა დღე — fill overlay ────────────────────────────
-// Fills EVERY rectangle sharing the name (the name is the group) with an overlay tile that
-// disappears by itself after N whole days. Visual only (map[][] is untouched). Rules:
+// Fills every rectangle of the name that is NOT already actively filled — each patch's clock is
+// independent, so a mowing cycle counts from the moment THAT patch was filled, not from when the
+// name was first used. Already-active rectangles are left untouched (their own timer keeps running);
+// draw a new patch under the same name and run this again to add it with a fresh N-day timer.
+// Visual only (map[][] is untouched). Rules:
 //   · resident+ (the rest of /არე is caretaker+)
 //   · known tiles only (_TM_FILL_TILES) and the tile must exist in data.js dualTiles
-//   · two filled areas may not overlap; unfilled areas overlap freely
-//   · running it again on a filled name restarts the timer
-//   · there is no "remove fill": delete the area (/არე წაშ) and draw it again
+//   · a NOT-yet-active patch may not overlap an ACTIVE patch of a different name
+//   · there is no "remove fill" for a single patch: delete the whole area (/არე წაშ) and redraw
 var _TM_FILL_TILES = ['მოცელილი'];   // one tile so far; every future tile gets its own lifetimes
 var _TM_FILL_MAX_DAYS = 365;
 
@@ -1734,16 +1736,23 @@ function _tmAreaFill(fp) {
     _tmL('ter', '✗ ფილა "' + fp.tile + '" data.js-ში არ არის — ედიტორიდან თავიდან export და data.js-ის ატვირთვა'); return;
   }
   var f = _tmAreaTarget(fp.nameArgs); if (!f) return;
-  var clash = _tmAreaFillClash(f.hits, f.hits[0].ka);
-  if (clash.length) { _tmL('ter', '✗ "' + f.name + '" გადაფარავს ფილიან არეს: ' + clash.join(', ') + ' — ორი ფილიანი არე ვერ გადაფარავს ერთმანეთს'); return; }
+  var target = f.hits.filter(function (h) { return !(h.fill && h.fill.active); });
+  if (!target.length) {
+    _tmL('ter', '✗ "' + f.name + '" — ყველა ნაწილი უკვე აქტიურად შევსებულია (საკუთარი ვადით); ახალი ნაწილის დასამატებლად დახატე იგივე სახელით');
+    return;
+  }
+  var clash = _tmAreaFillClash(target, f.name);
+  if (clash.length) { _tmL('ter', '✗ "' + f.name + '"-ის ახალი ნაწილი გადაფარავს ფილიან არეს: ' + clash.join(', ') + ' — ორი ფილიანი არე ვერ გადაფარავს ერთმანეთს'); return; }
   if (!navigator.onLine) { _tmL('ter', '✗ ოფლაინ — შევსებას ქსელი სჭირდება'); return; }
   var now = new Date();
   _tmL('tdm', '↑ ' + f.name + ' — ' + fp.tile + ', ' + days + ' დღე — ვინახავ...');
-  window.areaOverrideSaveMany(f.hits.map(function (h) { return h.id; }),
+  window.areaOverrideSaveMany(target.map(function (h) { return h.id; }),
     { fill_tile_id: fp.tile, fill_days: days, filled_at: now.toISOString() }).then(function (res) {
     if (res === true) {
-      _tmL('tok', 'არეალი "' + f.name + '" — ' + fp.tile + ' ✓ (' + f.hits.length + ' მართკუთხედი, იწურება: ' +
-        new Date(now.getTime() + days * 86400000).toISOString().slice(0, 10) + ')');
+      var skipped = f.hits.length - target.length;
+      _tmL('tok', 'არეალი "' + f.name + '" — ' + fp.tile + ' ✓ (' + target.length + ' ნაწილი, იწურება: ' +
+        new Date(now.getTime() + days * 86400000).toISOString().slice(0, 10) + ')' +
+        (skipped ? ' · ' + skipped + ' ძველი ნაწილი უცვლელი (საკუთარი ვადით)' : ''));
     } else _tmL('ter', _tmAreaSaveErr(res));
   }, function (e) { _tmL('ter', _tmAreaSaveErr({ msg: e.message })); });
 }
@@ -1816,7 +1825,7 @@ async function _tmSaveArea(text) {
   var lines = text.split('\n');
   var label = lines[0].trim();
   var tip = lines.slice(1).join('\n').trim();
-  var ids, fields, dup = false, inherited = false;
+  var ids, fields, dup = false;
 
   var items = null;   // new area: [{ id, fields }] — one row per rectangle
   if (c.kind === 'new') {
@@ -1825,18 +1834,9 @@ async function _tmSaveArea(text) {
     // every row carries the SAME keys (PostgREST bulk insert requires it)
     var common = { label: label };
     if (tip) common.tooltip = tip;
-    // same name = same group: an active fill of the group extends to the new rectangles (same tile,
-    // same filled_at, so the whole group expires together) — unless it would overlap another filled area
-    var grp = _tmAreaRects().filter(function (a) { return a.ka === label && a.fill && a.fill.active; });
-    if (grp.length) {
-      var clash = _tmAreaFillClash(c.rects, label);
-      if (clash.length) {
-        _tmL('ter', '✗ ახალი არეალი გადაფარავს ფილიან არეს: ' + clash.join(', ') + ' — შეცვალე სახელი (ფილის გარეშე შეინახება) ან Esc და თავიდან დახატე');
-        return;
-      }
-      common.fill_tile_id = grp[0].fill.tile; common.fill_days = grp[0].fill.days; common.filled_at = grp[0].fill.at;
-      inherited = true;
-    }
+    // New rectangles start PLAIN even under an existing (already-filled) name — each patch's fill
+    // timer is independent (see _tmAreaFill): run "/არე <name> შევსება ..." afterward and it will
+    // fill only these new, not-yet-filled rows, leaving the group's already-active patches untouched.
     var stamp = Date.now();
     items = c.rects.map(function (rc, i) {
       return { id: 'area_' + stamp + '_' + ('00' + i).slice(-3),
@@ -1869,7 +1869,7 @@ async function _tmSaveArea(text) {
   if (res !== true) { _tmL('ter', _tmAreaSaveErr(res) + ' — ტექსტი რედაქტორშია, სცადე ისევ Ctrl+Enter'); return; }
   _tmAreaSessionClose();
   if (c.kind === 'new') {
-    _tmL('tok', 'არეალი "' + label + '" — შენახულია ✓ (ყველა viewer-ს ეჩვენება)' + (items && items.length > 1 ? ' · ' + items.length + ' ნაწილი' : '') + (inherited ? ' · ჯგუფის ფილა გავრცელდა' : ''));
+    _tmL('tok', 'არეალი "' + label + '" — შენახულია ✓ (ყველა viewer-ს ეჩვენება)' + (items && items.length > 1 ? ' · ' + items.length + ' ნაწილი' : ''));
     if (dup) _tmL('tdm', 'ℹ ამ სახელით არეალი უკვე არსებობდა — ისინი ერთ ჯგუფად ჩაითვლება (ერთად ინათებს, /წასვლა ორივეს პოულობს)');
   } else {
     _tmL('tok', 'არეალი "' + c.ka.label + '" — განახლდა ✓' + (ids.length > 1 ? ' (' + ids.length + ' ნაწილი)' : '') + ' (ყველა viewer-ს ეჩვენება)');
