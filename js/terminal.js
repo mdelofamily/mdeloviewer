@@ -1834,9 +1834,22 @@ async function _tmSaveArea(text) {
     // every row carries the SAME keys (PostgREST bulk insert requires it)
     var common = { label: label };
     if (tip) common.tooltip = tip;
-    // New rectangles start PLAIN even under an existing (already-filled) name — each patch's fill
-    // timer is independent (see _tmAreaFill): run "/არე <name> შევსება ..." afterward and it will
-    // fill only these new, not-yet-filled rows, leaving the group's already-active patches untouched.
+    var autoFill = null;
+    // General rule: a name "remembers" the tile+days it was last filled with (derived live from
+    // the group's own rows — no separate table, so it is naturally forgotten once every row of
+    // the name has expired/been deleted). A brand-new name stays PLAIN until someone runs
+    // "/არე <name> შევსება ..." once (resident+); after that, every further addition under the
+    // same name auto-fills immediately — with its OWN filled_at (independent timer), not the
+    // template row's — unless it would overlap another name's active fill, in which case the
+    // area is still created but left plain (resolve the clash with a manual შევსება).
+    var tmpl = _tmAreaRects().filter(function (a) { return a.ka === label && a.fill && a.fill.tile; })
+      .sort(function (a, b) { return (Date.parse(b.fill.at) || 0) - (Date.parse(a.fill.at) || 0); })[0];
+    var autoFillClash = null;
+    if (tmpl) {
+      var tc = _tmAreaFillClash(c.rects, label);
+      if (tc.length) autoFillClash = tc;
+      else { common.fill_tile_id = tmpl.fill.tile; common.fill_days = tmpl.fill.days; common.filled_at = new Date().toISOString(); autoFill = tmpl.fill; }
+    }
     var stamp = Date.now();
     items = c.rects.map(function (rc, i) {
       return { id: 'area_' + stamp + '_' + ('00' + i).slice(-3),
@@ -1869,7 +1882,9 @@ async function _tmSaveArea(text) {
   if (res !== true) { _tmL('ter', _tmAreaSaveErr(res) + ' — ტექსტი რედაქტორშია, სცადე ისევ Ctrl+Enter'); return; }
   _tmAreaSessionClose();
   if (c.kind === 'new') {
-    _tmL('tok', 'არეალი "' + label + '" — შენახულია ✓ (ყველა viewer-ს ეჩვენება)' + (items && items.length > 1 ? ' · ' + items.length + ' ნაწილი' : ''));
+    _tmL('tok', 'არეალი "' + label + '" — შენახულია ✓ (ყველა viewer-ს ეჩვენება)' + (items && items.length > 1 ? ' · ' + items.length + ' ნაწილი' : '') +
+      (autoFill ? ' · ავტომატურად შეივსო: ' + autoFill.tile + ', ' + autoFill.days + ' დღე' : '') +
+      (autoFillClash ? ' · ფილა ვერ დაედო, გადაფარავს: ' + autoFillClash.join(', ') + ' — შეავსე ხელით /არე ' + label + ' შევსება-თი' : ''));
     if (dup) _tmL('tdm', 'ℹ ამ სახელით არეალი უკვე არსებობდა — ისინი ერთ ჯგუფად ჩაითვლება (ერთად ინათებს, /წასვლა ორივეს პოულობს)');
   } else {
     _tmL('tok', 'არეალი "' + c.ka.label + '" — განახლდა ✓' + (ids.length > 1 ? ' (' + ids.length + ' ნაწილი)' : '') + ' (ყველა viewer-ს ეჩვენება)');
