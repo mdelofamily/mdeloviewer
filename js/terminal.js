@@ -512,6 +512,7 @@ async function _tmRun(raw) {
     'სცენა':       _tmScene,
     'კვანძი':      _tmNode,
     'წერტილი':     _tmSpot,
+    'წერტილები':   _tmSpotsAll,
     'დიალოგი':     _tmDlgOrNode,
     'წასვლა':      _tmGo,
     'ლეგენდა':     _tmLegend,
@@ -769,7 +770,26 @@ async function _tmSpot(args) {
   }
   if (sub === 'გაუქმება') { window.hotspotPlaceCancel(); _tmL('tdm', 'გაუქმდა'); return; }
 
-  _tmL('ter', 'გამოყენება: /წერტილი დადება <კვანძი|სცენა|გასვლა> [სახელი] | /წერტილი წაშ | /წერტილი ნახვა | /წერტილი გაუქმება');
+  // Anything else = comma-separated node names to light up: /წერტილი <სახელი>, <სახელი>
+  var glowNames = args.join(' ').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  if (glowNames.length && typeof window.hotspotGlowNames === 'function') {
+    var gr = window.hotspotGlowNames(glowNames);
+    if (gr && gr.msg) { _tmL('ter', '✗ ' + gr.msg); return; }
+    if (gr.missing.length) _tmL('ter', '✗ კვანძი ვერ მოიძებნა: ' + gr.missing.join(', '));
+    if (gr.noHot.length) _tmL('ter', '✗ წერტილი არ აქვს: ' + gr.noHot.join(', '));
+    if (gr.lit.length) closeTerm(); // terminal covers the scene — close it so the glow is visible
+    return;
+  }
+
+  _tmL('ter', 'გამოყენება: /წერტილი <სახელი>, <სახელი> | /წერტილი დადება <კვანძი|სცენა|გასვლა> [სახელი] | /წერტილი წაშ | /წერტილი ნახვა | /წერტილი გაუქმება');
+}
+
+// /წერტილები — light up EVERY hotspot of the open scene (all kinds), no tier.
+function _tmSpotsAll() {
+  if (typeof window.hotspotGlowAll !== 'function') { _tmL('ter', '✗ interior-scenes.js ვერ მოიძებნა'); return; }
+  var r = window.hotspotGlowAll();
+  if (r && r.msg) { _tmL('ter', '✗ ' + r.msg); return; }
+  closeTerm();
 }
 
 // ── built-in commands ──
@@ -791,6 +811,8 @@ function _tmHelp() {
     ['/სცენა შექმნა|წაშ|რედ|ფონი', 'ინტერიერი/world-view სცენის მართვა'],
     ['/კვანძი სია|დამატება|დიალოგი|წაშ', 'ღია სცენაში ინვენტარის კვანძი'],
     ['/წერტილი დადება|წაშ|ნახვა|გაუქმება', 'hotspot-ის დადება (თითით თავისუფალი ხატვა)'],
+    ['/წერტილი <სახელი>, <სახელი>', 'მითითებული კვანძის წერტილების ანთება სცენაზე'],
+    ['/წერტილები', 'სცენის ყველა წერტილის ანთება'],
     ['/წასვლა [N]',       'ზონაზე ნავიგაცია'],
     ['/ლეგენდა',          'აღწერას ჩვენა/დამალვა'],
     ['/ლეგენდა რედაქტირება', 'მთავარი ლეგენდის ტექსტის რედაქტირება'],
@@ -3288,7 +3310,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
 var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
-  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
+  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
 // ";" inside ordinary command args is left alone) — PLUS treats any [...]

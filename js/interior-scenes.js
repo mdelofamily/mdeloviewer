@@ -88,13 +88,18 @@
       '#isGlowWrap.flash{animation:isGlowPulse 1.5s ease-out forwards;}' +
       '#isGlow{display:block;width:100%;height:100%;pointer-events:none;user-select:none;' +
         '-webkit-user-drag:none;filter:brightness(1.5) saturate(1.25);}' +
+      '#isGlowWrap.flash.long{animation-duration:2.8s;}' +
       '@keyframes isGlowPulse{0%{opacity:0}15%{opacity:1}55%{opacity:.85}100%{opacity:0}}';
     document.head.appendChild(style);
 
     var wrap = document.createElement('div');
     wrap.id = 'interiorScene';
     wrap.innerHTML = '<div id="isStage"><img id="isImg" draggable="false" alt="">' +
-      '<div id="isGlowWrap"><img id="isGlow" draggable="false" alt=""></div></div>';
+      '<div id="isGlowWrap"><img id="isGlow" draggable="false" alt="">' +
+      // zero-size (NOT display:none, or url(#...) refs break) svg that only holds the
+      // clipPath; one <polygon> per lit hotspot, coords as 0..1 fractions of the image
+      '<svg width="0" height="0" style="position:absolute"><clipPath id="isGlowClip" clipPathUnits="objectBoundingBox"></clipPath></svg>' +
+      '</div></div>';
     document.body.appendChild(wrap);
 
     var stage = document.getElementById('isStage');
@@ -280,21 +285,59 @@
   // Light up the tapped hotspot's object: clip the glow copy of the background
   // to the polygon (points are natural-pixel space -> percentages of the stage,
   // so it follows zoom/pan automatically) and restart the CSS pulse.
-  function _glowFlash(h) {
+  // hs = array of hotspot entries ({points}); several polygons = one union clipPath
+  // (a single <img>, so lighting every hotspot at once costs one layer, not N).
+  function _glowFlash(hs, long) {
     var wrap = document.getElementById('isGlowWrap');
     var g = document.getElementById('isGlow');
+    var clip = document.getElementById('isGlowClip');
     var img = document.getElementById('isImg');
-    if (!wrap || !g || !img.naturalWidth || !h || h.points.length < 3) return;
+    if (!wrap || !g || !clip || !img.naturalWidth || !hs || !hs.length) return false;
     if (g.getAttribute('src') !== img.getAttribute('src')) g.src = img.src;
-    var nw = img.naturalWidth, nh = img.naturalHeight;
-    var cp = 'polygon(' + h.points.map(function (pt) {
-      return (pt[0] / nw * 100).toFixed(3) + '% ' + (pt[1] / nh * 100).toFixed(3) + '%';
-    }).join(',') + ')';
-    g.style.clipPath = cp;
-    g.style.webkitClipPath = cp;
-    wrap.classList.remove('flash');
-    void wrap.offsetWidth; // force reflow so the animation restarts on repeat taps
+    var nw = img.naturalWidth, nh = img.naturalHeight, svgNS = 'http://www.w3.org/2000/svg', n = 0;
+    while (clip.lastChild) clip.removeChild(clip.lastChild);
+    hs.forEach(function (h) {
+      if (!h || h.points.length < 3) return;
+      var poly = document.createElementNS(svgNS, 'polygon');
+      poly.setAttribute('points', h.points.map(function (pt) {
+        return (pt[0] / nw).toFixed(5) + ',' + (pt[1] / nh).toFixed(5);
+      }).join(' '));
+      clip.appendChild(poly); n++;
+    });
+    if (!n) return false;
+    g.style.clipPath = 'url(#isGlowClip)';
+    g.style.webkitClipPath = 'url(#isGlowClip)';
+    wrap.classList.remove('flash', 'long');
+    void wrap.offsetWidth; // force reflow so the animation restarts on repeat calls
+    if (long) wrap.classList.add('long');
     wrap.classList.add('flash');
+    return true;
+  }
+
+  // Terminal hooks. Names = node titles (ka or en); every hotspot pointing at a
+  // named node lights up. Returns {msg} on hard failure, else a report object.
+  function hotspotGlowNames(names) {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    var norm = function (v) { return String(v || '').trim().toLowerCase(); };
+    var lit = [], noHot = [], missing = [], hs = [];
+    (names || []).forEach(function (name) {
+      var node = null;
+      _nodes.forEach(function (n) {
+        if (norm(n.title_ka) === norm(name) || (n.title_en && norm(n.title_en) === norm(name))) node = n;
+      });
+      if (!node) { missing.push(name); return; }
+      var found = _hots.filter(function (h) { return h.row.kind === 'item' && h.row.target_id === node.id; });
+      if (!found.length) { noHot.push(name); return; }
+      found.forEach(function (h) { if (hs.indexOf(h) < 0) hs.push(h); });
+      lit.push(name);
+    });
+    if (hs.length) _glowFlash(hs, true);
+    return { lit: lit, noHot: noHot, missing: missing };
+  }
+  function hotspotGlowAll() {
+    var err = _requireOpenScene(); if (err) return { msg: err };
+    if (!_hots.length) return { msg: 'ამ სცენაზე წერტილი არ არის' };
+    return _glowFlash(_hots, true) ? _hots.length : { msg: 'სურათი ჯერ არ ჩატვირთულა' };
   }
 
   function _handleTap(clientX, clientY) {
@@ -475,7 +518,7 @@
 
   function _activate(row, h) {
     if (row.kind === 'item') {
-      _glowFlash(h);
+      _glowFlash(h ? [h] : null);
       var node = _nodes.get(row.target_id);
       if (node) { _showNode(node); return; }
       _fetchNodeById(row.target_id).then(function (n) { if (n) _showNode(n); });
@@ -804,7 +847,7 @@
   function interiorSceneClose() {
     if (typeof global.closeHsPopup === 'function') global.closeHsPopup();
     if (_dom) _dom.classList.remove('show');
-    var _gw = document.getElementById('isGlowWrap'); if (_gw) _gw.classList.remove('flash');
+    var _gw = document.getElementById('isGlowWrap'); if (_gw) _gw.classList.remove('flash', 'long');
     _setBreadcrumb(null);
     _scene = null; _nodes = new Map(); _hots = [];
     _placeMode = null; _drawing = false; _drawPath = []; _pending = null; _reviewMode = false;
@@ -815,6 +858,8 @@
     if (e.key === 'Escape' && _dom && _dom.classList.contains('show')) interiorSceneClose();
   });
 
+  global.hotspotGlowNames = hotspotGlowNames;
+  global.hotspotGlowAll = hotspotGlowAll;
   global.sceneEnterByTitle = sceneEnterByTitle;
   global.sceneEnterById = sceneEnterById;
   global.interiorSceneClose = interiorSceneClose;
