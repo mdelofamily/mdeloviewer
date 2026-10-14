@@ -24,6 +24,9 @@
 //     overlay (_refreshPlaceOverlay) while armed. Delete-picking stays a
 //     plain tap (point-in-polygon).
 //
+//   - Tap glow (_glowFlash): tapping an 'item' hotspot briefly lights up the real
+//     object (clipped, brightened copy of the background) before the popup shows.
+//
 // Explicitly OUT of scope here (left for later sub-scopes, not decided yet):
 //   - interior_hotspots.node_id nesting vs. inventory_nodes.parent_id (open question
 //     #4 in the architecture doc) — a kind='item' hotspot just shows its target
@@ -75,12 +78,23 @@
       '#interiorScene.show{display:flex;}' +
       '#isStage{position:absolute;left:0;top:0;touch-action:none;}' +
       '#isImg{display:block;width:100%;height:100%;cursor:pointer;user-select:none;' +
-        '-webkit-user-drag:none;image-rendering:auto;pointer-events:none;}';
+        '-webkit-user-drag:none;image-rendering:auto;pointer-events:none;}' +
+      // Tap glow: a second copy of the background, clipped to the tapped hotspot's
+      // polygon and brightened, so the real object seems to light up. The outer
+      // wrapper carries drop-shadow (a filter on the clipped element itself would
+      // be clipped away, because clip-path is applied after filter).
+      '#isGlowWrap{position:absolute;inset:0;pointer-events:none;opacity:0;' +
+        'filter:drop-shadow(0 0 5px rgba(255,225,130,.95)) drop-shadow(0 0 14px rgba(255,190,70,.55));}' +
+      '#isGlowWrap.flash{animation:isGlowPulse 1.5s ease-out forwards;}' +
+      '#isGlow{display:block;width:100%;height:100%;pointer-events:none;user-select:none;' +
+        '-webkit-user-drag:none;filter:brightness(1.5) saturate(1.25);}' +
+      '@keyframes isGlowPulse{0%{opacity:0}15%{opacity:1}55%{opacity:.85}100%{opacity:0}}';
     document.head.appendChild(style);
 
     var wrap = document.createElement('div');
     wrap.id = 'interiorScene';
-    wrap.innerHTML = '<div id="isStage"><img id="isImg" draggable="false" alt=""></div>';
+    wrap.innerHTML = '<div id="isStage"><img id="isImg" draggable="false" alt="">' +
+      '<div id="isGlowWrap"><img id="isGlow" draggable="false" alt=""></div></div>';
     document.body.appendChild(wrap);
 
     var stage = document.getElementById('isStage');
@@ -263,6 +277,26 @@
     }
   }
 
+  // Light up the tapped hotspot's object: clip the glow copy of the background
+  // to the polygon (points are natural-pixel space -> percentages of the stage,
+  // so it follows zoom/pan automatically) and restart the CSS pulse.
+  function _glowFlash(h) {
+    var wrap = document.getElementById('isGlowWrap');
+    var g = document.getElementById('isGlow');
+    var img = document.getElementById('isImg');
+    if (!wrap || !g || !img.naturalWidth || !h || h.points.length < 3) return;
+    if (g.getAttribute('src') !== img.getAttribute('src')) g.src = img.src;
+    var nw = img.naturalWidth, nh = img.naturalHeight;
+    var cp = 'polygon(' + h.points.map(function (pt) {
+      return (pt[0] / nw * 100).toFixed(3) + '% ' + (pt[1] / nh * 100).toFixed(3) + '%';
+    }).join(',') + ')';
+    g.style.clipPath = cp;
+    g.style.webkitClipPath = cp;
+    wrap.classList.remove('flash');
+    void wrap.offsetWidth; // force reflow so the animation restarts on repeat taps
+    wrap.classList.add('flash');
+  }
+
   function _handleTap(clientX, clientY) {
     var p = _toImg(clientX, clientY);
     var x = p[0], y = p[1];
@@ -276,7 +310,7 @@
       var h = _hots[i];
       if (_pointInPoly(x, y, h.points) && (!best || h.area < best.area)) best = h;
     }
-    if (best) { _activate(best.row); return; }
+    if (best) { _activate(best.row, best); return; }
     // No hotspot under the tap: just dismiss any open dialogue, same as
     // tapping empty ground on the outdoor map.
     if (typeof global.closeHsPopup === 'function') global.closeHsPopup();
@@ -439,8 +473,9 @@
     _refreshPlaceOverlay(); _renderBanner();
   }
 
-  function _activate(row) {
+  function _activate(row, h) {
     if (row.kind === 'item') {
+      _glowFlash(h);
       var node = _nodes.get(row.target_id);
       if (node) { _showNode(node); return; }
       _fetchNodeById(row.target_id).then(function (n) { if (n) _showNode(n); });
@@ -769,6 +804,7 @@
   function interiorSceneClose() {
     if (typeof global.closeHsPopup === 'function') global.closeHsPopup();
     if (_dom) _dom.classList.remove('show');
+    var _gw = document.getElementById('isGlowWrap'); if (_gw) _gw.classList.remove('flash');
     _setBreadcrumb(null);
     _scene = null; _nodes = new Map(); _hots = [];
     _placeMode = null; _drawing = false; _drawPath = []; _pending = null; _reviewMode = false;
