@@ -752,13 +752,13 @@ async function _tmSpot(args) {
     } else {
       _tmL('ter', 'გამოყენება: /წერტილი დადება <კვანძი|სცენა|გასვლა> [სახელი]'); return;
     }
-    if (res === true) _tmL('tdm', '🖐 დახატე თითით სასურველი ფორმა სცენის სურათზე და აუშვი — /წერტილი გაუქმება გასაუქმებლად');
+    if (res === true) { _tmL('tdm', '🖐 დახატე თითით სასურველი ფორმა სცენის სურათზე და აუშვი — /წერტილი გაუქმება გასაუქმებლად'); closeTerm(); }
     else _tmL('ter', '✗ ' + ((res && res.msg) || 'ვერ დაიწყო'));
     return;
   }
   if (sub === 'წაშ') {
     var res2 = window.hotspotPlaceDelete();
-    if (res2 === true) _tmL('tdm', '🖐 დააჭირე hotspot-ს წასაშლელად — /წერტილი გაუქმება გასაუქმებლად');
+    if (res2 === true) { _tmL('tdm', '🖐 დააჭირე hotspot-ს წასაშლელად — /წერტილი გაუქმება გასაუქმებლად'); closeTerm(); }
     else _tmL('ter', '✗ ' + ((res2 && res2.msg) || 'ვერ დაიწყო'));
     return;
   }
