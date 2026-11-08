@@ -3823,3 +3823,288 @@ window.addEventListener('online', () => {
     });
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// ── personal panels (stage I) ─────────────────────────────────────────────
+// A panel = a titled window of buttons; each button runs ONE terminal command
+// ("/...") or ONE saved macro. Stored in Supabase table `panels` (RLS: owner only),
+// cached read-only in localStorage for offline. The window reuses the dialogue
+// popup shell (#hsPopup) but has its own content model.
+//
+// No tier logic runs at press time in this file: execution goes through
+// window.tmRun / window.runMacro, which already check the presser's tier.
+// The only tier check here is the add-time block in _panelCheckAction (UX help).
+// Button shape: { id, type:'cmd', label:{ka,en?}, icon:'🌿', action:'/cmd...' | 'macroName' }
+// ══════════════════════════════════════════════════════════════════════════
+window._panels = [];
+window._panelsStale = false;   // true when the list came from the offline snapshot
+var _PANEL_MAX_BTNS = 30;
+
+// Snapshot key is per USER + map (the editor-override snapshots are per map only —
+// reusing that would show one person's panels to another on a shared device).
+function _panelsSnapKey() { return 'mdelo_panels_' + (window.myUserId() || 'anon') + '_' + _MAP_ID; }
+
+window.panelsLoad = async function () {
+  var uid = window.myUserId();
+  window._panelsStale = false;
+  if (!uid) { window._panels = []; return window._panels; }
+  try {
+    var r = await fetch(SUPA_URL + '/rest/v1/panels?map_id=eq.' + encodeURIComponent(_MAP_ID) + '&select=*&order=title.asc',
+      { headers: _authHeaders() });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var rows = await r.json();
+    window._panels = Array.isArray(rows) ? rows : [];
+    try { localStorage.setItem(_panelsSnapKey(), JSON.stringify(window._panels)); } catch (e) {}
+  } catch (e) {
+    var snap = null;
+    try { snap = JSON.parse(localStorage.getItem(_panelsSnapKey()) || 'null'); } catch (e2) {}
+    window._panels = Array.isArray(snap) ? snap : [];
+    window._panelsStale = true;   // read-only: saving needs the network
+  }
+  return window._panels;
+};
+
+// Find by 1-based number (as listed by /პანელი) or exact title (ka, or en case-insensitive).
+window.panelFind = function (q) {
+  q = (q || '').trim();
+  if (!q) return null;
+  var list = window._panels || [];
+  if (/^\d+$/.test(q)) return list[+q - 1] || null;
+  var lq = q.toLowerCase();
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].title === q) return list[i];
+    if (list[i].title_en && list[i].title_en.toLowerCase() === lq) return list[i];
+  }
+  return null;
+};
+
+function _panelErr(r, body) { return { ok: false, status: r.status, msg: (body || '').slice(0, 150) }; }
+
+// p = { panel_id?, title, title_en?, icon?, buttons[] } → { ok:true, row } | { ok:false, status, msg }
+window.panelSave = async function (p) {
+  if (!navigator.onLine) return { ok: false, status: 0, msg: 'ოფლაინ — შენახვას ქსელი სჭირდება' };
+  try {
+    var body = {
+      title: p.title, title_en: p.title_en || null, icon: p.icon || null,
+      buttons: p.buttons, updated_at: new Date().toISOString()
+    };
+    var url = SUPA_URL + '/rest/v1/panels', method = 'POST';
+    if (p.panel_id) { method = 'PATCH'; url += '?panel_id=eq.' + encodeURIComponent(p.panel_id); }
+    else body.map_id = _MAP_ID;   // owner comes from the column default auth.uid()
+    var r = await fetch(url, {
+      method: method,
+      headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=representation' }, _authHeaders()),
+      body: JSON.stringify(body)
+    });
+    var txt = await r.text().catch(function () { return ''; });
+    if (!r.ok) return _panelErr(r, txt);
+    var rows = []; try { rows = JSON.parse(txt); } catch (e) {}
+    var row = rows && rows[0];
+    if (!row) return { ok: false, status: r.status, msg: 'ცარიელი პასუხი (უფლება/RLS?)' };
+    await window.panelsLoad();   // refresh list + offline snapshot
+    return { ok: true, row: row };
+  } catch (e) { return { ok: false, status: 0, msg: e.message }; }
+};
+
+window.panelDelete = async function (panelId) {
+  if (!navigator.onLine) return { ok: false, status: 0, msg: 'ოფლაინ — წაშლას ქსელი სჭირდება' };
+  try {
+    var r = await fetch(SUPA_URL + '/rest/v1/panels?panel_id=eq.' + encodeURIComponent(panelId),
+      { method: 'DELETE', headers: _authHeaders() });
+    if (!r.ok) return _panelErr(r, await r.text().catch(function () { return ''; }));
+    await window.panelsLoad();
+    return { ok: true };
+  } catch (e) { return { ok: false, status: 0, msg: e.message }; }
+};
+
+// ── add-time block (simplified): checks only the TOP-LEVEL command key against the
+// presser's tier (+ a macro's min_tier). Sub-command tiers (e.g. "/არე ... შევსება")
+// are not inspected here; they are still enforced inside the command at press time.
+// Returns { ok, action (normalized), msg?, warn? }.
+function _panelCheckAction(raw) {
+  var a = (raw || '').trim();
+  var m = a.match(/^\[\$(.+)\]$/) || a.match(/^\$(.+)$/);
+  if (m) a = m[1].trim();
+  if (!a) return { ok: false, msg: 'ბრძანება ან მაკრო ცარიელია' };
+  var tierOf = function (key) { return (typeof _TM_MIN_TIER !== 'undefined' && _TM_MIN_TIER[key]) || null; };
+  var firstDenied = function (cmds) {
+    for (var i = 0; i < cmds.length; i++) {
+      var c = (cmds[i] || '').trim(); if (!c) continue;
+      var key = (typeof _tmCmdKeyFor === 'function') ? _tmCmdKeyFor(c) : c.replace(/^\//, '').split(/\s+/)[0];
+      var need = tierOf(key);
+      if (need && !window._tierAtLeast(need)) return { key: key, need: need };
+    }
+    return null;
+  };
+  if (a.charAt(0) === '/') {
+    var parts = (typeof _tmSplitChain === 'function') ? _tmSplitChain(a.slice(1)) : [a];
+    var d = firstDenied(parts);
+    if (d) return { ok: false, msg: '✗ „/' + d.key + '" საჭიროებს „' + d.need + '" tier-ს' };
+    return { ok: true, action: a };
+  }
+  if (typeof _tmMacroResolve !== 'function') return { ok: true, action: a };
+  var hit = _tmMacroResolve(a);
+  if (!hit) return { ok: false, msg: '✗ მაკრო ვერ მოიძებნა: ' + a };
+  if (hit.minTier) {
+    if (!window._tierAtLeast(hit.minTier)) return { ok: false, msg: '✗ მაკრო საჭიროებს „' + hit.minTier + '" tier-ს' };
+  } else {
+    var d2 = firstDenied(hit.commands || []);
+    if (d2) return { ok: false, msg: '✗ მაკროს ბრძანება „/' + d2.key + '" საჭიროებს „' + d2.need + '" tier-ს' };
+  }
+  var warn = '';
+  try { if (typeof _tmMacroLocalAll === 'function' && _tmMacroLocalAll()[a]) warn = '⚠ ლოკალური მაკროა — მხოლოდ ამ მოწყობილობაზე იმუშავებს'; } catch (e) {}
+  return { ok: true, action: a, warn: warn };
+}
+window._panelCheckAction = _panelCheckAction;
+
+// ── window shell (reuses #hsPopup) ──
+function _panelShell(title) {
+  openHsPopup(null, title, '', null);
+  if (_twTimer) { clearInterval(_twTimer); _twTimer = null; }   // openHsPopup starts a typewriter on empty text
+  var body = document.getElementById('hsPopupBody');
+  body.innerHTML = '';
+  var bw = document.getElementById('hsPopupBtns'); if (bw) bw.innerHTML = '';
+  return body;
+}
+var _PANEL_BTN_CSS = 'width:100%;min-height:36px;background:rgba(22,27,34,0.2);border:1px solid rgba(88,166,255,0.4);color:#e6edf3;font-size:13px;border-radius:8px;cursor:pointer;text-align:center;margin:0 0 6px;padding:4px 8px;';
+var _PANEL_IN_CSS = 'width:100%;box-sizing:border-box;background:rgba(22,27,34,0.5);border:1px solid rgba(88,166,255,0.3);color:#e6edf3;font-size:13px;border-radius:6px;padding:6px;margin:0 0 4px;';
+function _panelTitle(p) { return _i18n({ ka: p.title, en: p.title_en }) || p.title || ''; }
+function _panelBtnEl(css, text, onclick) {
+  var b = document.createElement('button'); b.textContent = text; b.style.cssText = css; b.onclick = onclick; return b;
+}
+
+// view mode: one full-width button per panel button, in order
+window.panelOpen = function (p) {
+  if (!p) return;
+  var body = _panelShell(((p.icon || '') + ' ' + _panelTitle(p)).trim());
+  if (window._panelsStale) {
+    var st = document.createElement('div');
+    st.style.cssText = 'font-size:11px;opacity:0.6;margin:0 0 6px;';
+    st.textContent = '⚠ ქეშიდან (ოფლაინ) — რედაქტირება ქსელს საჭიროებს';
+    body.appendChild(st);
+  }
+  var btns = p.buttons || [];
+  if (!btns.length) {
+    var em = document.createElement('div'); em.style.cssText = 'opacity:0.6;font-size:13px;margin:0 0 8px;';
+    em.textContent = 'ღილაკები ჯერ არ არის — დააჭირე ✎';
+    body.appendChild(em);
+  }
+  btns.forEach(function (btn) {
+    var label = ((btn.icon || '') + ' ' + (_i18n(btn.label) || '')).trim();
+    if (!label || !btn.action) return;
+    body.appendChild(_panelBtnEl(_PANEL_BTN_CSS, label, function () { _panelPress(btn, this); }));
+  });
+  var foot = document.createElement('div');
+  foot.style.cssText = 'display:flex;gap:6px;margin-top:8px;';
+  var ed = _panelBtnEl(_PANEL_BTN_CSS + 'margin:0;opacity:0.7;', '✎', function () { window.panelEdit(p); });
+  var cl = _panelBtnEl(_PANEL_BTN_CSS + 'margin:0;opacity:0.7;', '✕', function () { closeHsPopup(); });
+  foot.appendChild(ed); foot.appendChild(cl);
+  body.appendChild(foot);
+};
+
+// press: delegate to the terminal (command) or the macro runner; tier is re-checked THERE
+function _panelPress(btn, el) {
+  var a = (btn.action || '').trim();
+  var ok = true;
+  if (a.charAt(0) === '/') { if (typeof window.tmRun === 'function') window.tmRun(a); else ok = false; }
+  else if (typeof window.runMacro === 'function') ok = window.runMacro(a) !== false;
+  else ok = false;
+  if (typeof toast === 'function') toast(ok ? '▶ გაიგზავნა' : '⚠ ვერ გაეშვა');
+  if (el) { var o = el.style.background; el.style.background = ok ? 'rgba(63,185,80,0.35)' : 'rgba(248,81,73,0.35)'; setTimeout(function () { el.style.background = o; }, 350); }
+}
+
+// edit mode (also used for a NEW panel: p = null)
+window.panelEdit = function (p) {
+  var isNew = !p;
+  var work = p ? JSON.parse(JSON.stringify(p)) : { title: '', title_en: '', icon: '', buttons: [] };
+  var rows = (work.buttons || []).map(function (b) {
+    return { id: b.id || ('b' + Math.random().toString(36).slice(2, 8)), icon: b.icon || '',
+      ka: (b.label && (b.label.ka != null ? b.label.ka : b.label)) || '', en: (b.label && b.label.en) || '', action: b.action || '' };
+  });
+  var body = _panelShell(isNew ? 'ახალი პანელი' : 'რედაქტირება');
+
+  var inTitle = document.createElement('input'); inTitle.style.cssText = _PANEL_IN_CSS; inTitle.placeholder = 'სათაური'; inTitle.value = work.title || '';
+  var inTitleEn = document.createElement('input'); inTitleEn.style.cssText = _PANEL_IN_CSS; inTitleEn.placeholder = 'title (EN, ოფციონალური)'; inTitleEn.value = work.title_en || '';
+  var inIcon = document.createElement('input'); inIcon.style.cssText = _PANEL_IN_CSS; inIcon.placeholder = 'ემოჯი (ოფციონალური)'; inIcon.value = work.icon || '';
+  body.appendChild(inTitle); body.appendChild(inTitleEn); body.appendChild(inIcon);
+
+  var listEl = document.createElement('div'); body.appendChild(listEl);
+  var msgEl = document.createElement('div'); msgEl.style.cssText = 'font-size:12px;margin:4px 0;min-height:14px;color:#f85149;'; body.appendChild(msgEl);
+
+  function drawRows() {
+    listEl.innerHTML = '';
+    rows.forEach(function (r, idx) {
+      var card = document.createElement('div');
+      card.style.cssText = 'border:1px solid rgba(88,166,255,0.2);border-radius:8px;padding:6px;margin:0 0 6px;';
+      var l1 = document.createElement('div'); l1.style.cssText = 'display:flex;gap:4px;';
+      var ic = document.createElement('input'); ic.style.cssText = _PANEL_IN_CSS + 'width:44px;flex:none;text-align:center;'; ic.placeholder = '🌿'; ic.value = r.icon;
+      ic.oninput = function () { r.icon = ic.value; };
+      var ka = document.createElement('input'); ka.style.cssText = _PANEL_IN_CSS; ka.placeholder = 'წარწერა'; ka.value = r.ka;
+      ka.oninput = function () { r.ka = ka.value; };
+      l1.appendChild(ic); l1.appendChild(ka);
+      var en = document.createElement('input'); en.style.cssText = _PANEL_IN_CSS; en.placeholder = 'label (EN, ოფციონალური)'; en.value = r.en;
+      en.oninput = function () { r.en = en.value; };
+      var l3 = document.createElement('div'); l3.style.cssText = 'display:flex;gap:4px;';
+      var ac = document.createElement('input'); ac.style.cssText = _PANEL_IN_CSS; ac.placeholder = '/ბრძანება  ან  მაკროს სახელი'; ac.value = r.action;
+      var note = document.createElement('div'); note.style.cssText = 'font-size:11px;min-height:12px;';
+      function validate() {
+        var res = _panelCheckAction(ac.value);
+        r.valid = res.ok;
+        if (res.ok) { r.action = res.action; note.style.color = '#d29922'; note.textContent = res.warn || ''; }
+        else { r.action = ac.value; note.style.color = '#f85149'; note.textContent = res.msg; }
+        return res.ok;
+      }
+      ac.onchange = validate;
+      var del = _panelBtnEl(_PANEL_BTN_CSS + 'width:44px;flex:none;margin:0 0 4px;', '✕', function () { rows.splice(idx, 1); drawRows(); });
+      l3.appendChild(ac); l3.appendChild(del);
+      card.appendChild(l1); card.appendChild(en); card.appendChild(l3); card.appendChild(note);
+      listEl.appendChild(card);
+      if (r.action) validate();
+    });
+  }
+  drawRows();
+
+  var add = _panelBtnEl(_PANEL_BTN_CSS, '+', function () {
+    if (rows.length >= _PANEL_MAX_BTNS) { msgEl.textContent = 'მაქსიმუმ ' + _PANEL_MAX_BTNS + ' ღილაკი'; return; }
+    rows.push({ id: 'b' + Math.random().toString(36).slice(2, 8), icon: '', ka: '', en: '', action: '', valid: false });
+    drawRows();
+  });
+  body.appendChild(add);
+
+  var foot = document.createElement('div'); foot.style.cssText = 'display:flex;gap:6px;margin-top:8px;';
+  var save = _panelBtnEl(_PANEL_BTN_CSS + 'margin:0;', '💾 შენახვა', async function () {
+    msgEl.style.color = '#f85149';
+    var title = inTitle.value.trim();
+    if (!title) { msgEl.textContent = 'სათაური სავალდებულოა'; return; }
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var res = _panelCheckAction(r.action);   // re-validate: tier/macros may have changed since typing
+      if (!r.ka.trim()) { msgEl.textContent = 'ღილაკი №' + (i + 1) + ': წარწერა ცარიელია'; return; }
+      if (!res.ok) { msgEl.textContent = 'ღილაკი №' + (i + 1) + ': ' + res.msg; return; }
+      var label = { ka: r.ka.trim() };
+      var en = r.en.trim();
+      if (en && en !== label.ka) label.en = en;   // en only when it really differs (untouched-field rule)
+      out.push({ id: r.id, type: 'cmd', label: label, icon: r.icon.trim(), action: res.action });
+    }
+    var tEn = inTitleEn.value.trim();
+    var payload = { panel_id: work.panel_id, title: title, title_en: (tEn && tEn !== title) ? tEn : null,
+      icon: inIcon.value.trim() || null, buttons: out };
+    save.disabled = true; msgEl.style.color = '#8b949e'; msgEl.textContent = '⏳ ინახება...';
+    var sres = await window.panelSave(payload);
+    save.disabled = false;
+    if (!sres.ok) {
+      msgEl.style.color = '#f85149';
+      msgEl.textContent = (sres.status === 409 || /duplicate|unique/i.test(sres.msg || '')) ? 'ამ სახელით პანელი უკვე გაქვს'
+        : (/limit/i.test(sres.msg || '') ? 'პანელების ლიმიტი (20) ამოიწურა' : ('✗ ვერ შეინახა — ' + (sres.msg || sres.status)));
+      return;
+    }
+    if (typeof toast === 'function') toast('✓ პანელი შენახულია');
+    window.panelOpen(sres.row);
+  });
+  var cancel = _panelBtnEl(_PANEL_BTN_CSS + 'margin:0;opacity:0.7;', 'გაუქმება', function () {
+    if (isNew) closeHsPopup(); else window.panelOpen(p);
+  });
+  foot.appendChild(save); foot.appendChild(cancel);
+  body.appendChild(foot);
+};

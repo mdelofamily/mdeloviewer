@@ -385,7 +385,8 @@ var _TM_MIN_TIER = {
   'ობიექტი':     'resident', // place/delete a catalog object on the map (object_overrides)
   'სცენა':       'resident', // interior/world-view scene create/delete/rename/background
   'კვანძი':      'resident', // inventory_nodes create/delete/edit within the currently open scene
-  'წერტილი':     'resident'  // interior_hotspots placement/deletion (temporary 2-tap rectangle)
+  'წერტილი':     'resident', // interior_hotspots placement/deletion (temporary 2-tap rectangle)
+  'პანელი':      'resident'  // personal button panels (panels table, owner-only RLS)
 };
 
 // Scoped elevation flag — true only while executing the commands *inside* a
@@ -510,6 +511,7 @@ async function _tmRun(raw) {
     'ობიექტები':   _tmObjects,
     'ობიექტი':     _tmObjectCmd,
     'სცენა':       _tmScene,
+    'პანელი':      _tmPanel,
     'კვანძი':      _tmNode,
     'წერტილი':     _tmSpot,
     'წერტილები':   _tmSpotsAll,
@@ -809,6 +811,7 @@ function _tmHelp() {
     ['/<სახელი> შესვლა', 'ინტერიერის სცენაში შესვლა (მაგ. /ბოსტანი შესვლა)'],
     ['/გასვლა', 'სცენიდან გამოსვლა outdoor რუკაზე'],
     ['/სცენა შექმნა|წაშ|რედ|ფონი', 'ინტერიერი/world-view სცენის მართვა'],
+    ['/პანელი [სახელი|№|ახალი|რედ|წაშ]', 'პირადი ღილაკების პანელი (resident+)'],
     ['/კვანძი სია|დამატება|დიალოგი|წაშ', 'ღია სცენაში ინვენტარის კვანძი'],
     ['/წერტილი დადება|წაშ|ნახვა|გაუქმება', 'hotspot-ის დადება (თითით თავისუფალი ხატვა)'],
     ['/წერტილი <სახელი>, <სახელი>', 'მითითებული კვანძის წერტილების ანთება სცენაზე'],
@@ -3310,7 +3313,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
 var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
-  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება'];
+  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება','პანელი'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
 // ";" inside ordinary command args is left alone) — PLUS treats any [...]
@@ -3557,6 +3560,59 @@ window.runMacro = function (name) {
   _tmRunChain(hit.commands).finally(function () { _tmMacroElevated = wasElevated; });
   return true;
 };
+
+// ── /პანელი — personal button panels (resident+) ─────────────────────────────
+// /პანელი                      list
+// /პანელი ახალი                open the editor for a new panel
+// /პანელი <სახელი|№>           open
+// /პანელი რედ <სახელი|№>       edit
+// /პანელი წაშ <სახელი|№> დიახ  delete (without "დიახ": preview only)
+// Panels live in Supabase (owner-only RLS); the window itself is runtime.js (window.panelOpen/panelEdit).
+async function _tmPanel(args) {
+  if (typeof window.panelsLoad !== 'function') { _tmL('ter', '✗ runtime.js-ში panelsLoad ვერ მოიძებნა'); return; }
+  if (!(typeof window.myUserId === 'function' && window.myUserId())) { _tmL('ter', '✗ პანელებისთვის საჭიროა შესვლა — /ლოგინი'); return; }
+  await window.panelsLoad();
+  if (window._panelsStale) _tmL('tdm', '⚠ ქეშიდან (ოფლაინ) — ნახვა შესაძლებელია, ცვლილებას ქსელი სჭირდება');
+  var list = window._panels || [];
+  var sub = (args[0] || '').trim();
+
+  if (!sub) {
+    _tmL('tdm', _SEP);
+    if (!list.length) _tmL('tdm', '(პანელები არ გაქვს — /პანელი ახალი)');
+    list.forEach(function (p, i) {
+      _tmL('tnf', (i + 1) + '. ' + (p.icon ? p.icon + ' ' : '') + p.title + '  (' + ((p.buttons || []).length) + ' ღილაკი)');
+    });
+    _tmL('tdm', _SEP);
+    return;
+  }
+
+  if (sub === 'ახალი') {
+    if (window._panelsStale || !navigator.onLine) { _tmL('ter', '✗ ოფლაინ — ახალი პანელი ქსელს საჭიროებს'); return; }
+    closeTerm(); window.panelEdit(null); return;
+  }
+
+  var isEdit = sub === 'რედ', isDel = sub === 'წაშ';
+  var rest = (isEdit || isDel) ? args.slice(1) : args.slice(0);
+  var confirmed = false;
+  if (isDel && rest.length && rest[rest.length - 1] === 'დიახ') { confirmed = true; rest = rest.slice(0, -1); }
+  var q = rest.join(' ').trim();
+  if (!q) { _tmL('ter', 'გამოყენება: /პანელი [სახელი|№] · /პანელი რედ <სახელი|№> · /პანელი წაშ <სახელი|№> დიახ'); return; }
+  var p = window.panelFind(q);
+  if (!p) { _tmL('ter', '✗ პანელი ვერ მოიძებნა: ' + q + '  (სია: /პანელი)'); return; }
+
+  if (isDel) {
+    if (!confirmed) { _tmL('tdm', 'წაიშლება: ' + p.title + ' (' + ((p.buttons || []).length) + ' ღილაკი). დასადასტურებლად: /პანელი წაშ ' + p.title + ' დიახ'); return; }
+    var dres = await window.panelDelete(p.panel_id);
+    if (dres.ok) _tmL('tok', '✓ წაიშალა: ' + p.title);
+    else _tmL('ter', '✗ ვერ წაიშალა — ' + (dres.msg || dres.status));
+    return;
+  }
+  if (isEdit) {
+    if (window._panelsStale || !navigator.onLine) { _tmL('ter', '✗ ოფლაინ — რედაქტირებას ქსელი სჭირდება'); return; }
+    closeTerm(); window.panelEdit(p); return;
+  }
+  closeTerm(); window.panelOpen(p);
+}
 
 // Expose raw command/chain execution for runtime.js (consensus terminal_cmd field).
 // Accepts a single command or a semicolon-separated chain.
