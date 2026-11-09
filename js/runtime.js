@@ -3977,6 +3977,8 @@ function _panelEnsureStyle() {
     '#hsPopup.panel-mode #hsPopupBody{opacity:1 !important;max-height:none !important;overflow:visible !important;' +
       '-webkit-mask-image:none !important;mask-image:none !important;padding-top:0 !important;}' +
     '#hsPopup.panel-mode #hsPopupBtns{display:none !important;}' +
+    '#hsPopup.panel-mode #hsPopupScroll{padding-bottom:0 !important;}' +
+    '#hsPopup.panel-mode #hsPopupBody > button:last-child{margin-bottom:0 !important;}' +
     '#hsPopup.panel-mode #hsPopupTitle{display:flex !important;align-items:center;gap:8px;box-sizing:border-box;' +
       'border:1px solid rgba(88,166,255,0.5);border-radius:8px;background:rgba(88,166,255,0.08);' +
       'padding:5px 5px 5px 12px;margin:0 0 10px !important;}' +
@@ -3986,12 +3988,21 @@ function _panelEnsureStyle() {
     '#hsPopup.panel-mode{padding:12px 14px !important;}';   // template pads 34px on the right for #hsClose
   document.head.appendChild(st);
 }
+// Panels are anchored at the top: 3px below the bottom edge of the burger button (#menuBtn),
+// so the map stays visible underneath. Falls back to 68px if the button is not measurable.
 function _panelFit() {
   var popup = document.getElementById('hsPopup');
   if (!popup || !popup.classList.contains('panel-mode')) return;
-  var h = popup.offsetHeight, vh = window.innerHeight;
-  var top = Math.max(60, Math.min((vh - h) / 2, vh - h - 20));   // centred, clamped under the header bar
+  var mb = document.getElementById('menuBtn');
+  var top = 68;
+  if (mb) { var rc = mb.getBoundingClientRect(); if (rc.height > 0) top = Math.round(rc.bottom) + 3; }
   popup.style.setProperty('top', top + 'px', 'important');   // template: top:20% !important
+  var sc = document.getElementById('hsPopupScroll');
+  if (sc) {   // scroll only if the content cannot fit between the anchor and the screen bottom
+    var t = document.getElementById('hsPopupTitle');
+    var room = window.innerHeight - top - (t ? t.offsetHeight + 10 : 50) - 36;
+    sc.style.setProperty('max-height', Math.max(120, room) + 'px', 'important');
+  }
 }
 // Title-bar action buttons: specs = [{ glyph | svg, label, onclick }] → returns the created buttons.
 var _PANEL_ICON_CSS = 'min-width:34px;height:32px;padding:0 6px;box-sizing:border-box;background:transparent;border:1px solid rgba(88,166,255,0.4);' +
