@@ -3977,8 +3977,13 @@ function _panelEnsureStyle() {
     '#hsPopup.panel-mode #hsPopupBody{opacity:1 !important;max-height:none !important;overflow:visible !important;' +
       '-webkit-mask-image:none !important;mask-image:none !important;padding-top:0 !important;}' +
     '#hsPopup.panel-mode #hsPopupBtns{display:none !important;}' +
-    '#hsPopup.panel-mode #hsPopupTitle{display:block !important;box-sizing:border-box;border:1px solid rgba(88,166,255,0.5);' +
-      'border-radius:8px;background:rgba(88,166,255,0.08);padding:8px 40px 8px 12px;margin:0 0 10px !important;}';
+    '#hsPopup.panel-mode #hsPopupTitle{display:flex !important;align-items:center;gap:8px;box-sizing:border-box;' +
+      'border:1px solid rgba(88,166,255,0.5);border-radius:8px;background:rgba(88,166,255,0.08);' +
+      'padding:5px 5px 5px 12px;margin:0 0 10px !important;}' +
+    '#hsPopup.panel-mode #hsPopupTitle .pn-text{flex:1;min-width:0;overflow-wrap:anywhere;}' +
+    '#hsPopup.panel-mode #hsPopupTitle .pn-actions{display:flex;gap:5px;flex:none;}' +
+    '#hsPopup.panel-mode #hsClose{display:none !important;}' +
+    '#hsPopup.panel-mode{padding:12px 14px !important;}';   // template pads 34px on the right for #hsClose
   document.head.appendChild(st);
 }
 function _panelFit() {
@@ -3986,13 +3991,35 @@ function _panelFit() {
   if (!popup || !popup.classList.contains('panel-mode')) return;
   var h = popup.offsetHeight, vh = window.innerHeight;
   var top = Math.max(60, Math.min((vh - h) / 2, vh - h - 20));   // centred, clamped under the header bar
-  popup.style.top = top + 'px';
+  popup.style.setProperty('top', top + 'px', 'important');   // template: top:20% !important
+}
+// Title-bar action buttons: specs = [{ glyph | svg, label, onclick }] → returns the created buttons.
+var _PANEL_ICON_CSS = 'min-width:34px;height:32px;padding:0 6px;box-sizing:border-box;background:transparent;border:1px solid rgba(88,166,255,0.4);' +
+  'color:#e6edf3;border-radius:6px;font-size:16px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;';
+function _panelSetBar(specs) {
+  var t = document.getElementById('hsPopupTitle');
+  var old = t.querySelector('.pn-actions'); if (old) old.remove();
+  var box = document.createElement('span'); box.className = 'pn-actions';
+  var out = specs.map(function (s) {
+    var b = document.createElement('button');
+    b.style.cssText = _PANEL_ICON_CSS;
+    if (s.svg) b.innerHTML = s.svg; else b.textContent = s.glyph;
+    if (s.label) { b.title = s.label; b.setAttribute('aria-label', s.label); }
+    b.onclick = s.onclick;
+    box.appendChild(b); return b;
+  });
+  t.appendChild(box);
+  return out;
 }
 function _panelShell(title) {
   _panelEnsureStyle();
   openHsPopup(null, title, '', null);
   if (_twTimer) { clearInterval(_twTimer); _twTimer = null; }   // openHsPopup starts a typewriter on empty text
-  document.getElementById('hsPopup').classList.add('panel-mode');
+  var popup = document.getElementById('hsPopup');
+  popup.classList.add('panel-mode');
+  var t = document.getElementById('hsPopupTitle');
+  t.textContent = '';
+  var tx = document.createElement('span'); tx.className = 'pn-text'; tx.textContent = title || ''; t.appendChild(tx);
   var body = document.getElementById('hsPopupBody');
   body.innerHTML = '';
   var bw = document.getElementById('hsPopupBtns'); if (bw) bw.innerHTML = '';
@@ -4026,12 +4053,10 @@ window.panelOpen = function (p) {
     if (!label || !btn.action) return;
     body.appendChild(_panelBtnEl(_PANEL_BTN_CSS, label, function () { _panelPress(btn, this); }));
   });
-  var foot = document.createElement('div');
-  foot.style.cssText = 'display:flex;gap:6px;margin-top:8px;';
-  var ed = _panelBtnEl(_PANEL_BTN_CSS + 'margin:0;opacity:0.7;', '✎', function () { window.panelEdit(p); });
-  var cl = _panelBtnEl(_PANEL_BTN_CSS + 'margin:0;opacity:0.7;', '✕', function () { closeHsPopup(); });
-  foot.appendChild(ed); foot.appendChild(cl);
-  body.appendChild(foot);
+  _panelSetBar([
+    { glyph: '✎', label: 'რედაქტირება', onclick: function () { window.panelEdit(p); } },
+    { glyph: '✕', label: 'დახურვა', onclick: function () { closeHsPopup(); } }
+  ]);
   _panelFit();
 };
 
@@ -4055,6 +4080,7 @@ window.panelEdit = function (p) {
       ka: (b.label && (b.label.ka != null ? b.label.ka : b.label)) || '', en: (b.label && b.label.en) || '', action: b.action || '' };
   });
   var body = _panelShell(isNew ? 'ახალი პანელი' : 'რედაქტირება');
+  var msgEl = document.createElement('div'); msgEl.style.cssText = 'font-size:12px;margin:0 0 4px;min-height:14px;color:#f85149;'; body.appendChild(msgEl);
 
   var inTitle = document.createElement('input'); inTitle.style.cssText = _PANEL_IN_CSS; inTitle.placeholder = 'სათაური'; inTitle.value = work.title || '';
   var inTitleEn = document.createElement('input'); inTitleEn.style.cssText = _PANEL_IN_CSS; inTitleEn.placeholder = 'title (EN, ოფციონალური)'; inTitleEn.value = work.title_en || '';
@@ -4062,7 +4088,6 @@ window.panelEdit = function (p) {
   body.appendChild(inTitle); body.appendChild(inTitleEn); body.appendChild(inIcon);
 
   var listEl = document.createElement('div'); body.appendChild(listEl);
-  var msgEl = document.createElement('div'); msgEl.style.cssText = 'font-size:12px;margin:4px 0;min-height:14px;color:#f85149;'; body.appendChild(msgEl);
 
   function drawRows() {
     listEl.innerHTML = '';
@@ -4105,8 +4130,8 @@ window.panelEdit = function (p) {
   });
   body.appendChild(add);
 
-  var foot = document.createElement('div'); foot.style.cssText = 'display:flex;gap:6px;margin-top:8px;';
-  var save = _panelBtnEl(_PANEL_BTN_CSS + 'margin:0;', '💾 შენახვა', async function () {
+  var save;
+  async function doSave() {
     msgEl.style.color = '#f85149';
     var title = inTitle.value.trim();
     if (!title) { msgEl.textContent = 'სათაური სავალდებულოა'; return; }
@@ -4135,11 +4160,11 @@ window.panelEdit = function (p) {
     }
     if (typeof toast === 'function') toast('✓ პანელი შენახულია');
     window.panelOpen(sres.row);
-  });
-  var cancel = _panelBtnEl(_PANEL_BTN_CSS + 'margin:0;opacity:0.7;', 'გაუქმება', function () {
-    if (isNew) closeHsPopup(); else window.panelOpen(p);
-  });
-  foot.appendChild(save); foot.appendChild(cancel);
-  body.appendChild(foot);
+  }
+  var bar = _panelSetBar([
+    { glyph: '✓', label: 'შენახვა', onclick: doSave },
+    { glyph: '✕', label: 'გაუქმება', onclick: function () { if (isNew) closeHsPopup(); else window.panelOpen(p); } }
+  ]);
+  save = bar[0];
   _panelFit();
 };
