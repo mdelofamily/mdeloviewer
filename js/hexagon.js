@@ -26,6 +26,7 @@
   var HX_CY_FROM_BOTTOM = 33;        // quest button: bottom 14px + 38/2 -> centre line shared with the launcher
   var HX_MAX_BTNS = 30;              // = panels.buttons limit (30)
   var HX_VISIBLE = 5;                // slots shown at once; the rest is reached by scrolling
+  var HX_HOLD_MS = 400;              // long-tap on the centre hex runs config.center.action
   var HX_SLOT_PX = 40;               // vertical finger travel per slot
   var HX_DEAD_PX = 6;                // movement below this is a tap, not a scroll
   var HX_CENTER_IMG = 'logo.png';    // centre hex picture (mdeloviewer root, precached by sw.js); swap the file name to change it
@@ -43,6 +44,8 @@
   var _els = [], _slots = 0, _maxOff = 0;   // rendered hexes, slots used, max scroll offset (in slots)
   var _off = 0, _offFor = null;      // current scroll offset (slots) and the hexagon it belongs to
   var _drag = null, _wasDrag = false;
+  var _centerAction = '';            // command run by a long-tap on the centre hex (config.center.action)
+  var _holdT = null, _holdXY = null, _fabLong = false;
   var _baseH = 0, _baseW = 0;        // largest viewport seen (keyboard detection)
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -189,6 +192,7 @@
         'color:rgba(200,210,220,0.92);font-size:17px;line-height:1;}' +
       '#hxFab{position:absolute;left:0;top:0;width:' + HX_CW + 'px;height:' + HX_CH + 'px;' + glass + '}' +
       '#hxFab .hx-in{font-size:17px;}' +
+      '#hxFab{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}' +
       '#hxFab img{width:110%;height:110%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;}' +
       '#hxRoot.open #hxFab{background:rgba(88,166,255,0.18);}';
     document.head.appendChild(st);
@@ -202,7 +206,28 @@
     _ring = document.createElement('div'); _ring.className = 'hx-ring';
     _fab = document.createElement('button'); _fab.id = 'hxFab';
     _fab.setAttribute('aria-label', 'ჰექსაგონი');
-    _fab.onclick = function () { _setOpen(!_open); };
+    _fab.onclick = function () {
+      if (_fabLong) { _fabLong = false; return; }   // the click that ends a long-tap is not a toggle
+      _setOpen(!_open);
+    };
+    // long-tap (no movement) on the centre hex runs the saved command, same path as a panel button
+    function _clearHold() { if (_holdT) { clearTimeout(_holdT); _holdT = null; } }
+    _fab.addEventListener('pointerdown', function (e) {
+      _fabLong = false; _clearHold();
+      if (!_centerAction) return;
+      _holdXY = { x: e.clientX, y: e.clientY };
+      _holdT = setTimeout(function () {
+        _holdT = null; _fabLong = true;
+        try { if (navigator.vibrate) navigator.vibrate(12); } catch (x) {}
+        if (typeof _panelPress === 'function') _panelPress({ action: _centerAction }, _fab);
+        _setOpen(false);
+      }, HX_HOLD_MS);
+    });
+    _fab.addEventListener('pointermove', function (e) {
+      if (_holdT && _holdXY && Math.hypot(e.clientX - _holdXY.x, e.clientY - _holdXY.y) > 8) _clearHold();
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) { _fab.addEventListener(ev, _clearHold); });
+    _fab.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     // invisible touch area = the whole radius: taps/drags inside it neither fold the ring nor reach the map
     _pad = document.createElement('div'); _pad.className = 'hx-pad';
     _root.appendChild(_pad); _root.appendChild(_ring); _root.appendChild(_fab);
@@ -308,6 +333,7 @@
       _els.push(el);
     });
     _place(_off);
+    _centerAction = (h.config && h.config.center && h.config.center.action) || '';
     _fab.innerHTML = HX_SVG + '<span class="hx-in"></span>';
     var holder = _fab.querySelector('.hx-in');
     var img = new Image(); img.alt = ''; img.draggable = false;
@@ -402,28 +428,44 @@
     var msgEl = document.createElement('div');
     msgEl.style.cssText = 'font-size:12px;margin:0 0 4px;min-height:14px;color:#f85149;'; body.appendChild(msgEl);
 
-    var inTitle = document.createElement('input'); inTitle.style.cssText = _PANEL_IN_CSS; inTitle.placeholder = 'სახელი'; inTitle.value = work.title || '';
+    var inTitle = document.createElement('input'); inTitle.style.cssText = _PANEL_IN_CSS + 'margin:0 0 3px;'; inTitle.placeholder = 'სახელი'; inTitle.value = work.title || '';
     body.appendChild(inTitle);
+    // command run by a long-tap on the centre hex (optional)
+    var holdAction = (work.config && work.config.center && work.config.center.action) || '';
+    var inHold = document.createElement('input'); inHold.style.cssText = _PANEL_IN_CSS + 'margin:0 0 3px;';
+    inHold.placeholder = 'ცენტრი, ლონგ ტაპი: /ბრძანება'; inHold.value = holdAction;
+    var holdNote = document.createElement('div'); holdNote.style.cssText = 'font-size:11px;display:none;margin:0 0 3px;';
+    function _note2(el, color, text) { el.style.color = color; el.textContent = text || ''; el.style.display = text ? 'block' : 'none'; }
+    function validateHold() {
+      if (!inHold.value.trim()) { _note2(holdNote, '', ''); return true; }
+      var res = _panelCheckAction(inHold.value);
+      if (res.ok) { holdAction = res.action; _note2(holdNote, '#d29922', res.warn || ''); }
+      else { _note2(holdNote, '#f85149', res.msg); }
+      return res.ok;
+    }
+    inHold.onchange = validateHold;
+    body.appendChild(inHold); body.appendChild(holdNote);
+    if (holdAction) validateHold();
     var listEl = document.createElement('div'); body.appendChild(listEl);
 
     function drawRows() {
       listEl.innerHTML = '';
       rows.forEach(function (r, idx) {
-        var wrap = document.createElement('div'); wrap.style.cssText = 'margin:0 0 4px;';
+        var wrap = document.createElement('div'); wrap.style.cssText = 'margin:0 0 3px;';
         var line = document.createElement('div'); line.style.cssText = 'display:flex;gap:4px;';
-        var ic = document.createElement('input'); ic.style.cssText = _PANEL_IN_CSS + 'width:44px;flex:none;text-align:center;'; ic.placeholder = '🙂'; ic.value = r.icon;
+        var ic = document.createElement('input'); ic.style.cssText = _PANEL_IN_CSS + 'width:44px;flex:none;text-align:center;margin:0;'; ic.placeholder = '🙂'; ic.value = r.icon;
         ic.oninput = function () { r.icon = ic.value; };
-        var ac = document.createElement('input'); ac.style.cssText = _PANEL_IN_CSS; ac.placeholder = '/ბრძანება  ან  მაკროს სახელი'; ac.value = r.action;
-        var note = document.createElement('div'); note.style.cssText = 'font-size:11px;min-height:12px;';
+        var ac = document.createElement('input'); ac.style.cssText = _PANEL_IN_CSS + 'margin:0;'; ac.placeholder = '/ბრძანება  ან  მაკროს სახელი'; ac.value = r.action;
+        var note = document.createElement('div'); note.style.cssText = 'font-size:11px;display:none;';
         function validate() {
           var res = _panelCheckAction(ac.value);
-          if (res.ok) { r.action = res.action; note.style.color = '#d29922'; note.textContent = res.warn || ''; }
-          else { r.action = ac.value; note.style.color = '#f85149'; note.textContent = res.msg; }
+          if (res.ok) { r.action = res.action; _note2(note, '#d29922', res.warn || ''); }
+          else { r.action = ac.value; _note2(note, '#f85149', res.msg); }
           return res.ok;
         }
         ac.oninput = function () { r.action = ac.value; };
         ac.onchange = validate;
-        var del = _panelBtnEl(_PANEL_BTN_CSS + 'width:44px;flex:none;margin:0;', '✕', function () { rows.splice(idx, 1); drawRows(); });
+        var del = _panelBtnEl(_PANEL_BTN_CSS + 'width:44px;flex:none;margin:0;min-height:0;padding:0;', '✕', function () { rows.splice(idx, 1); drawRows(); });
         line.appendChild(ic); line.appendChild(ac); line.appendChild(del);
         wrap.appendChild(line); wrap.appendChild(note);
         listEl.appendChild(wrap);
@@ -452,7 +494,13 @@
         if (!res.ok) { msgEl.textContent = 'ღილაკი №' + (i + 1) + ': ' + res.msg; return; }
         out.push({ id: r.id, type: 'cmd', icon: r.icon.trim(), action: res.action });
       }
-      var payload = { panel_id: work.panel_id, title: title, title_en: null, icon: null, buttons: out, config: {} };
+      var cfg = {};
+      if (inHold.value.trim()) {
+        var hres = _panelCheckAction(inHold.value);
+        if (!hres.ok) { msgEl.textContent = 'ცენტრი, ლონგ ტაპი: ' + hres.msg; return; }
+        cfg = { center: { action: hres.action } };
+      }
+      var payload = { panel_id: work.panel_id, title: title, title_en: null, icon: null, buttons: out, config: cfg };
       save.disabled = true; msgEl.style.color = '#8b949e'; msgEl.textContent = '⏳ ინახება...';
       var sres = await hexagonSave(payload);
       save.disabled = false;
