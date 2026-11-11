@@ -34,7 +34,9 @@
   var _hexagons = [];                // rows with layout='ring'
   var _stale = false;                // list came from the offline snapshot
   var _loadedFor = null;             // user id the list was loaded for
-  var _loading = false;
+  var _loading = false;              // a network refresh is in flight
+  var _syncedFor = null;             // user id a network refresh was already started for
+  var HX_FETCH_MS = 4000;            // network timeout; the offline copy is shown meanwhile
   var _root = null, _pad = null, _ring = null, _fab = null;
   var _open = false;
   var _sig = '';                     // signature of what is currently rendered
@@ -57,25 +59,45 @@
   function _note(msg) { if (typeof toast === 'function') toast(msg); }
 
   // ── data (table `panels`, layout='ring') ─────────────────────────────────
+  function _loadSnap() {
+    var snap = null;
+    try { snap = JSON.parse(localStorage.getItem(_snapKey()) || 'null'); } catch (e) {}
+    if (!Array.isArray(snap)) return false;
+    _hexagons = snap;
+    return true;
+  }
+  function _saveSnap() { try { localStorage.setItem(_snapKey(), JSON.stringify(_hexagons)); } catch (e) {} }
+
+  // network first (with a timeout), the offline copy as fallback
   async function hexagonsLoad() {
     var uid = _uid();
     _stale = false;
     if (!uid) { _hexagons = []; _loadedFor = null; return _hexagons; }
+    var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+    var to = ctl ? setTimeout(function () { ctl.abort(); }, HX_FETCH_MS) : null;
     try {
+      if (!navigator.onLine) throw new Error('offline');
       var r = await fetch(SUPA_URL + '/rest/v1/panels?map_id=eq.' + encodeURIComponent(_MAP_ID) +
-        '&layout=eq.ring&select=*&order=title.asc', { headers: _authHeaders() });
+        '&layout=eq.ring&select=*&order=title.asc', { headers: _authHeaders(), signal: ctl ? ctl.signal : undefined });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       var rows = await r.json();
       _hexagons = Array.isArray(rows) ? rows : [];
-      try { localStorage.setItem(_snapKey(), JSON.stringify(_hexagons)); } catch (e) {}
+      _saveSnap();
     } catch (e) {
-      var snap = null;
-      try { snap = JSON.parse(localStorage.getItem(_snapKey()) || 'null'); } catch (e2) {}
-      _hexagons = Array.isArray(snap) ? snap : [];
+      if (!_loadSnap()) _hexagons = [];
       _stale = true;   // read-only: saving needs the network
-    }
+    } finally { if (to) clearTimeout(to); }
     _loadedFor = uid;
     return _hexagons;
+  }
+
+  // after a successful write whose list refresh failed: keep the local copy correct
+  function _upsertLocal(row) {
+    var i = -1;
+    for (var k = 0; k < _hexagons.length; k++) if (_hexagons[k].panel_id === row.panel_id) { i = k; break; }
+    if (i >= 0) _hexagons[i] = row; else _hexagons.push(row);
+    _hexagons.sort(function (a, b) { return a.title < b.title ? -1 : a.title > b.title ? 1 : 0; });
+    _saveSnap();
   }
 
   function hexagonFind(q) {
@@ -114,6 +136,7 @@
       var row = rows && rows[0];
       if (!row) return { ok: false, status: r.status, msg: 'ცარიელი პასუხი (უფლება/RLS?)' };
       await hexagonsLoad();   // refresh list + offline snapshot
+      if (_stale) _upsertLocal(row);   // refresh failed (slow network): still show the saved hexagon
       return { ok: true, row: row };
     } catch (e) { return { ok: false, status: 0, msg: e.message }; }
   }
@@ -127,6 +150,7 @@
       var st = _getState();
       if (st.id === id) _setState({ on: false, id: null });
       await hexagonsLoad();
+      if (_stale) { _hexagons = _hexagons.filter(function (x) { return x.panel_id !== id; }); _saveSnap(); }
       return { ok: true };
     } catch (e) { return { ok: false, status: 0, msg: e.message }; }
   }
@@ -165,7 +189,7 @@
         'color:rgba(200,210,220,0.92);font-size:17px;line-height:1;}' +
       '#hxFab{position:absolute;left:0;top:0;width:' + HX_CW + 'px;height:' + HX_CH + 'px;' + glass + '}' +
       '#hxFab .hx-in{font-size:17px;}' +
-      '#hxFab img{width:100%;height:100%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;}' +
+      '#hxFab img{width:81%;height:81%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;}' +
       '#hxRoot.open #hxFab{background:rgba(88,166,255,0.18);}';
     document.head.appendChild(st);
   }
@@ -346,12 +370,13 @@
     var allowed = !!(uid && _tierOk());
     var st = allowed ? _getState() : null;
     var want = !!(st && st.on);
-    if (want && !_loading && _loadedFor !== uid) {
-      _loading = true;
-      hexagonsLoad().then(function () { _loading = false; }, function () { _loading = false; });
-      return;
+    if (want && _loadedFor !== uid && _loadSnap()) _loadedFor = uid;   // show the offline copy immediately
+    if (want && !_loading && _syncedFor !== uid) {                      // ...and refresh from the network in the background
+      _loading = true; _syncedFor = uid;
+      var done = function () { _loading = false; };
+      hexagonsLoad().then(done, done);
     }
-    var h = want && !_loading ? _active() : null;
+    var h = want ? _active() : null;
     if (!h) { if (_root) { _root.style.display = 'none'; _setOpen(false); } _sig = ''; return; }
     _build();
     var sig = h.panel_id + '|' + (h.updated_at || '') + '|' + _baseW + 'x' + _baseH;
