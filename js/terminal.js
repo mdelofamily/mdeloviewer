@@ -3,7 +3,8 @@
 // depends on: _CFG, scale (runtime.js), applyScale, fitAreas, toggleMenu (runtime.js), menuOverrideSave (runtime.js)
 
 function _tmInit() {
-  if (!window.matchMedia('(display-mode: standalone)').matches) return;
+  // installed-app modes only (manifest display is fullscreen, falling back to standalone)
+  if (!window.matchMedia('(display-mode: standalone)').matches && !window.matchMedia('(display-mode: fullscreen)').matches) return;
   document.getElementById('termBtn').style.display = 'block';
   document.getElementById('mapTitle').style.display = 'none';
 }
