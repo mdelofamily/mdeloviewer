@@ -18,14 +18,14 @@
 (function (global) {
   'use strict';
 
-  var HX_W = 26, HX_H = 30;          // peripheral hex (pointy-top), px
+  var HX_W = 30, HX_H = 34;          // peripheral hex (pointy-top), px
   var HX_CW = 38, HX_CH = 44;        // centre hex: width = quest button (38px); regular pointy-top height
-  var HX_GAP = 28;                   // distance between neighbouring hex centres along the arc, px
+  var HX_GAP = 33;                   // distance between neighbouring hex centres along the arc, px
   var HX_SPAN = 80;                  // preferred arc span, degrees (centred on 135deg)
   var HX_RMIN = 64;                  // smallest ring radius, px
   var HX_CY_FROM_BOTTOM = 33;        // quest button: bottom 14px + 38/2 -> centre line shared with the launcher
   var HX_MAX_BTNS = 30;              // = panels.buttons limit (30)
-  var HX_VISIBLE = 6;                // slots shown at once; the rest is reached by scrolling
+  var HX_VISIBLE = 5;                // slots shown at once; the rest is reached by scrolling
   var HX_SLOT_PX = 40;               // vertical finger travel per slot
   var HX_DEAD_PX = 6;                // movement below this is a tap, not a scroll
   var HX_CLIP = 'polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)';
@@ -34,7 +34,7 @@
   var _stale = false;                // list came from the offline snapshot
   var _loadedFor = null;             // user id the list was loaded for
   var _loading = false;
-  var _root = null, _ring = null, _fab = null;
+  var _root = null, _pad = null, _ring = null, _fab = null;
   var _open = false;
   var _sig = '';                     // signature of what is currently rendered
   var _els = [], _slots = 0, _maxOff = 0;   // rendered hexes, slots used, max scroll offset (in slots)
@@ -156,10 +156,12 @@
         'transition:transform 170ms ease,opacity 170ms ease,visibility 0s;}' +
       '#hxRoot.drag .hx{transition:none !important;}' +
       '#hxRoot{touch-action:none;}' +
+      '#hxRoot .hx-pad{position:absolute;right:0;bottom:0;pointer-events:none;touch-action:none;}' +
+      '#hxRoot.open .hx-pad{pointer-events:auto;}' +
       '#hxRoot .hx:active{background:rgba(88,166,255,0.22);}' +
       '#hxRoot svg{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;}' +
       '#hxRoot .hx-in{position:absolute;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;' +
-        'color:rgba(200,210,220,0.92);font-size:15px;line-height:1;}' +
+        'color:rgba(200,210,220,0.92);font-size:17px;line-height:1;}' +
       '#hxFab{position:absolute;left:0;top:0;width:' + HX_CW + 'px;height:' + HX_CH + 'px;' + glass + '}' +
       '#hxFab .hx-in{font-size:17px;}' +
       '#hxRoot.open #hxFab{background:rgba(88,166,255,0.18);}';
@@ -175,7 +177,9 @@
     _fab = document.createElement('button'); _fab.id = 'hxFab';
     _fab.setAttribute('aria-label', 'ჰექსაგონი');
     _fab.onclick = function () { _setOpen(!_open); };
-    _root.appendChild(_ring); _root.appendChild(_fab);
+    // invisible touch area = the whole radius: taps/drags inside it neither fold the ring nor reach the map
+    _pad = document.createElement('div'); _pad.className = 'hx-pad';
+    _root.appendChild(_pad); _root.appendChild(_ring); _root.appendChild(_fab);
     // keep gestures on the launcher away from the map pan/zoom handlers
     ['touchstart', 'touchmove', 'touchend'].forEach(function (ev) {
       _root.addEventListener(ev, function (e) { e.stopPropagation(); }, { passive: true });
@@ -234,6 +238,9 @@
   // Hexes outside the arc ends shrink and fade away (alpha 1 at the end slots, 0 one slot beyond).
   function _place(off) {
     var g = _arc(_slots);
+    var S = Math.round(g.R + HX_H / 2 + 10);   // radius of the touch area around the FAB centre
+    _pad.style.width = (S + HX_CW / 2) + 'px'; _pad.style.height = (S + HX_CH / 2) + 'px';
+    _pad.style.clipPath = _pad.style.webkitClipPath = 'circle(' + S + 'px at calc(100% - ' + (HX_CW / 2) + 'px) calc(100% - ' + (HX_CH / 2) + 'px))';
     _els.forEach(function (el) {
       var q = el._i - off;
       var a = (135 + (_slots - 1) / 2 * g.step - q * g.step) * Math.PI / 180;
@@ -279,15 +286,16 @@
     _fab.querySelector('.hx-in').textContent = cIcon;
   }
 
-  // ── linear scroll: vertical drag, finger up = hexes follow up (offset decreases); snaps to a slot ──
+  // ── linear scroll inside the radius: x and y both count — finger down or left = later hexes,
+  //    up or right = earlier ones (hexes follow the finger along the arc); snaps to a slot ──
   function _onDown(e) {
     if (!_open || _maxOff <= 0) return;
-    _drag = { id: e.pointerId, y0: e.clientY, off0: _off, moved: false };
+    _drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, off0: _off, moved: false };
     _wasDrag = false;
   }
   function _onMove(e) {
     if (!_drag || e.pointerId !== _drag.id) return;
-    var dy = e.clientY - _drag.y0;
+    var dy = (e.clientY - _drag.y0) - (e.clientX - _drag.x0);   // along-the-arc component: y and x together
     if (!_drag.moved) {
       if (Math.abs(dy) < HX_DEAD_PX) return;
       _drag.moved = true; _wasDrag = true;
