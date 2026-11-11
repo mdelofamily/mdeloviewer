@@ -45,6 +45,8 @@
   var _hots = [];         // [{ row, points:[[x,y],...], area }]
   var _dom = null;
   var _placeMode = null;    // null | {kind,target_id} (placing) | {del:true} (delete-picking)
+  // read-only flag for hexagon.js: true while a point placement/deletion is armed (hides the launcher)
+  Object.defineProperty(global, '_spotDrawActive', { get: function () { return !!_placeMode; }, configurable: true });
   var _drawing = false;      // true while a freehand placement stroke is in progress
   var _drawPath = [];        // [[x,y],...] accumulated stroke points, natural pixel space
   var _pending = null;       // {kind:'create',path} | {kind:'delete',hotspot} — awaiting ✓/✕ confirm

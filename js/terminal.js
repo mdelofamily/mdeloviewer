@@ -386,7 +386,8 @@ var _TM_MIN_TIER = {
   'სცენა':       'resident', // interior/world-view scene create/delete/rename/background
   'კვანძი':      'resident', // inventory_nodes create/delete/edit within the currently open scene
   'წერტილი':     'resident', // interior_hotspots placement/deletion (temporary 2-tap rectangle)
-  'პანელი':      'resident'  // personal button panels (panels table, owner-only RLS)
+  'პანელი':      'resident', // personal button panels (panels table, owner-only RLS)
+  'ჰექსაგონი':   'resident'  // hexagon launcher (panels table, layout='ring'; hexagon.js)
 };
 
 // Scoped elevation flag — true only while executing the commands *inside* a
@@ -512,6 +513,7 @@ async function _tmRun(raw) {
     'ობიექტი':     _tmObjectCmd,
     'სცენა':       _tmScene,
     'პანელი':      _tmPanel,
+    'ჰექსაგონი':   _tmHexagon,
     'კვანძი':      _tmNode,
     'წერტილი':     _tmSpot,
     'წერტილები':   _tmSpotsAll,
@@ -812,6 +814,7 @@ function _tmHelp() {
     ['/გასვლა', 'სცენიდან გამოსვლა outdoor რუკაზე'],
     ['/სცენა შექმნა|წაშ|რედ|ფონი', 'ინტერიერი/world-view სცენის მართვა'],
     ['/პანელი [სახელი|№|ახალი|რედ|წაშ]', 'პირადი ღილაკების პანელი (resident+)'],
+    ['/ჰექსაგონი [სახელი|№|ახალი|რედ|წაშ|გამორთვა]', 'ჰექსაგონის ლაუნჩერი — სწრაფი ღილაკები (resident+)'],
     ['/კვანძი სია|დამატება|დიალოგი|წაშ', 'ღია სცენაში ინვენტარის კვანძი'],
     ['/წერტილი დადება|წაშ|ნახვა|გაუქმება', 'hotspot-ის დადება (თითით თავისუფალი ხატვა)'],
     ['/წერტილი <სახელი>, <სახელი>', 'მითითებული კვანძის წერტილების ანთება სცენაზე'],
@@ -3313,7 +3316,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
 var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
-  'დახმარება','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება','პანელი'];
+  'დახმარება','ჰექსაგონი','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება','პანელი'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
 // ";" inside ordinary command args is left alone) — PLUS treats any [...]
@@ -3612,6 +3615,12 @@ async function _tmPanel(args) {
     closeTerm(); window.panelEdit(p); return;
   }
   closeTerm(); window.panelOpen(p);
+}
+
+// /ჰექსაგონი — thin wrapper; the whole feature lives in js/hexagon.js (loaded after this file)
+async function _tmHexagon(args) {
+  if (typeof window.hexagonCommand !== 'function') { _tmL('ter', '✗ hexagon.js ვერ მოიძებნა'); return; }
+  await window.hexagonCommand(args);
 }
 
 // Expose raw command/chain execution for runtime.js (consensus terminal_cmd field).

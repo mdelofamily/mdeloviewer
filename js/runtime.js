@@ -3850,7 +3850,7 @@ window.panelsLoad = async function () {
   window._panelsStale = false;
   if (!uid) { window._panels = []; return window._panels; }
   try {
-    var r = await fetch(SUPA_URL + '/rest/v1/panels?map_id=eq.' + encodeURIComponent(_MAP_ID) + '&select=*&order=title.asc',
+    var r = await fetch(SUPA_URL + '/rest/v1/panels?map_id=eq.' + encodeURIComponent(_MAP_ID) + '&layout=eq.list&select=*&order=title.asc',
       { headers: _authHeaders() });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var rows = await r.json();
