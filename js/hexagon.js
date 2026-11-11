@@ -165,7 +165,7 @@
         'color:rgba(200,210,220,0.92);font-size:17px;line-height:1;}' +
       '#hxFab{position:absolute;left:0;top:0;width:' + HX_CW + 'px;height:' + HX_CH + 'px;' + glass + '}' +
       '#hxFab .hx-in{font-size:17px;}' +
-      '#hxFab img{width:81%;height:81%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;}' +
+      '#hxFab img{width:100%;height:100%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;}' +
       '#hxRoot.open #hxFab{background:rgba(88,166,255,0.18);}';
     document.head.appendChild(st);
   }
