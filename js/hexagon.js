@@ -166,7 +166,7 @@
   function _ensureStyle() {
     if (document.getElementById('hexStyles')) return;
     var st = document.createElement('style'); st.id = 'hexStyles';
-    var glass = 'background:rgba(22,27,34,0.4);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);' +
+    var glass = 'background:rgba(22,27,34,0.4);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);' +
       'clip-path:' + HX_CLIP + ';-webkit-clip-path:' + HX_CLIP + ';border:none;padding:0;margin:0;cursor:pointer;' +
       '-webkit-tap-highlight-color:transparent;';
     st.textContent =
@@ -189,7 +189,7 @@
         'color:rgba(200,210,220,0.92);font-size:17px;line-height:1;}' +
       '#hxFab{position:absolute;left:0;top:0;width:' + HX_CW + 'px;height:' + HX_CH + 'px;' + glass + '}' +
       '#hxFab .hx-in{font-size:17px;}' +
-      '#hxFab img{width:81%;height:81%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;}' +
+      '#hxFab img{width:110%;height:110%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;}' +
       '#hxRoot.open #hxFab{background:rgba(88,166,255,0.18);}';
     document.head.appendChild(st);
   }
