@@ -4094,8 +4094,8 @@ window.panelEdit = function (p) {
   var msgEl = document.createElement('div'); msgEl.style.cssText = 'font-size:12px;margin:0 0 4px;min-height:14px;color:#f85149;'; body.appendChild(msgEl);
 
   var inTitle = document.createElement('input'); inTitle.style.cssText = _PANEL_IN_CSS; inTitle.placeholder = 'სათაური'; inTitle.value = work.title || '';
-  var inTitleEn = document.createElement('input'); inTitleEn.style.cssText = _PANEL_IN_CSS; inTitleEn.placeholder = 'title (EN, ოფციონალური)'; inTitleEn.value = work.title_en || '';
-  var inIcon = document.createElement('input'); inIcon.style.cssText = _PANEL_IN_CSS; inIcon.placeholder = 'ემოჯი (ოფციონალური)'; inIcon.value = work.icon || '';
+  var inTitleEn = document.createElement('input'); inTitleEn.style.cssText = _PANEL_IN_CSS; inTitleEn.placeholder = 'title (EN, არასავალდებულო)'; inTitleEn.value = work.title_en || '';
+  var inIcon = document.createElement('input'); inIcon.style.cssText = _PANEL_IN_CSS; inIcon.placeholder = 'ემოჯი (არასავალდებულო)'; inIcon.value = work.icon || '';
   body.appendChild(inTitle); body.appendChild(inTitleEn); body.appendChild(inIcon);
 
   var listEl = document.createElement('div'); body.appendChild(listEl);
@@ -4111,7 +4111,7 @@ window.panelEdit = function (p) {
       var ka = document.createElement('input'); ka.style.cssText = _PANEL_IN_CSS; ka.placeholder = 'წარწერა'; ka.value = r.ka;
       ka.oninput = function () { r.ka = ka.value; };
       l1.appendChild(ic); l1.appendChild(ka);
-      var en = document.createElement('input'); en.style.cssText = _PANEL_IN_CSS; en.placeholder = 'label (EN, ოფციონალური)'; en.value = r.en;
+      var en = document.createElement('input'); en.style.cssText = _PANEL_IN_CSS; en.placeholder = 'label (EN, არასავალდებულო)'; en.value = r.en;
       en.oninput = function () { r.en = en.value; };
       var l3 = document.createElement('div'); l3.style.cssText = 'display:flex;gap:4px;';
       var ac = document.createElement('input'); ac.style.cssText = _PANEL_IN_CSS; ac.placeholder = '/ბრძანება  ან  მაკროს სახელი'; ac.value = r.action;
