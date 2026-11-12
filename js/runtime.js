@@ -139,6 +139,9 @@ window._mdeloRenderAreas = _mdeloRenderAreas;
 // loaded independently) — without this cache a DOM rebuild here would wipe it, since this
 // function has no other memory of which console objects have a dialogue attached.
 window._consoleObjs = window._consoleObjs || new Map();
+// last dialogue_overrides row seen per object title — lets a newly placed object with an
+// existing name pick up that name's dialogue immediately (see _mdeloRenderObjects).
+window._dlgRowByTitle = window._dlgRowByTitle || {};
 
 function _mdeloMakeObjectEl(o) {
   var TS = _TS;
@@ -173,6 +176,13 @@ function _mdeloRenderObjects(list) {
   var frag = document.createDocumentFragment();
   (list || []).forEach(function (o) { frag.appendChild(_mdeloMakeObjectEl(o)); });
   inner.appendChild(frag);
+  // same name = same dialogue: re-apply the known dialogue row to every object by title
+  var _seenT = {};
+  (list || []).forEach(function (o) {
+    if (o.title && !_seenT[o.title] && window._dlgRowByTitle[o.title]) {
+      _seenT[o.title] = 1; _applyDlgOverride(window._dlgRowByTitle[o.title]);
+    }
+  });
   window._dynamicObjects = (list || []).map(function (o) {
     return { tile_id: o.tile_id, x: o.x, y: o.y, cols: o.cols, rows: o.rows };
   });
@@ -2795,6 +2805,25 @@ function _dlgTargetByTitle(title) {
 }
 window._dlgTargetByTitle = _dlgTargetByTitle;
 
+// Every dialogue target that carries this title: the baked object (first match, as before)
+// plus ALL console-placed objects sharing the name — a name is one shared dialogue group.
+function _dlgTargetsByTitle(title) {
+  var out = [];
+  var oi = _findOiByTitle(title);
+  if (oi >= 0 && typeof _OBJS !== 'undefined' && _OBJS[oi]) {
+    out.push({ oi: oi, cid: null, obj: _OBJS[oi], dlgId: 'dlg_' + oi,
+      hs: document.querySelector('.hotspot[data-oi="' + oi + '"]:not(.hs-area)') });
+  }
+  var esc = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  document.querySelectorAll('.hotspot.hs-object[data-title="' + esc + '"]').forEach(function (hs) {
+    var cid = hs.dataset.objId; if (!cid) return;
+    if (!window._consoleObjs.has(cid)) window._consoleObjs.set(cid, { lb: title, title: title, dialogue: [] });
+    out.push({ oi: -1, cid: cid, obj: window._consoleObjs.get(cid), dlgId: 'dlg_obj_' + cid, hs: hs });
+  });
+  return out;
+}
+window._dlgTargetsByTitle = _dlgTargetsByTitle;
+
 // Update hotspot DOM marker element.
 // mk = internal marker string: '!' | '?' | '💬' | ''
 // Creates .hs-marker if missing; hides/shows .hs-dot accordingly.
@@ -2850,8 +2879,10 @@ function _markerRestore() {
 // _dlgTargetByTitle above for why a console-placed object can share this at all.
 function _applyDlgOverride(row) {
   if (!row || !row.obj_title || !row.nodes_json) return;
-  var tgt = _dlgTargetByTitle(row.obj_title);
-  if (!tgt) return;
+  window._dlgRowByTitle[row.obj_title] = row;
+  _dlgTargetsByTitle(row.obj_title).forEach(function (tgt) { _applyDlgToTarget(tgt, row); });
+}
+function _applyDlgToTarget(tgt, row) {
 
   var _dedupeObjPrefix = function (s) { return typeof s === 'string' ? s.replace(/__OBJ___OBJ__/g, '__OBJ__') : s; };
   var nodes = (Array.isArray(row.nodes_json) ? row.nodes_json : []).map(function(node) {
