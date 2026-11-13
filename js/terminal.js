@@ -99,8 +99,7 @@ function _histClear() {
   var st = document.createElement('style');
   st.id = 'dlgEditStyles';
   st.textContent =
-    '#mdlTerm.dlg-edit #tmTa{min-height:calc(46vh*.8);max-height:calc(46vh*.8);}' +
-    '#mdlTerm.dlg-edit.tmfull #tmTa{min-height:80dvh;max-height:80dvh;}';
+    '#mdlTerm.dlg-edit.tmfull #tmTa{min-height:80dvh!important;max-height:80dvh!important;}';
   document.head.appendChild(st);
 })();
 
@@ -2401,11 +2400,8 @@ function _tmDlgEdit(args) {
 
   // switch to multiline mode and load DSL
   if (!_tmMulti) tmToggleMulti();
-  // big DSL editor: size comes from CSS (#mdlTerm.dlg-edit #tmTa), so drop
-  // the inline caps tmToggleMulti sets (they would override the CSS)
+  // big DSL editor in fullscreen only (CSS with !important beats the inline caps)
   document.getElementById('mdlTerm').classList.add('dlg-edit');
-  var _dta = document.getElementById('tmTa');
-  _dta.style.maxHeight = ''; _dta.style.height = '';
   document.getElementById('tmTa').value = dsl;
   _tmTaResize();
   _tmEditObj = objKey;
