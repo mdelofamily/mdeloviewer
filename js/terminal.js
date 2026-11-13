@@ -607,6 +607,7 @@ async function _tmTextEditOpen(kind, name) {
   }
   var current = (_tmEditLang === 'en') ? (cur.en || cur.ka) : cur.ka;
   if (!_tmMulti) tmToggleMulti();
+  document.getElementById('mdlTerm').classList.add('dlg-edit'); // big editor in fullscreen
   document.getElementById('tmTa').value = current;
   _tmTaResize();
   var label = 'კვანძი: ' + name;
