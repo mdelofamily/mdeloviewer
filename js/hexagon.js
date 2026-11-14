@@ -336,10 +336,14 @@
     _centerAction = (h.config && h.config.center && h.config.center.action) || '';
     _fab.innerHTML = HX_SVG + '<span class="hx-in"></span>';
     var holder = _fab.querySelector('.hx-in');
-    var img = new Image(); img.alt = ''; img.draggable = false;
-    img.onerror = function () { holder.textContent = '⬡'; };   // logo missing: plain glyph
-    img.src = HX_CENTER_IMG;
-    holder.appendChild(img);
+    var cIcon = _firstGlyph(h.config && h.config.center && h.config.center.icon);   // per-hexagon emoji
+    if (cIcon) holder.textContent = cIcon;
+    else {                                                                           // default: the logo
+      var img = new Image(); img.alt = ''; img.draggable = false;
+      img.onerror = function () { holder.textContent = '⬡'; };   // logo missing: plain glyph
+      img.src = HX_CENTER_IMG;
+      holder.appendChild(img);
+    }
   }
 
   // ── linear scroll inside the radius: x and y both count — finger down or left = later hexes,
@@ -428,8 +432,13 @@
     var msgEl = document.createElement('div');
     msgEl.style.cssText = 'font-size:12px;margin:0 0 4px;min-height:14px;color:#f85149;'; body.appendChild(msgEl);
 
-    var inTitle = document.createElement('input'); inTitle.style.cssText = _PANEL_IN_CSS + 'margin:0 0 3px;'; inTitle.placeholder = 'სახელი'; inTitle.value = work.title || '';
-    body.appendChild(inTitle);
+    var inTitle = document.createElement('input'); inTitle.style.cssText = _PANEL_IN_CSS + 'margin:0;'; inTitle.placeholder = 'სახელი'; inTitle.value = work.title || '';
+    // centre-hex emoji of this hexagon (optional; empty = the logo)
+    var inCenter = document.createElement('input'); inCenter.style.cssText = _PANEL_IN_CSS + 'width:44px;flex:none;text-align:center;margin:0;';
+    inCenter.placeholder = '🙂'; inCenter.value = (work.config && work.config.center && work.config.center.icon) || '';
+    var titleLine = document.createElement('div'); titleLine.style.cssText = 'display:flex;gap:4px;margin:0 0 3px;';
+    titleLine.appendChild(inCenter); titleLine.appendChild(inTitle);
+    body.appendChild(titleLine);
     // command run by a long-tap on the centre hex (optional)
     var holdAction = (work.config && work.config.center && work.config.center.action) || '';
     var inHold = document.createElement('input'); inHold.style.cssText = _PANEL_IN_CSS + 'margin:0 0 3px;';
@@ -494,12 +503,15 @@
         if (!res.ok) { msgEl.textContent = 'ღილაკი №' + (i + 1) + ': ' + res.msg; return; }
         out.push({ id: r.id, type: 'cmd', icon: r.icon.trim(), action: res.action });
       }
-      var cfg = {};
+      var cfg = {}, center = {};
+      var cIco = _firstGlyph(inCenter.value);
+      if (cIco) center.icon = cIco;
       if (inHold.value.trim()) {
         var hres = _panelCheckAction(inHold.value);
         if (!hres.ok) { msgEl.textContent = 'ცენტრი, ლონგ ტაპი: ' + hres.msg; return; }
-        cfg = { center: { action: hres.action } };
+        center.action = hres.action;
       }
+      if (center.icon || center.action) cfg.center = center;
       var payload = { panel_id: work.panel_id, title: title, title_en: null, icon: null, buttons: out, config: cfg };
       save.disabled = true; msgEl.style.color = '#8b949e'; msgEl.textContent = '⏳ ინახება...';
       var sres = await hexagonSave(payload);
