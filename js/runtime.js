@@ -3059,41 +3059,46 @@ async function _gmTodoSetMany(ids, checked) {
   return res === true ? true : queueAll();
 }
 
-// Tree renderer for a todo item that has children.
+// Tree renderer for a todo item that has children: nested containers, so CSS can
+// draw the connector lines (vertical guide + elbow into each child's checkbox).
+// Self-contained gm-tt-* classes — no dependency on the export-generated index.html CSS.
 function _gmBuildTodoTree(root) {
   const wrap = document.createElement('div'); wrap.className = 'gm-todo-tree';
-  const rows = [];
+  const nodes = [];
   function refresh() {
-    rows.forEach(function (r) {
-      const c = _gmTodoCount(r.n), done = c.total > 0 && c.done === c.total;
-      r.row.classList.toggle('checked', done);
-      r.box.textContent = done ? '✅' : '⬜';
+    nodes.forEach(function (r) {
+      const c = _gmTodoCount(r.n);
+      r.el.classList.toggle('done', c.total > 0 && c.done === c.total);
       if (r.cnt) r.cnt.textContent = c.done + '/' + c.total;
     });
   }
   function toggle(n) {
     const ids = _gmTodoLeaves(n).map(function (l) { return l.id; });
-    const next = !_gmTodoIsDone(n);
-    _gmTodoSetMany(ids, next);
+    _gmTodoSetMany(ids, !_gmTodoIsDone(n));
     refresh();
   }
-  function add(n, depth) {
+  function build(n, isSub) {
     const hasKids = !!(n.children && n.children.length);
-    const row = document.createElement('div');
-    row.className = 'gm-todo-row' + (hasKids ? ' parent' : '');
-    if (depth) row.style.paddingLeft = (depth * 18) + 'px';
-    const box = document.createElement('span'); box.className = 'gm-todo-box';
-    const lbl = document.createElement('span'); lbl.className = 'gm-todo-label';
+    const el = document.createElement('div');
+    el.className = 'gm-tt-n' + (isSub ? ' gm-tt-sub' : '') + (hasKids ? ' gm-tt-parent' : '');
+    const row = document.createElement('div'); row.className = 'gm-tt-row';
+    const box = document.createElement('span'); box.className = 'gm-tt-box'; box.textContent = '✓';
+    const lbl = document.createElement('span'); lbl.className = 'gm-tt-lbl';
     lbl.innerHTML = parseLinks(_i18n(n.label) || '');
     row.appendChild(box); row.appendChild(lbl);
     let cnt = null;
-    if (hasKids) { cnt = document.createElement('span'); cnt.className = 'gm-todo-cnt'; row.appendChild(cnt); }
+    if (hasKids) { cnt = document.createElement('span'); cnt.className = 'gm-tt-cnt'; row.appendChild(cnt); }
     row.onclick = function (e) { if (e.target.closest('a')) return; toggle(n); };
-    wrap.appendChild(row);
-    rows.push({ n: n, row: row, box: box, cnt: cnt });
-    if (hasKids) n.children.forEach(function (c) { add(c, depth + 1); });
+    el.appendChild(row);
+    if (hasKids) {
+      const kids = document.createElement('div'); kids.className = 'gm-tt-kids';
+      n.children.forEach(function (c) { kids.appendChild(build(c, true)); });
+      el.appendChild(kids);
+    }
+    nodes.push({ n: n, el: el, cnt: cnt });
+    return el;
   }
-  add(root, 0);
+  wrap.appendChild(build(root, false));
   refresh();
   return wrap;
 }
@@ -3111,8 +3116,19 @@ window.menuTodoLeafIds  = function (n) { return _gmTodoLeaves(n).map(function (l
   st.id = 'gmTodoTreeStyles';
   st.textContent =
     '.gm-todo-tree{margin:2px 0;}' +
-    '.gm-todo-row.parent .gm-todo-label{font-weight:600;}' +
-    '.gm-todo-cnt{flex-shrink:0;margin-left:6px;font-size:12px;line-height:1.7;opacity:.6;white-space:nowrap;}';
+    '.gm-tt-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0;cursor:pointer;border-radius:6px;font:14px/20px sans-serif;color:rgba(180,190,200,0.88);}' +
+    '.gm-tt-row:hover{background:rgba(255,255,255,0.04);}' +
+    '.gm-tt-box{flex:none;box-sizing:border-box;width:18px;height:18px;margin-top:5px;border:1.5px solid rgba(180,190,200,0.55);border-radius:4px;display:flex;align-items:center;justify-content:center;font:12px/1 sans-serif;color:transparent;}' +
+    '.gm-tt-lbl{flex:1;min-width:0;}' +
+    '.gm-tt-parent>.gm-tt-row .gm-tt-lbl{font-weight:600;}' +
+    '.gm-tt-cnt{flex-shrink:0;margin:0 6px 0 6px;font-size:12px;color:rgba(180,190,200,0.6);white-space:nowrap;}' +
+    '.gm-tt-n.done>.gm-tt-row .gm-tt-box{background:rgba(80,200,120,0.18);border-color:rgba(80,200,120,0.7);color:#6fdc8c;}' +
+    '.gm-tt-n.done>.gm-tt-row .gm-tt-lbl{color:rgba(140,150,160,0.6);text-decoration:line-through;}' +
+    '.gm-tt-kids{margin-left:9px;}' +
+    '.gm-tt-sub{position:relative;padding-left:16px;}' +
+    '.gm-tt-sub::before{content:\'\';position:absolute;left:0;top:0;width:14px;height:14px;border-left:1px solid rgba(180,190,200,0.28);border-bottom:1px solid rgba(180,190,200,0.28);}' +
+    '.gm-tt-sub::after{content:\'\';position:absolute;left:0;top:14px;bottom:0;border-left:1px solid rgba(180,190,200,0.28);}' +
+    '.gm-tt-sub:last-child::after{display:none;}';
   document.head.appendChild(st);
 })();
 
