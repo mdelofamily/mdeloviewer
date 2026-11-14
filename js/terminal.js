@@ -15,6 +15,7 @@ var _tmEditMode = null;    // 'dlg' | 'menuItem' | null
 var _tmEditMenuCtx = null; // { node, idx, type } — set only when _tmEditMode === 'menuItem'
 var _tmEditLabel = null;   // human-readable label shown in cancel/header messages
 var _tmNodeCtx = null;    // { kind:'node'|'scene', name, ka, en } — set only when _tmEditMode === 'nodeText'
+var _tmTodoCtx = null;    // { node, idx|null } — set only when _tmEditMode === 'todoList'
 var _tmEditBuf = null;     // raw content buffered from a chain segment, consumed by /შეყვანა
 var _tmEditLang = (typeof _mdeloLang !== 'undefined' && _mdeloLang === 'en') ? 'en' : 'ka'; // 'ka' | 'en' — session-wide dialogue/menu edit-language target,
                             // set by /ენა. Drives the prompt text (see _tmApplyLangPrompt) and
@@ -156,6 +157,7 @@ function tmSend() {
     if (_tmEditMode === 'legend')    { _tmSaveLegend(v); return; }
     if (_tmEditMode === 'area')      { _tmSaveArea(v); return; }
     if (_tmEditMode === 'nodeText')  { _tmSaveNodeText(v); return; }
+    if (_tmEditMode === 'todoList')  { _tmSaveTodoList(v); return; }
     _tmSaveDlg(v); return;
   }
 
@@ -475,12 +477,12 @@ async function _tmRun(raw) {
   if (todoPathM) {
     if (_tmTierDenied('todo')) { _tmDenyMsg('todo'); return; }
     var tsegs = todoPathM[1].split('/').map(function (s) { return s.trim(); }).filter(Boolean);
-    if (!tsegs.length || !/^\d+$/.test(tsegs[tsegs.length - 1])) {
-      _tmL('ter', 'გამოყენება: /შესრულება/სექცია/.../N');
+    if (!tsegs.length || !/^\d+(?:\.\d+)*$/.test(tsegs[tsegs.length - 1])) {
+      _tmL('ter', 'გამოყენება: /შესრულება/სექცია/.../N  (ან N.K — ქვე-ჩეკისთვის)');
     } else {
-      var tIdx = parseInt(tsegs[tsegs.length - 1]);
+      var tRef = tsegs[tsegs.length - 1];
       var tNode = _tmFindMenuNodeByPath(tsegs.slice(0, -1));
-      if (tNode) await _tmTodoToggle(tNode, tIdx);
+      if (tNode) await _tmTodoToggle(tNode, tRef);
     }
     return;
   }
@@ -840,7 +842,7 @@ function _tmHelp() {
     ['/ლეგენდა რედაქტირება', 'მთავარი ლეგენდის ტექსტის რედაქტირება'],
     ['/მენიუ',            'მენიუს toggle'],
     ['/მენიუ/სექცია/.../N', 'პირდაპირი ლინკი ნესტ. სექციაზე ან item-ზე'],
-    ['/todo/სექცია/.../N',  'todo-ის toggle ნებისმიერი branch-დან, /cd-ის გარეშე'],
+    ['/todo/სექცია/.../N[.K]', 'todo-ის toggle ნებისმიერი branch-დან, /cd-ის გარეშე'],
     ['/გახსნა',           'ტერმინალის გახსნა (macro/window hook-ისთვის)'],
     ['/შეყვანა',          'Enter/Send — ღია edit-სესიის submit (macro-chain-ისთვის)'],
     ['/სრული',            'სრული ↔ ნახევარი'],
@@ -1957,6 +1959,7 @@ function _tmSubmitCmd() {
   if (_tmEditMode === 'menuTitle') { _tmSaveMenuTitle(v); return; }
   if (_tmEditMode === 'legend')    { _tmSaveLegend(v); return; }
   if (_tmEditMode === 'area')      { _tmSaveArea(v); return; }
+  if (_tmEditMode === 'todoList')  { _tmSaveTodoList(v); return; }
   _tmSaveDlg(v);
 }
 
@@ -2425,7 +2428,7 @@ function _tmEditCancel() {
   _tmEditMode = null;
   _tmEditMenuCtx = null;
   _tmEditLabel = null;
-  _tmEditBuf = null; _tmEditMediaBuf = []; _tmNodeCtx = null;
+  _tmEditBuf = null; _tmEditMediaBuf = []; _tmNodeCtx = null; _tmTodoCtx = null;
   document.getElementById('tmTa').value = '';
   if (_tmMulti) tmToggleMulti();
   _tmL('tdm', label + ' — გაუქმდა');
@@ -2801,11 +2804,15 @@ async function _tmMenuLeaf(args) {
     await _tmMenuSaveNode(node.id, { items_json: node.items });
   } else if (sub === 'todo') {
     var todoSub = (args[1] || '').trim();
+    if (!todoSub) { _tmTodoListOpen(node, null); return; }   // bare → editor for a new nested list
     if (todoSub === 'ls') { _tmTodoLs(node); return; }
-    var todoIdx = parseInt(todoSub);
-    if (!isNaN(todoIdx)) { await _tmTodoToggle(node, todoIdx); return; }
+    if (todoSub === 'რედ') {
+      var todoEditIdx = parseInt(args[2], 10);
+      if (isNaN(todoEditIdx)) { _tmL('ter', 'გამოყენება: /ფოთოლი todo რედ <N>'); return; }
+      _tmTodoListOpen(node, todoEditIdx); return;
+    }
+    if (/^\d+(?:\.\d+)*$/.test(todoSub)) { await _tmTodoToggle(node, todoSub); return; }
     var todoName = args.slice(1).join(' ').trim();
-    if (!todoName) { _tmL('ter', 'გამოყენება: /ფოთოლი todo <სახელი>  ან  /ფოთოლი todo ls  ან  /ფოთოლი todo <N>'); return; }
     if (!node.items) node.items = [];
     node.items.push({ type: 'todo', id: 'todo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), label: todoName, checked: false });
     _tmL('tok', '+ [' + (node.items.length - 1) + '] ⬜ todo დაემატა');
@@ -2815,40 +2822,215 @@ async function _tmMenuLeaf(args) {
     _tmL('tsy', '/ფოთოლი ბრძანებები:');
     _tmL('tnf', '  ტექსტი <ტექსტი> [ემოჯი]         — ტექსტური item (default •)');
     _tmL('tnf', '  ინდიკატორი <სახელი> <%> [ემოჯი] — progress item (default 📊)');
-    _tmL('tnf', '  todo <სახელი>           — todo item');
-    _tmL('tnf', '  todo <N>                — toggle item [N]');
-    _tmL('tnf', '  todo ls                 — todos სია ⬜/✅');
+    _tmL('tnf', '  todo                    — ახალი todo სია (რედაქტორი, - დონეებით)');
+    _tmL('tnf', '  todo <სახელი>           — ერთი todo item');
+    _tmL('tnf', '  todo რედ <N>            — todo-ს რედაქტორი (/რედ <N>-იც)');
+    _tmL('tnf', '  todo <N> | <N.K.J>      — toggle (მშობელი = ყველა ქვე-ჩეკი)');
+    _tmL('tnf', '  todo ls                 — todos ხე ⬜/✅');
     _tmL('tdm', _SEP);
   }
 }
 
-// List all todos in current node with checked status
+// ── nested todo lists ──
+// A todo item may carry children — a visual task tree, unrelated to the menu tree:
+//   { type:'todo', id, label:{ka,en}, checked, children:[{ id, label, children? }] }
+// Leaf state lives in menu_todo_state (runtime.js); a parent is done when all its
+// leaves are. Addressing: N = item index in the node, N.K.J = child path (0-based).
+var _TM_TODO_MAX_NODES = 40, _TM_TODO_MAX_LEVEL = 3;
+
+function _tmTodoKa(label) { return (typeof label === 'string') ? label : ((label && label.ka) || ''); }
+function _tmTodoEn(label) { return (label && typeof label === 'object') ? (label.en || '') : ''; }
+
+function _tmTodoNewId(used) {
+  var id;
+  do { id = 'todo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); } while (used && used[id]);
+  if (used) used[id] = true;
+  return id;
+}
+
+// Item -> editor text: first line = title, children as "-" / "--" / "---" lines.
+function _tmTodoToText(item, lang) {
+  var out = [];
+  (function walk(n, level) {
+    var ka = _tmTodoKa(n.label), en = _tmTodoEn(n.label);
+    var txt = (lang === 'en' && en) ? en : ka;
+    out.push((level ? '-'.repeat(level) + ' ' : '') + txt);
+    (n.children || []).forEach(function (c) { walk(c, level + 1); });
+  })(item, 0);
+  return out.join('\n');
+}
+
+// Editor text -> flat rows [{ level, text }]; { error } on invalid input.
+function _tmTodoParse(text) {
+  var lines = String(text).split('\n'), rows = [];
+  for (var i = 0; i < lines.length; i++) {
+    var raw = lines[i].replace(/\s+$/, '');
+    if (!raw.trim()) continue;
+    var m = raw.match(/^\s*(-*)\s*(.*)$/);
+    var level = m[1].length;
+    // tolerate a typed checkbox marker — state is never part of the text
+    var label = m[2].replace(/^(?:□|☐|\[\s?\]|\[[xX]\])\s*/, '').trim();
+    if (!rows.length) {
+      if (level) return { error: 'ხაზი 1 — სიის სახელია, "-"-ის გარეშე' };
+    } else {
+      if (!level) return { error: 'ხაზი ' + (i + 1) + ': ქვე-ჩეკი "-"-ით უნდა დაიწყოს' };
+      if (level > _TM_TODO_MAX_LEVEL) return { error: 'ხაზი ' + (i + 1) + ': მაქსიმუმ ' + _TM_TODO_MAX_LEVEL + ' დონე' };
+      if (level > rows[rows.length - 1].level + 1) return { error: 'ხაზი ' + (i + 1) + ': დონე ვერ გადახტება (წინა ხაზი "' + '-'.repeat(rows[rows.length - 1].level) + '")' };
+    }
+    if (!label) return { error: 'ხაზი ' + (i + 1) + ': ტექსტი ცარიელია' };
+    rows.push({ level: level, text: label });
+    if (rows.length > _TM_TODO_MAX_NODES) return { error: 'მაქსიმუმ ' + _TM_TODO_MAX_NODES + ' ხაზი სიაში' };
+  }
+  if (!rows.length) return { error: 'სია ცარიელია' };
+  return { rows: rows };
+}
+
+// Rows -> item. ka mode: ids are carried over from the old tree (same level+text
+// first, then same position+level for edited text); the list keeps its own id.
+// en mode: structure must match the ka tree exactly, only labels change.
+function _tmTodoBuild(ctx, rows) {
+  var item = (ctx.idx != null) ? ctx.node.items[ctx.idx] : null;
+  var oldFlat = [], usedIds = {};
+  if (item) (function walk(n, lvl) {
+    oldFlat.push({ n: n, level: lvl, used: false });
+    usedIds[n.id] = true;
+    (n.children || []).forEach(function (c) { walk(c, lvl + 1); });
+  })(item, 0);
+
+  var oldFor = new Array(rows.length), i, j;
+  if (_tmEditLang === 'en') {
+    if (oldFlat.length !== rows.length) return { error: 'EN რეჟიმში ხაზების რაოდენობა უცვლელია (' + oldFlat.length + ') — სტრუქტურა ჯერ ქართულში შეცვალე (/ენა ka)' };
+    for (i = 0; i < rows.length; i++) {
+      if (oldFlat[i].level !== rows[i].level) return { error: 'ხაზი ' + (i + 1) + ': EN რეჟიმში "-"-ების რაოდენობა უცვლელია' };
+      oldFor[i] = oldFlat[i];
+    }
+  } else if (oldFlat.length) {
+    oldFor[0] = oldFlat[0]; oldFlat[0].used = true;
+    for (i = 1; i < rows.length; i++) {
+      for (j = 1; j < oldFlat.length; j++) {
+        if (!oldFlat[j].used && oldFlat[j].level === rows[i].level && _tmTodoKa(oldFlat[j].n.label) === rows[i].text) {
+          oldFlat[j].used = true; oldFor[i] = oldFlat[j]; break;
+        }
+      }
+    }
+    for (i = 1; i < rows.length; i++) {
+      var cand = oldFlat[i];
+      if (!oldFor[i] && cand && !cand.used && cand.level === rows[i].level) { cand.used = true; oldFor[i] = cand; }
+    }
+  }
+
+  var nodes = [], stack = [];
+  for (i = 0; i < rows.length; i++) {
+    var o = oldFor[i] ? oldFor[i].n : null;
+    var kaOld = o ? _tmTodoKa(o.label) : '', enOld = o ? _tmTodoEn(o.label) : '';
+    // untouched ka-reference is never saved as a false translation (same rule as menu items)
+    var label = (_tmEditLang === 'en')
+      ? { ka: kaOld, en: (rows[i].text !== kaOld) ? rows[i].text : enOld }
+      : { ka: rows[i].text, en: enOld };
+    var nd = { id: o ? o.id : _tmTodoNewId(usedIds), label: label };
+    nodes.push(nd);
+    if (i > 0) { var par = stack[rows[i].level - 1]; (par.children = par.children || []).push(nd); }
+    stack[rows[i].level] = nd;
+  }
+  var root = Object.assign({}, item || {}, { type: 'todo', id: nodes[0].id, label: nodes[0].label });
+  if (root.checked === undefined) root.checked = false;
+  if (nodes[0].children) root.children = nodes[0].children; else delete root.children;
+  return { item: root, count: rows.length };
+}
+
+// Open the list editor: idx == null → new list, otherwise edit item [idx].
+function _tmTodoListOpen(node, idx) {
+  var item = null;
+  if (idx != null) {
+    item = node.items && node.items[idx];
+    if (!item || typeof item !== 'object' || item.type !== 'todo') { _tmL('ter', 'todo [' + idx + '] ვერ მოიძებნა — /ფოთოლი todo ls'); return; }
+  } else if (_tmEditLang === 'en') {
+    _tmL('ter', '✗ ახალი სია ქართულად იქმნება — ჯერ /ენა ka'); return;
+  }
+  if (!_tmMulti) tmToggleMulti();
+  document.getElementById('mdlTerm').classList.add('dlg-edit'); // big editor in fullscreen
+  document.getElementById('tmTa').value = item ? _tmTodoToText(item, _tmEditLang) : '';
+  _tmTaResize();
+  var title = item ? (_tmTodoKa(item.label) || ('[' + idx + ']')) : 'ახალი სია';
+  _tmEditObj = '__todolist__'; _tmEditMode = 'todoList'; _tmEditLabel = 'todo: ' + title;
+  _tmTodoCtx = { node: node, idx: idx };
+  _tmL('tsy', '─── ' + _tmEditLabel + ' ' + (_tmEditLang === 'en' ? '(EN)' : '') + ' ──────────────');
+  if (_tmEditLang === 'en') {
+    _tmL('tdm', 'EN რეჟიმი — მხოლოდ ტექსტი ითარგმნება; ხაზების რაოდენობა და "-" უცვლელია');
+  } else {
+    _tmL('tdm', 'ხაზი 1 — სიის სახელი · ქვე-ჩეკი: "- ტექსტი" · მის ქვეშ: "-- ტექსტი" (მაქს. ' + _TM_TODO_MAX_LEVEL + ' დონე, ' + _TM_TODO_MAX_NODES + ' ხაზი)');
+  }
+  _tmL('tdm', 'Ctrl+Enter — შენახვა · Esc — გაუქმება');
+}
+
+function _tmTodoKeepOpen(msg) {
+  _tmL('ter', '✗ ' + msg);
+  _tmL('tdm', 'ტექსტი რედაქტორში რჩება — გაასწორე და ისევ შეინახე (Esc — გაუქმება)');
+}
+
+async function _tmSaveTodoList(text) {
+  var ctx = _tmTodoCtx;
+  if (!ctx) { _tmEditCancel(); return; }
+  var node = ctx.node, idx = ctx.idx;
+  if (idx != null) {
+    var cur = node.items && node.items[idx];
+    if (!cur || typeof cur !== 'object' || cur.type !== 'todo') { _tmL('ter', '✗ todo [' + idx + '] აღარ არსებობს'); _tmEditCancel(); return; }
+  }
+  var parsed = _tmTodoParse(text);
+  if (parsed.error) { _tmTodoKeepOpen(parsed.error); return; }
+  var built = _tmTodoBuild(ctx, parsed.rows);
+  if (built.error) { _tmTodoKeepOpen(built.error); return; }
+
+  _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; _tmEditMediaBuf = []; _tmTodoCtx = null;
+  document.getElementById('tmTa').value = '';
+  if (_tmMulti) tmToggleMulti();
+
+  if (!node.items) node.items = [];
+  var at;
+  if (idx != null) { node.items[idx] = built.item; at = idx; }
+  else { node.items.push(built.item); at = node.items.length - 1; }
+  _tmL('tok', (idx != null ? '✎ [' + at + '] ' : '+ [' + at + '] ') + 'todo' + (built.count > 1 ? ' სია (' + (built.count - 1) + ' ქვე-ჩეკი)' : '') + ' შენახულია');
+  await _tmMenuSaveNode(node.id, { items_json: node.items });
+}
+
+// List all todos in current node as a tree with ⬜/✅ and [N] / [N.K] addresses
 function _tmTodoLs(node) {
-  var todos = (node.items || []).filter(function (it) { return it.type === 'todo'; });
-  if (!todos.length) { _tmL('tdm', '(todos არ არსებობს)'); return; }
-  _tmL('tdm', _SEP);
-  todos.forEach(function (todo, idx) {
-    var realIdx = node.items.findIndex(function (it) { return it === todo; });
-    var status = todo.checked ? '✅' : '⬜';
-    _tmL('tnf', '  [' + realIdx + '] ' + status + ' ' + (todo.label || '(უსახელო)'));
+  if (typeof window.menuTodoCount !== 'function') { _tmL('ter', '✗ menuTodoCount ვერ მოიძებნა (runtime.js?)'); return; }
+  var any = false;
+  (node.items || []).forEach(function (it, idx) {
+    if (!it || typeof it !== 'object' || it.type !== 'todo') return;
+    if (!any) { any = true; _tmL('tdm', _SEP); }
+    (function walk(n, path, depth) {
+      var c = window.menuTodoCount(n), kids = n.children && n.children.length;
+      var st = window.menuTodoIsDone(n) ? '✅' : '⬜';
+      _tmL('tnf', '  '.repeat(depth) + '[' + path + '] ' + st + ' ' + (_tmTodoKa(n.label) || '(უსახელო)') + (kids ? '  (' + c.done + '/' + c.total + ')' : ''));
+      (n.children || []).forEach(function (ch, k) { walk(ch, path + '.' + k, depth + 1); });
+    })(it, String(idx), 0);
   });
+  if (!any) { _tmL('tdm', '(todos არ არსებობს)'); return; }
   _tmL('tdm', _SEP);
 }
 
-// Toggle todo [idx] in current node and sync to Supabase
-async function _tmTodoToggle(node, idx) {
-  if (!node.items || !node.items[idx] || node.items[idx].type !== 'todo') {
-    _tmL('ter', 'todo [' + idx + '] ვერ მოიძებნა — /ფოთოლი todo ls');
+// Toggle todo N or child N.K.J. A parent toggles all its leaves together.
+// State goes through runtime.js (menu_todo_state) — the same store the panel reads.
+async function _tmTodoToggle(node, ref) {
+  var parts = String(ref).split('.').map(function (x) { return parseInt(x, 10); });
+  var item = node.items && node.items[parts[0]];
+  if (!item || typeof item !== 'object' || item.type !== 'todo') {
+    _tmL('ter', 'todo [' + parts[0] + '] ვერ მოიძებნა — /ფოთოლი todo ls');
     return;
   }
-  var todo = node.items[idx];
-  todo.checked = !todo.checked;
-  var status = todo.checked ? '✅' : '⬜';
-  _tmL('tok', '[' + idx + '] ' + status + ' განახლდა');
-  await _tmMenuSaveNode(node.id, { items_json: node.items });
-  if (typeof window.todoSaveChecked === 'function') {
-    await window.todoSaveChecked(node.id, todo.id, todo.checked);
+  var target = item;
+  for (var k = 1; k < parts.length; k++) {
+    target = target.children && target.children[parts[k]];
+    if (!target) { _tmL('ter', 'todo [' + parts.slice(0, k + 1).join('.') + '] ვერ მოიძებნა — /ფოთოლი todo ls'); return; }
   }
+  if (typeof window.menuTodoSetMany !== 'function') { _tmL('ter', '✗ menuTodoSetMany ვერ მოიძებნა (runtime.js?)'); return; }
+  var ids = window.menuTodoLeafIds(target);
+  var next = !window.menuTodoIsDone(target);
+  var res = await window.menuTodoSetMany(ids, next);
+  _tmL('tok', '[' + parts.join('.') + '] ' + (next ? '✅' : '⬜') + ' განახლდა' + (ids.length > 1 ? ' (' + ids.length + ' ჩეკი)' : ''));
+  if (res === 'queued') _tmL('tdm', '⚠ ოფლაინ/ქსელის შეცდომა — queue-შია (' + window.pendingCount() + ')');
 }
 
 async function _tmMenuRm(args) {
@@ -2900,7 +3082,10 @@ async function _tmMenuEdit(args) {
   var rest  = args.slice(1);
   var itObj = typeof node.items[idx] === 'string' ? { type: 'text', emoji: '•', label: node.items[idx] } : node.items[idx];
 
-  if (!rest.length) { _tmMenuEditOpen(node, idx, itObj); return; }
+  if (!rest.length) {
+    if (itObj.type === 'todo') { _tmTodoListOpen(node, idx); return; }
+    _tmMenuEditOpen(node, idx, itObj); return;
+  }
 
   if (itObj.type === 'progress') {
     var lastIsNum = /^\d+$/.test(rest[rest.length - 1]);

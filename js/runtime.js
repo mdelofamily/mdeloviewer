@@ -1491,6 +1491,8 @@ function _gmOpenOverlay(node, parentNodes, parentPath, standalone) {
       const pfx = itObj.emoji ? itObj.emoji + ' ' : '';
       row.innerHTML = '<span class="gm-progress-label">' + pfx + _i18n(itObj.label) + '</span><div class="gm-bar"><div class="gm-bar-fill" style="width:' + v + '%;background:' + color + ';"></div></div><span class="gm-bar-pct">' + v + '%</span>';
       body.appendChild(row);
+    } else if (itObj.type === 'todo' && itObj.children && itObj.children.length) {
+      body.appendChild(_gmBuildTodoTree(itObj));
     } else if (itObj.type === 'todo') {
       const checked = _gmTodoState.has(itObj.id) ? _gmTodoState.get(itObj.id) : !!itObj.checked;
       const row = document.createElement('div'); row.className = 'gm-todo-row' + (checked ? ' checked' : '');
@@ -3000,6 +3002,119 @@ async function _gmSaveTodoStateSafe(todoId, checked) {
     window.pendingAdd('todo', todoId, 'todo item', { todoId: todoId, checked: checked });
   }
 }
+
+// ── nested todo lists (children live INSIDE one todo item; unrelated to the menu tree) ──
+// Only leaf state is stored (menu_todo_state, one row per leaf id). A parent's
+// state is derived: done when every descendant leaf is done. A todo without
+// children is its own leaf, so old standalone todos behave exactly as before.
+function _gmTodoLeaves(n) {
+  var out = [];
+  (function walk(x) {
+    if (x.children && x.children.length) x.children.forEach(walk);
+    else out.push(x);
+  })(n);
+  return out;
+}
+function _gmTodoLeafOn(n) { return _gmTodoState.has(n.id) ? _gmTodoState.get(n.id) : !!n.checked; }
+function _gmTodoCount(n) {
+  var leaves = _gmTodoLeaves(n), done = 0;
+  leaves.forEach(function (l) { if (_gmTodoLeafOn(l)) done++; });
+  return { done: done, total: leaves.length };
+}
+function _gmTodoIsDone(n) { var c = _gmTodoCount(n); return c.total > 0 && c.done === c.total; }
+
+// Bulk upsert: one request for a cascade over many leaves.
+async function _gmSaveTodoStateBulk(ids, checked) {
+  try {
+    const now = new Date().toISOString();
+    const r = await fetch(SUPA_URL + '/rest/v1/menu_todo_state?on_conflict=map_id,todo_id', {
+      method: 'POST',
+      headers: Object.assign({
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      }, _authHeaders()),
+      body: JSON.stringify(ids.map(function (id) {
+        return { map_id: _MAP_ID, todo_id: id, checked: checked, updated_at: now };
+      }))
+    });
+    if (r.ok) return true;
+    const errBody = r.text ? await r.text().catch(function () { return ''; }) : '';
+    return { ok: false, status: r.status, msg: errBody.slice(0, 150) };
+  } catch (e) { return { ok: false, status: 0, msg: e.message }; }
+}
+
+// Set many leaf ids at once: local state first, then persist (offline-safe,
+// same pendingAdd('todo', ...) queue as single toggles). Returns true | 'queued'.
+async function _gmTodoSetMany(ids, checked) {
+  if (!ids || !ids.length) return true;
+  ids.forEach(function (id) { _gmTodoState.set(id, checked); });
+  function queueAll() {
+    ids.forEach(function (id) { window.pendingAdd('todo', id, 'todo item', { todoId: id, checked: checked }); });
+    return 'queued';
+  }
+  if (!navigator.onLine) return queueAll();
+  var res;
+  try { res = ids.length === 1 ? await _gmSaveTodoState(ids[0], checked) : await _gmSaveTodoStateBulk(ids, checked); }
+  catch (e) { res = { ok: false, status: 0, msg: e.message }; }
+  return res === true ? true : queueAll();
+}
+
+// Tree renderer for a todo item that has children.
+function _gmBuildTodoTree(root) {
+  const wrap = document.createElement('div'); wrap.className = 'gm-todo-tree';
+  const rows = [];
+  function refresh() {
+    rows.forEach(function (r) {
+      const c = _gmTodoCount(r.n), done = c.total > 0 && c.done === c.total;
+      r.row.classList.toggle('checked', done);
+      r.box.textContent = done ? '✅' : '⬜';
+      if (r.cnt) r.cnt.textContent = c.done + '/' + c.total;
+    });
+  }
+  function toggle(n) {
+    const ids = _gmTodoLeaves(n).map(function (l) { return l.id; });
+    const next = !_gmTodoIsDone(n);
+    _gmTodoSetMany(ids, next);
+    refresh();
+  }
+  function add(n, depth) {
+    const hasKids = !!(n.children && n.children.length);
+    const row = document.createElement('div');
+    row.className = 'gm-todo-row' + (hasKids ? ' parent' : '');
+    if (depth) row.style.paddingLeft = (depth * 18) + 'px';
+    const box = document.createElement('span'); box.className = 'gm-todo-box';
+    const lbl = document.createElement('span'); lbl.className = 'gm-todo-label';
+    lbl.innerHTML = parseLinks(_i18n(n.label) || '');
+    row.appendChild(box); row.appendChild(lbl);
+    let cnt = null;
+    if (hasKids) { cnt = document.createElement('span'); cnt.className = 'gm-todo-cnt'; row.appendChild(cnt); }
+    row.onclick = function (e) { if (e.target.closest('a')) return; toggle(n); };
+    wrap.appendChild(row);
+    rows.push({ n: n, row: row, box: box, cnt: cnt });
+    if (hasKids) n.children.forEach(function (c) { add(c, depth + 1); });
+  }
+  add(root, 0);
+  refresh();
+  return wrap;
+}
+
+// Terminal-facing API (terminal.js never touches _gmTodoState directly).
+window.menuTodoSetMany  = _gmTodoSetMany;
+window.menuTodoIsDone   = _gmTodoIsDone;
+window.menuTodoCount    = _gmTodoCount;
+window.menuTodoLeafIds  = function (n) { return _gmTodoLeaves(n).map(function (l) { return l.id; }); };
+
+// Styles for nested rows — injected here because index.html is regenerated by the editor export.
+(function () {
+  if (document.getElementById('gmTodoTreeStyles')) return;
+  var st = document.createElement('style');
+  st.id = 'gmTodoTreeStyles';
+  st.textContent =
+    '.gm-todo-tree{margin:2px 0;}' +
+    '.gm-todo-row.parent .gm-todo-label{font-weight:600;}' +
+    '.gm-todo-cnt{flex-shrink:0;margin-left:6px;font-size:12px;line-height:1.7;opacity:.6;white-space:nowrap;}';
+  document.head.appendChild(st);
+})();
 
 async function loadDialogueOverrides() {
   try {
