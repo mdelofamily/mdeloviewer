@@ -942,14 +942,35 @@ function _gmRenderMarkup(text, prefixHtml) {
     if (run.length) { parts.push('<div class="gm-mk-p">' + pre + run.map(function (t) { return _gmMkInline(t, links); }).join('<br>') + '</div>'); pre = ''; }
     run = [];
   }
+  // consecutive "- " rows form one list; the number of dashes is the depth (clamped to 1..4,
+  // a jump deeper than one level attaches to the deepest open item) → nested containers so CSS can draw connector lines
+  let list = [];
+  function flushList() {
+    if (!list.length) return;
+    const roots = [], stack = [];
+    list.forEach(function (r) {
+      const node = { t: r.t, kids: [] };
+      const depth = Math.min(r.lvl, stack.length + 1);
+      stack.length = depth - 1;
+      (depth > 1 ? stack[depth - 2].kids : roots).push(node);
+      stack.push(node);
+    });
+    function li(n, sub) {
+      const row = '<div class="gm-mk-row">' + pre + _gmMkInline(n.t, links) + '</div>'; pre = '';
+      return '<div class="gm-mk-li' + (sub ? ' gm-mk-sub' : '') + '">' + row +
+        (n.kids.length ? '<div class="gm-mk-kids">' + n.kids.map(function (k) { return li(k, true); }).join('') + '</div>' : '') + '</div>';
+    }
+    parts.push('<div class="gm-mk-ul">' + roots.map(function (n) { return li(n, false); }).join('') + '</div>');
+    list = [];
+  }
   rows.forEach(function (r) {
-    if (r.k === 'p') { run.push(r.t); return; }
-    flush();
-    parts.push(r.k === 'h'
-      ? '<div class="gm-mk-h gm-mk-h' + r.lvl + '">' + pre + _gmMkInline(r.t, links) + '</div>'
-      : '<div class="gm-mk-li gm-mk-d' + r.lvl + '">' + pre + _gmMkInline(r.t, links) + '</div>');
+    if (r.k === 'li') { flush(); list.push(r); return; }
+    if (r.k === 'p') { flushList(); run.push(r.t); return; }
+    flush(); flushList();
+    parts.push('<div class="gm-mk-h gm-mk-h' + r.lvl + '">' + pre + _gmMkInline(r.t, links) + '</div>');
     pre = '';
   });
+  flushList();
   flush();
   return { html: parts.join(''), block: true };
 }
@@ -964,12 +985,17 @@ window._gmRenderMarkup = _gmRenderMarkup;
     '.gm-mk-h{font-weight:700;line-height:1.3;color:rgba(230,237,243,0.95);margin:0.5em 0 0.15em;}' +
     '.gm-mk-h1{font-size:1.35em;}.gm-mk-h2{font-size:1.15em;}.gm-mk-h3{font-size:1em;}' +
     '.gm-mk-p{margin:0.2em 0;}' +
-    '.gm-mk-li{position:relative;padding-left:16px;margin:0.1em 0;}' +
-    '.gm-mk-li::before{content:\'•\';position:absolute;left:0;}' +
-    '.gm-mk-d2{padding-left:32px;}.gm-mk-d2::before{left:16px;content:\'◦\';}' +
-    '.gm-mk-d3{padding-left:48px;}.gm-mk-d3::before{left:32px;content:\'▪\';}' +
-    '.gm-mk-d4{padding-left:64px;}.gm-mk-d4::before{left:48px;content:\'▪\';}' +
-    '.gm-mk-h:first-child,.gm-mk-p:first-child{margin-top:0;}';
+    '.gm-mk-ul{margin:0.2em 0;}' +
+    '.gm-mk-row{position:relative;padding-left:16px;line-height:1.4;}' +
+    '.gm-mk-row::before{content:\'\';position:absolute;left:0;top:calc(0.7em - 3px);width:6px;height:6px;box-sizing:border-box;border-radius:50%;background:currentColor;opacity:0.75;}' +
+    '.gm-mk-sub>.gm-mk-row::before{background:none;border:1.5px solid currentColor;}' +
+    '.gm-mk-li{position:relative;padding-top:0.1em;padding-bottom:0.1em;}' +
+    '.gm-mk-kids{margin-left:3px;}' +
+    '.gm-mk-sub{padding-left:14px;}' +
+    '.gm-mk-sub::before{content:\'\';position:absolute;left:0;top:0;width:13px;height:0.8em;border-left:1px solid rgba(180,190,200,0.28);border-bottom:1px solid rgba(180,190,200,0.28);}' +
+    '.gm-mk-sub::after{content:\'\';position:absolute;left:0;top:0.8em;bottom:0;border-left:1px solid rgba(180,190,200,0.28);}' +
+    '.gm-mk-sub:last-child::after{display:none;}' +
+    '.gm-mk-h:first-child,.gm-mk-p:first-child,.gm-mk-ul:first-child{margin-top:0;}';
   document.head.appendChild(st);
 })();
 

@@ -3491,7 +3491,21 @@ async function _tmSaveMenuItem(text) {
 // The caller (_tmSaveMenuItem) already mutated the in-memory node.items
 // locally before calling this, so there's nothing extra to "apply" here on
 // the offline path — only the persistence step needs guarding.
+// Every menu item carries a stable id (todo items already did). Assigned — and backfilled for old
+// items — on any node save; existing ids are kept, plain-string items stay as they are (they become
+// objects, and get an id, on their first edit).
+function _tmEnsureItemIds(items) {
+  var used = {};
+  items.forEach(function (it) { if (it && typeof it === 'object' && it.id) used[it.id] = true; });
+  items.forEach(function (it) {
+    if (!it || typeof it !== 'object' || it.id) return;
+    var p = it.type === 'progress' ? 'bar' : (it.type === 'todo' ? 'todo' : 'text'), id;
+    do { id = p + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); } while (used[id]);
+    used[id] = true; it.id = id;
+  });
+}
 async function _tmMenuSaveNode(nodeId, fields) {
+  if (fields && Array.isArray(fields.items_json)) _tmEnsureItemIds(fields.items_json);
   if (typeof window.menuOverrideSave !== 'function') {
     _tmL('ter', '✗ menuOverrideSave ვერ მოიძებნა (runtime.js?)');
     return;
