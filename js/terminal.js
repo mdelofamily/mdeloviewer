@@ -2812,18 +2812,15 @@ async function _tmMenuLeaf(args) {
       _tmTodoListOpen(node, todoEditIdx); return;
     }
     if (/^\d+(?:\.\d+)*$/.test(todoSub)) { await _tmTodoToggle(node, todoSub); return; }
-    var todoName = args.slice(1).join(' ').trim();
-    if (!node.items) node.items = [];
-    node.items.push({ type: 'todo', id: 'todo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), label: todoName, checked: false });
-    _tmL('tok', '+ [' + (node.items.length - 1) + '] ⬜ todo დაემატა');
-    await _tmMenuSaveNode(node.id, { items_json: node.items });
+    // single-name todo creation was removed: lists are written in the editor (bare /ფოთოლი todo)
+    _tmL('ter', 'ერთი todo-ს ბრძანება მოხსნილია. გამოიყენე: /ფოთოლი todo (ახალი სია) · todo რედ <N> · todo <N> · todo ls');
+    return;
   } else {
     _tmL('tdm', _SEP);
     _tmL('tsy', '/ფოთოლი ბრძანებები:');
     _tmL('tnf', '  ტექსტი <ტექსტი> [ემოჯი]         — ტექსტური item (default •)');
     _tmL('tnf', '  ინდიკატორი <სახელი> <%> [ემოჯი] — progress item (default 📊)');
     _tmL('tnf', '  todo                    — ახალი todo სია (რედაქტორი, - დონეებით)');
-    _tmL('tnf', '  todo <სახელი>           — ერთი todo item');
     _tmL('tnf', '  todo რედ <N>            — todo-ს რედაქტორი (/რედ <N>-იც)');
     _tmL('tnf', '  todo <N> | <N.K.J>      — toggle (მშობელი = ყველა ქვე-ჩეკი)');
     _tmL('tnf', '  todo ls                 — todos ხე ⬜/✅');
@@ -3293,6 +3290,7 @@ async function _tmSaveMenuTitle(text) {
 function _tmMenuEditOpen(node, idx, itObj) {
   _tmEditMediaBuf = []; // fresh scope for this session — _tmMenuItemToEditText repopulates from existing segments, if any
   if (!_tmMulti) tmToggleMulti();
+  document.getElementById('mdlTerm').classList.add('dlg-edit'); // big editor in fullscreen
   document.getElementById('tmTa').value = _tmMenuItemToEditText(itObj);
   _tmTaResize();
   _tmEditObj     = node.id;
@@ -3307,6 +3305,7 @@ function _tmMenuEditOpen(node, idx, itObj) {
   }
   _tmL('tdm', 'ხაზი 1 — [emoji: X], მხოლოდ X გამოცვალე');
   if (itObj.type === 'text' || !itObj.type) {
+    _tmL('tdm', 'მარკაპი: "# სათაური" (## ###) · "- ბულეტი" ("-- " ჩაღრმავება) · **სქელი** · *დახრილი*');
     _tmL('tdm', 'ახალ ხაზზე დაწერე "/მედია" — jpg/png/webp/mp3/txt/mp4/epub/pdf ატვირთვისთვის');
     _tmL('tdm', '"/youtube <url> " (space ბოლოში) — YouTube thumbnail-ისთვის');
   }
