@@ -995,7 +995,7 @@ function _gmBuildSlugIndex() {
       const slug  = count === 1 ? base : base + '-' + count;
       index.set(slug, { node, nodes, path });
       if (node.children && node.children.length) {
-        walk(node.children, [...path, {title: _i18n(node.title), nodes: node.children}]);
+        walk(node.children, [...path, _gmPathEntry(node)]);
       }
     });
   }
@@ -1019,9 +1019,9 @@ function _gmGoToSlug(slug) {
   }
   const hasChildren = hit.node.children && hit.node.children.length > 0;
   if (hasChildren) {
-    _gmShowPanel(hit.node.children, [...hit.path, {title: hit.node.title, nodes: hit.node.children}]);
+    _gmShowPanel(hit.node.children, [...hit.path, _gmPathEntry(hit.node)]);
   } else {
-    _gmOpenOverlay(hit.node, hit.nodes, hit.path);
+    _gmOpenLeaf(hit.node, hit.nodes, hit.path);
   }
 }
 // global click dispatcher for internal menu links rendered by parseLinks
@@ -1357,62 +1357,177 @@ function toggleMenu() {
 
 /* path = [{title, nodes}] — each entry is a node already entered; `nodes` = its children array (siblings shown at that level).
    Root level is path = []. */
-function _gmShowPanel(nodes, path) {
-  const panel = document.getElementById('gmPanel');
-  panel.innerHTML = '';
+// ── leaf items as separate titled rows ──
+// A leaf's items (text / todo) are listed by TITLE (= the item's first line, or the
+// todo list's name) and each opens alone; the title joins the title bar next to the
+// section name. Indicators (progress) are NOT split out: they stay inline, and a
+// leaf that has only indicators keeps the old overlay.
+function _gmNormItem(item) { return typeof item === 'string' ? { type: 'text', emoji: '•', label: item } : item; }
+function _gmIsTitled(it) { return it.type !== 'progress'; }
+// breadcrumb entry for a node we have entered; `go` (optional) overrides the default "show its children panel"
+function _gmPathEntry(node) { return { title: _i18n(node.title) || '', icon: node.icon || '', nodes: node.children || [], node: node }; }
+function _gmPlainTitle(line) {
+  return String(line || '').replace(/\[\[([^\]|]*)(?:\|[^\]]*)?\]\]/g, '$1')
+    .replace(/^\s*#{1,3}\s+/, '').replace(/^\s*-+\s+/, '').replace(/\s+#+\s*$/, '')
+    .replace(/\*\*\*|\*\*|\*/g, '').trim();
+}
+function _gmSplitFirst(text) {
+  const lines = String(text || '').split('\n');
+  let i = 0; while (i < lines.length && !lines[i].trim()) i++;
+  if (i >= lines.length) return { first: '', rest: '' };
+  return { first: lines[i], rest: lines.slice(i + 1).join('\n').replace(/^\n+/, '') };
+}
+// -> { icon, title, meta, bodyItem } ; bodyItem = what the opened view renders
+function _gmItemInfo(it) {
+  if (it.type === 'todo') {
+    const kids = !!(it.children && it.children.length);
+    const c = kids ? _gmTodoCount(it) : null;
+    return { icon: _gmTodoIsDone(it) ? '✅' : '⬜', title: _gmPlainTitle(_i18n(it.label) || '') || '(უსახელო)',
+             meta: kids ? c.done + '/' + c.total : '', bodyItem: it };
+  }
+  let first = '', body = it, hasBody = false;
+  if (it.segments && it.segments.length) {
+    const si = it.segments.findIndex(seg => seg.type === 'text' && (_i18n(seg.value) || '').trim());
+    if (si >= 0) {
+      const sp = _gmSplitFirst(_i18n(it.segments[si].value));
+      first = sp.first;
+      const segs = it.segments.map((seg, i) => i === si ? Object.assign({}, seg, { value: sp.rest }) : seg);
+      body = Object.assign({}, it, { segments: segs });
+    }
+    hasBody = body.segments.some(seg => (seg.type === 'text' && (_i18n(seg.value) || '').trim()) || seg.type === 'files');
+  } else {
+    const sp = _gmSplitFirst(_i18n(it.label) || '');
+    first = sp.first;
+    body = Object.assign({}, it, { label: sp.rest });
+    hasBody = !!sp.rest.trim();
+  }
+  if (!hasBody) body = { type: 'text', label: first };   // one-line item: the opened view shows that line
+  return { icon: it.emoji || '•', title: _gmPlainTitle(first) || '(უსახელო)', meta: '', bodyItem: body };
+}
+function _gmDrawBc(path) {
   const bc = document.getElementById('gmBreadcrumb');
   if (path.length === 0) {
     bc.innerHTML = '';
     bc.classList.remove('visible');
-  } else {
-    bc.classList.add('visible');
-    bc.innerHTML = '';
-    const root = document.createElement('span');
-    root.className = 'gm-bc-part';
-    root.textContent = _i18n((_gmCfg && _gmCfg.title)) || '☰';
-    root.onclick = () => _gmShowPanel((_gmCfg.menu || []), []);
-    bc.appendChild(root);
-    path.forEach((p, i) => {
-      const sep = document.createElement('span'); sep.className = 'gm-bc-sep'; sep.textContent = '/'; bc.appendChild(sep);
-      const part = document.createElement('span');
-      const isLast = (i === path.length - 1);
-      part.className = 'gm-bc-part' + (isLast ? ' current' : '');
-      part.textContent = p.title;
-      if (!isLast) part.onclick = () => _gmShowPanel(p.nodes, path.slice(0, i + 1));
-      bc.appendChild(part);
-    });
-    requestAnimationFrame(() => { bc.scrollLeft = bc.scrollWidth; });
+    return;
   }
+  bc.classList.add('visible');
+  bc.innerHTML = '';
+  const root = document.createElement('span');
+  root.className = 'gm-bc-part';
+  root.textContent = _i18n((_gmCfg && _gmCfg.title)) || '☰';
+  root.onclick = () => _gmShowPanel((_gmCfg.menu || []), []);
+  bc.appendChild(root);
+  path.forEach((p, i) => {
+    const sep = document.createElement('span'); sep.className = 'gm-bc-sep'; sep.textContent = '/'; bc.appendChild(sep);
+    const part = document.createElement('span');
+    const isLast = (i === path.length - 1);
+    part.className = 'gm-bc-part' + (isLast ? ' current' : '');
+    part.textContent = (p.icon ? p.icon + ' ' : '') + p.title;
+    if (!isLast) part.onclick = p.go ? p.go : () => _gmShowPanel(p.nodes, path.slice(0, i + 1));
+    bc.appendChild(part);
+  });
+  requestAnimationFrame(() => { bc.scrollLeft = bc.scrollWidth; });
+}
+function _gmShowItem(it, info, crumbPath) {
+  const panel = document.getElementById('gmPanel');
+  panel.innerHTML = '';
+  _gmDrawBc(crumbPath);
+  const wrap = document.createElement('div'); wrap.className = 'gm-item-view';
+  wrap.appendChild(it.type === 'todo' ? _gmRenderItem(it, { skipRoot: true }) : _gmRenderItem(info.bodyItem, { noEmoji: true }));
+  panel.appendChild(wrap);
+}
+// rows for node.items appended to `container`; myPath = breadcrumb path ending with this node
+function _gmItemRows(container, node, myPath) {
+  (node.items || []).forEach(item => {
+    const it = _gmNormItem(item);
+    if (!_gmIsTitled(it)) { container.appendChild(_gmRenderItem(it)); return; }
+    const info = _gmItemInfo(it);
+    const el = document.createElement('div'); el.className = 'gm-panel-item gm-item-row';
+    const icon  = document.createElement('span'); icon.className = 'gm-pi-icon'; icon.textContent = info.icon;
+    const title = document.createElement('span'); title.className = 'gm-pi-title'; title.textContent = info.title;
+    el.appendChild(icon); el.appendChild(title);
+    if (info.meta) { const m = document.createElement('span'); m.className = 'gm-pi-meta'; m.textContent = info.meta; el.appendChild(m); }
+    const arr = document.createElement('span'); arr.className = 'gm-pi-arrow'; arr.textContent = '›'; el.appendChild(arr);
+    el.onclick = () => _gmShowItem(it, info, [...myPath, { title: info.title, icon: info.icon }]);
+    container.appendChild(el);
+  });
+}
+function _gmShowItems(node, parentNodes, parentPath) {
+  const entry = _gmPathEntry(node); entry.go = () => _gmShowItems(node, parentNodes, parentPath);
+  const myPath = [...parentPath, entry];
+  const panel = document.getElementById('gmPanel');
+  panel.innerHTML = '';
+  _gmDrawBc(myPath);
+  _gmItemRows(panel, node, myPath);
+}
+// Entry point for a node that has items: indicators-only → old overlay; one item (or a deep-linked
+// item index) → that item directly; otherwise the list of titles.
+function _gmOpenLeaf(node, parentNodes, parentPath, standalone, itemIdx) {
+  const items = (node.items || []).map(_gmNormItem);
+  if (!items.some(_gmIsTitled)) { _gmOpenOverlay(node, parentNodes, parentPath, standalone); return; }
+  const direct = (itemIdx != null && items[itemIdx] && _gmIsTitled(items[itemIdx])) ? items[itemIdx]
+               : (items.length === 1 ? items[0] : null);
+  if (!direct) { _gmShowItems(node, parentNodes, parentPath); return; }
+  const entry = _gmPathEntry(node);
+  entry.go = () => items.length === 1 ? _gmShowPanel(parentNodes, parentPath) : _gmShowItems(node, parentNodes, parentPath);
+  const info = _gmItemInfo(direct);
+  _gmShowItem(direct, info, [...parentPath, entry, { title: info.title, icon: info.icon }]);
+}
+
+/* path = [{title, icon?, nodes, node}] — each entry is a node already entered; `nodes` = its children array (siblings shown at that level).
+   Root level is path = []. A section that also has titled items shows them after its sub-sections. */
+function _gmShowPanel(nodes, path) {
+  const panel = document.getElementById('gmPanel');
+  panel.innerHTML = '';
+  _gmDrawBc(path);
   nodes.forEach(node => {
     const hasChildren = node.children && node.children.length > 0;
     const hasItems    = node.items && node.items.length > 0;
+    const titled      = hasItems && node.items.some(it => _gmIsTitled(_gmNormItem(it)));
     const el = document.createElement('div');
     el.className = 'gm-panel-item' + (hasItems && !hasChildren ? ' has-items' : '');
     const icon  = document.createElement('span'); icon.className = 'gm-pi-icon'; icon.textContent = node.icon || '📁';
     const title = document.createElement('span'); title.className = 'gm-pi-title'; title.textContent = _i18n(node.title) || '';
     el.appendChild(icon); el.appendChild(title);
-    if (hasChildren && hasItems) {
+    if (hasChildren && hasItems && !titled) {
+      // sub-sections + indicators only: the 📄 button opens the indicators (unchanged)
       const txtBtn = document.createElement('span'); txtBtn.className = 'gm-pi-textbtn'; txtBtn.textContent = '📄';
       txtBtn.onclick = (e) => { e.stopPropagation(); _gmOpenOverlay(node, nodes, path); };
       el.appendChild(txtBtn);
       const arr = document.createElement('span'); arr.className = 'gm-pi-arrow'; arr.textContent = '›';
       el.appendChild(arr);
-      el.onclick = () => _gmShowPanel(node.children, [...path, {title: _i18n(node.title), nodes: node.children}]);
+      el.onclick = () => _gmShowPanel(node.children, [...path, _gmPathEntry(node)]);
     } else if (hasChildren) {
       const arr = document.createElement('span'); arr.className = 'gm-pi-arrow'; arr.textContent = '›';
       el.appendChild(arr);
-      el.onclick = () => _gmShowPanel(node.children, [...path, {title: _i18n(node.title), nodes: node.children}]);
+      el.onclick = () => _gmShowPanel(node.children, [...path, _gmPathEntry(node)]);
     } else if (hasItems) {
-      const arr = document.createElement('span'); arr.className = 'gm-pi-arrow'; arr.textContent = '↗';
+      const arr = document.createElement('span'); arr.className = 'gm-pi-arrow'; arr.textContent = titled ? '›' : '↗';
       el.appendChild(arr);
-      el.onclick = () => _gmOpenOverlay(node, nodes, path);
+      el.onclick = () => _gmOpenLeaf(node, nodes, path);
     } else {
       el.style.opacity = '0.5';
       el.style.cursor = 'default';
     }
     panel.appendChild(el);
   });
+  const owner = path.length ? path[path.length - 1].node : null;
+  if (owner && owner.children && owner.children.length && owner.items && owner.items.some(it => _gmIsTitled(_gmNormItem(it)))) {
+    _gmItemRows(panel, owner, path);
+  }
 }
+
+(function () {
+  if (document.getElementById('gmItemRowStyles')) return;
+  var st = document.createElement('style');
+  st.id = 'gmItemRowStyles';
+  st.textContent =
+    '.gm-item-row .gm-pi-title{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+    '.gm-pi-meta{flex-shrink:0;font-size:12px;color:rgba(180,190,200,0.6);}' +
+    '.gm-item-view{padding:6px 4px 14px;}';
+  document.head.appendChild(st);
+})();
 
 // Fullscreen image viewer for photo-report-grid thumbnails. `images` is the
 // list of {url,name} for the files-segment the clicked thumbnail belongs to
@@ -1562,6 +1677,111 @@ function _gmLightboxOpen(images, idx) {
   document.body.appendChild(ov);
 }
 
+// One leaf item -> element (indicator / todo / text). opts: noEmoji (title is shown elsewhere),
+// skipRoot (todo list: the list title is in the title bar, show only its checks).
+function _gmRenderItem(itObj, opts) {
+  opts = opts || {};
+  if (itObj.type === 'progress') {
+    const v = Math.max(0, Math.min(100, itObj.value || 0));
+    const color = v > 60 ? '#4ade80' : v > 30 ? '#facc15' : '#f87171';
+    const row = document.createElement('div'); row.className = 'gm-progress-row';
+    const pfx = itObj.emoji ? itObj.emoji + ' ' : '';
+    row.innerHTML = '<span class="gm-progress-label">' + pfx + _i18n(itObj.label) + '</span><div class="gm-bar"><div class="gm-bar-fill" style="width:' + v + '%;background:' + color + ';"></div></div><span class="gm-bar-pct">' + v + '%</span>';
+    return row;
+  } else if (itObj.type === 'todo' && itObj.children && itObj.children.length) {
+    return _gmBuildTodoTree(itObj, { skipRoot: !!opts.skipRoot });
+  } else if (itObj.type === 'todo') {
+    const checked = _gmTodoState.has(itObj.id) ? _gmTodoState.get(itObj.id) : !!itObj.checked;
+    const row = document.createElement('div'); row.className = 'gm-todo-row' + (checked ? ' checked' : '');
+    const box = document.createElement('span'); box.className = 'gm-todo-box'; box.textContent = checked ? '✅' : '⬜';
+    const lbl = document.createElement('span'); lbl.className = 'gm-todo-label';
+    lbl.innerHTML = parseLinks(_i18n(itObj.label) || '');
+    row.appendChild(box); row.appendChild(lbl);
+    row.onclick = (e) => {
+      if (e.target.closest('a')) return;
+      const next = !(_gmTodoState.has(itObj.id) ? _gmTodoState.get(itObj.id) : !!itObj.checked);
+      _gmTodoState.set(itObj.id, next);
+      row.classList.toggle('checked', next);
+      box.textContent = next ? '✅' : '⬜';
+      _gmSaveTodoStateSafe(itObj.id, next);
+    };
+    return row;
+  } else {
+    const d = document.createElement('div'); d.className = 'gm-item';
+    if (itObj.segments && itObj.segments.length) {
+      // first text segment in block mode (heading/bullets): the emoji goes inside its first block
+      // (the default "•" is not shown there); otherwise the usual inline emoji prefix
+      const emo = opts.noEmoji ? '•' : (itObj.emoji || '•');
+      const firstTi = itObj.segments.findIndex(seg => seg.type === 'text' && _i18n(seg.value));
+      const mks = itObj.segments.map((seg, si) => seg.type === 'text'
+        ? _gmRenderMarkup(_i18n(seg.value) || '', (si === firstTi && emo !== '•') ? _gmMkEsc(emo) + ' ' : '') : null);
+      if (!opts.noEmoji && !(firstTi >= 0 && mks[firstTi].block)) {
+        const head = document.createElement('span');
+        head.textContent = (itObj.emoji || '•') + ' ';
+        d.appendChild(head);
+      }
+      itObj.segments.forEach((seg, si) => {
+        if (seg.type === 'text') {
+          var segText = _i18n(seg.value);
+          if (!segText) return;
+          const span = document.createElement(mks[si].block ? 'div' : 'span');
+          span.style.cssText = 'white-space:pre-wrap;';
+          span.innerHTML = mks[si].html;
+          d.appendChild(span);
+        } else if (seg.type === 'files') {
+          const grid = document.createElement('div');
+          grid.className = 'photo-report-grid';
+          grid.style.cssText = 'display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin:8px 0;';
+          const imgList = (seg.items || []).filter(f => f.type === 'image');
+          (seg.items || []).forEach(f => {
+            const cell = document.createElement('div');
+            cell.className = 'photo-report-item';
+            cell.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:3px;width:80px;';
+            if (f.type === 'image') {
+              const img = document.createElement('img');
+              img.src = f.url; img.alt = f.name || '';
+              img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:pointer;';
+              img.onclick = () => _gmLightboxOpen(imgList, imgList.findIndex(x => x.url === f.url));
+              cell.appendChild(img);
+            } else if (f.type === 'youtube') {
+              const a = document.createElement('a');
+              a.href = f.url; a.target = '_blank';
+              a.style.cssText = 'position:relative;display:block;width:80px;height:80px;';
+              const img = document.createElement('img');
+              img.src = 'https://img.youtube.com/vi/' + f.videoId + '/hqdefault.jpg'; img.alt = 'YouTube';
+              img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border);';
+              const badge = document.createElement('span');
+              badge.textContent = '▶';
+              badge.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;text-shadow:0 0 4px rgba(0,0,0,.8);';
+              a.appendChild(img); a.appendChild(badge);
+              cell.appendChild(a);
+            } else {
+              const icon = f.type === 'audio' ? '🎵' : f.type === 'text' ? '📄' : f.type === 'video' ? '🎬' : f.type === 'epub' ? '📚' : f.type === 'pdf' ? '📕' : '📎';
+              const a = document.createElement('a');
+              a.href = f.url; a.target = '_blank'; a.textContent = icon;
+              a.style.cssText = 'width:80px;height:80px;display:flex;align-items:center;justify-content:center;font-size:30px;background:var(--panel);border:1px solid var(--border);border-radius:8px;text-decoration:none;';
+              cell.appendChild(a);
+            }
+            if (f.name) {
+              const nm = document.createElement('span');
+              nm.textContent = f.name;
+              nm.style.cssText = 'font-size:10px;color:var(--muted);max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+              cell.appendChild(nm);
+            }
+            grid.appendChild(cell);
+          });
+          d.appendChild(grid);
+        }
+      });
+    } else {
+      const emo2 = opts.noEmoji ? '•' : (itObj.emoji || '•');
+      const mk = _gmRenderMarkup(_i18n(itObj.label) || '', emo2 !== '•' ? _gmMkEsc(emo2) + ' ' : '');
+      d.innerHTML = mk.block ? mk.html : (opts.noEmoji ? '' : emo2 + ' ') + mk.html;
+    }
+    return d;
+  }
+}
+
 /* Open full-screen overlay for a leaf node's items.
    parentNodes = the siblings array the leaf lives in (so "back" can return to the exact same panel).
    parentPath  = breadcrumb path TO that panel (not including the leaf itself).
@@ -1575,108 +1795,7 @@ function _gmOpenOverlay(node, parentNodes, parentPath, standalone) {
   const titleEl = document.getElementById('gmOverlayTitle');
   titleEl.textContent = (node.icon ? node.icon + ' ' : '') + (_i18n(node.title) || '');
   body.innerHTML = '';
-  (node.items || []).forEach(item => {
-    const itObj = typeof item === 'string' ? { type: 'text', emoji: '•', label: item } : item;
-    if (itObj.type === 'progress') {
-      const v = Math.max(0, Math.min(100, itObj.value || 0));
-      const color = v > 60 ? '#4ade80' : v > 30 ? '#facc15' : '#f87171';
-      const row = document.createElement('div'); row.className = 'gm-progress-row';
-      const pfx = itObj.emoji ? itObj.emoji + ' ' : '';
-      row.innerHTML = '<span class="gm-progress-label">' + pfx + _i18n(itObj.label) + '</span><div class="gm-bar"><div class="gm-bar-fill" style="width:' + v + '%;background:' + color + ';"></div></div><span class="gm-bar-pct">' + v + '%</span>';
-      body.appendChild(row);
-    } else if (itObj.type === 'todo' && itObj.children && itObj.children.length) {
-      body.appendChild(_gmBuildTodoTree(itObj));
-    } else if (itObj.type === 'todo') {
-      const checked = _gmTodoState.has(itObj.id) ? _gmTodoState.get(itObj.id) : !!itObj.checked;
-      const row = document.createElement('div'); row.className = 'gm-todo-row' + (checked ? ' checked' : '');
-      const box = document.createElement('span'); box.className = 'gm-todo-box'; box.textContent = checked ? '✅' : '⬜';
-      const lbl = document.createElement('span'); lbl.className = 'gm-todo-label';
-      lbl.innerHTML = parseLinks(_i18n(itObj.label) || '');
-      row.appendChild(box); row.appendChild(lbl);
-      row.onclick = (e) => {
-        if (e.target.closest('a')) return;
-        const next = !(_gmTodoState.has(itObj.id) ? _gmTodoState.get(itObj.id) : !!itObj.checked);
-        _gmTodoState.set(itObj.id, next);
-        row.classList.toggle('checked', next);
-        box.textContent = next ? '✅' : '⬜';
-        _gmSaveTodoStateSafe(itObj.id, next);
-      };
-      body.appendChild(row);
-    } else {
-      const d = document.createElement('div'); d.className = 'gm-item';
-      if (itObj.segments && itObj.segments.length) {
-        // first text segment in block mode (heading/bullets): the emoji goes inside its first block
-        // (the default "•" is not shown there); otherwise the usual inline emoji prefix
-        const emo = itObj.emoji || '•';
-        const firstTi = itObj.segments.findIndex(seg => seg.type === 'text' && _i18n(seg.value));
-        const mks = itObj.segments.map((seg, si) => seg.type === 'text'
-          ? _gmRenderMarkup(_i18n(seg.value) || '', (si === firstTi && emo !== '•') ? _gmMkEsc(emo) + ' ' : '') : null);
-        if (!(firstTi >= 0 && mks[firstTi].block)) {
-          const head = document.createElement('span');
-          head.textContent = (itObj.emoji || '•') + ' ';
-          d.appendChild(head);
-        }
-        itObj.segments.forEach((seg, si) => {
-          if (seg.type === 'text') {
-            var segText = _i18n(seg.value);
-            if (!segText) return;
-            const span = document.createElement(mks[si].block ? 'div' : 'span');
-            span.style.cssText = 'white-space:pre-wrap;';
-            span.innerHTML = mks[si].html;
-            d.appendChild(span);
-          } else if (seg.type === 'files') {
-            const grid = document.createElement('div');
-            grid.className = 'photo-report-grid';
-            grid.style.cssText = 'display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin:8px 0;';
-            const imgList = (seg.items || []).filter(f => f.type === 'image');
-            (seg.items || []).forEach(f => {
-              const cell = document.createElement('div');
-              cell.className = 'photo-report-item';
-              cell.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:3px;width:80px;';
-              if (f.type === 'image') {
-                const img = document.createElement('img');
-                img.src = f.url; img.alt = f.name || '';
-                img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:pointer;';
-                img.onclick = () => _gmLightboxOpen(imgList, imgList.findIndex(x => x.url === f.url));
-                cell.appendChild(img);
-              } else if (f.type === 'youtube') {
-                const a = document.createElement('a');
-                a.href = f.url; a.target = '_blank';
-                a.style.cssText = 'position:relative;display:block;width:80px;height:80px;';
-                const img = document.createElement('img');
-                img.src = 'https://img.youtube.com/vi/' + f.videoId + '/hqdefault.jpg'; img.alt = 'YouTube';
-                img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border);';
-                const badge = document.createElement('span');
-                badge.textContent = '▶';
-                badge.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;text-shadow:0 0 4px rgba(0,0,0,.8);';
-                a.appendChild(img); a.appendChild(badge);
-                cell.appendChild(a);
-              } else {
-                const icon = f.type === 'audio' ? '🎵' : f.type === 'text' ? '📄' : f.type === 'video' ? '🎬' : f.type === 'epub' ? '📚' : f.type === 'pdf' ? '📕' : '📎';
-                const a = document.createElement('a');
-                a.href = f.url; a.target = '_blank'; a.textContent = icon;
-                a.style.cssText = 'width:80px;height:80px;display:flex;align-items:center;justify-content:center;font-size:30px;background:var(--panel);border:1px solid var(--border);border-radius:8px;text-decoration:none;';
-                cell.appendChild(a);
-              }
-              if (f.name) {
-                const nm = document.createElement('span');
-                nm.textContent = f.name;
-                nm.style.cssText = 'font-size:10px;color:var(--muted);max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-                cell.appendChild(nm);
-              }
-              grid.appendChild(cell);
-            });
-            d.appendChild(grid);
-          }
-        });
-      } else {
-        const emo2 = itObj.emoji || '•';
-        const mk = _gmRenderMarkup(_i18n(itObj.label) || '', emo2 !== '•' ? _gmMkEsc(emo2) + ' ' : '');
-        d.innerHTML = mk.block ? mk.html : emo2 + ' ' + mk.html;
-      }
-      body.appendChild(d);
-    }
-  });
+  (node.items || []).forEach(item => { body.appendChild(_gmRenderItem(_gmNormItem(item))); });
   ov.classList.add('open');
   document.getElementById('gameMenu').classList.add('ov-open');
   document.getElementById('gmOverlayClose').onclick = () => {
@@ -3165,7 +3284,7 @@ async function _gmTodoSetMany(ids, checked) {
 // Tree renderer for a todo item that has children: nested containers, so CSS can
 // draw the connector lines (vertical guide + elbow into each child's checkbox).
 // Self-contained gm-tt-* classes — no dependency on the export-generated index.html CSS.
-function _gmBuildTodoTree(root) {
+function _gmBuildTodoTree(root, opts) {
   const wrap = document.createElement('div'); wrap.className = 'gm-todo-tree';
   const nodes = [];
   function refresh() {
@@ -3201,13 +3320,16 @@ function _gmBuildTodoTree(root) {
     nodes.push({ n: n, el: el, cnt: cnt });
     return el;
   }
-  wrap.appendChild(build(root, false));
+  if (opts && opts.skipRoot) root.children.forEach(function (c) { wrap.appendChild(build(c, false)); });
+  else wrap.appendChild(build(root, false));
   refresh();
   return wrap;
 }
 
 // Terminal-facing API (terminal.js never touches _gmTodoState directly).
 window.menuTodoSetMany  = _gmTodoSetMany;
+window._gmPathEntry     = _gmPathEntry;
+window._gmOpenLeaf      = _gmOpenLeaf;
 window.menuTodoIsDone   = _gmTodoIsDone;
 window.menuTodoCount    = _gmTodoCount;
 window.menuTodoLeafIds  = function (n) { return _gmTodoLeaves(n).map(function (l) { return l.id; }); };

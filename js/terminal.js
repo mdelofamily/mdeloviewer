@@ -1561,7 +1561,7 @@ function _tmMenuOpenPath(segs) {
     if (!node) { _tmL('ter', 'მენიუში ვერ მოიძებნა: "' + segs[i] + '"'); return; }
     if (i < segs.length - 1) {
       if (!node.children || !node.children.length) { _tmL('ter', '"' + _i18n(node.title) + '" — ქვესექციები არ აქვს'); return; }
-      path.push({ title: _i18n(node.title), nodes: node.children });
+      path.push(_gmPathEntry(node));
       nodes = node.children;
     }
   }
@@ -1571,8 +1571,10 @@ function _tmMenuOpenPath(segs) {
   if (!wasOpen) toggleMenu();
 
   if (node.items && node.items.length) {
-    _gmOpenOverlay(node, nodes, path, !wasOpen);
-    if (itemIdx != null) {
+    _gmOpenLeaf(node, nodes, path, !wasOpen, itemIdx);
+    if (itemIdx != null && itemIdx >= node.items.length) {
+      _tmL('ter', 'item [' + itemIdx + '] არ არსებობს');
+    } else if (itemIdx != null && document.getElementById('gmOverlay').classList.contains('open')) {   // indicators-only leaf: old overlay + highlight
       setTimeout(function () {
         var body = document.getElementById('gmOverlayBody');
         var el = body.children[itemIdx];
@@ -1585,7 +1587,7 @@ function _tmMenuOpenPath(segs) {
       }, 80);
     }
   } else if (node.children && node.children.length) {
-    _gmShowPanel(node.children, path.concat([{ title: _i18n(node.title), nodes: node.children }]));
+    _gmShowPanel(node.children, path.concat([_gmPathEntry(node)]));
   } else {
     _gmShowPanel(nodes, path);
   }
