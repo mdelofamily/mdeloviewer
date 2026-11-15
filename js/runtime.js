@@ -910,7 +910,8 @@ function _gmMkInline(line, links) {
   return t.replace(/\u0001(\d+)\u0002/g, function (_, n) { return links[+n] || ''; });
 }
 // -> { html, block }. block=false: plain run of lines (legacy layout, <br>-joined).
-function _gmRenderMarkup(text) {
+function _gmRenderMarkup(text, prefixHtml) {
+  let pre = prefixHtml || '';  // already-escaped html, goes inside the FIRST block only
   const links = [];
   const src = String(text == null ? '' : text).replace(/[\u0001\u0002]/g, '');
   let out = '', i = 0;
@@ -928,7 +929,7 @@ function _gmRenderMarkup(text) {
   const rows = out.split('\n').map(function (ln) {
     const raw = ln.replace(/\s+$/, '');
     let m = /^(#{1,3})\s+(\S.*)$/.exec(raw);
-    if (m) { hasBlock = true; return { k: 'h', lvl: m[1].length, t: m[2] }; }
+    if (m) { hasBlock = true; return { k: 'h', lvl: m[1].length, t: m[2].replace(/\s+#+\s*$/, '') || m[2] }; }
     m = /^(-+)\s+(\S.*)$/.exec(raw);
     if (m) { hasBlock = true; return { k: 'li', lvl: Math.min(m[1].length, 4), t: m[2] }; }
     return { k: 'p', t: ln };
@@ -938,15 +939,16 @@ function _gmRenderMarkup(text) {
   function flush() {
     while (run.length && !run[0].trim()) run.shift();
     while (run.length && !run[run.length - 1].trim()) run.pop();
-    if (run.length) parts.push('<div class="gm-mk-p">' + run.map(function (t) { return _gmMkInline(t, links); }).join('<br>') + '</div>');
+    if (run.length) { parts.push('<div class="gm-mk-p">' + pre + run.map(function (t) { return _gmMkInline(t, links); }).join('<br>') + '</div>'); pre = ''; }
     run = [];
   }
   rows.forEach(function (r) {
     if (r.k === 'p') { run.push(r.t); return; }
     flush();
     parts.push(r.k === 'h'
-      ? '<div class="gm-mk-h gm-mk-h' + r.lvl + '">' + _gmMkInline(r.t, links) + '</div>'
-      : '<div class="gm-mk-li gm-mk-d' + r.lvl + '">' + _gmMkInline(r.t, links) + '</div>');
+      ? '<div class="gm-mk-h gm-mk-h' + r.lvl + '">' + pre + _gmMkInline(r.t, links) + '</div>'
+      : '<div class="gm-mk-li gm-mk-d' + r.lvl + '">' + pre + _gmMkInline(r.t, links) + '</div>');
+    pre = '';
   });
   flush();
   return { html: parts.join(''), block: true };
@@ -1603,9 +1605,13 @@ function _gmOpenOverlay(node, parentNodes, parentPath, standalone) {
     } else {
       const d = document.createElement('div'); d.className = 'gm-item';
       if (itObj.segments && itObj.segments.length) {
-        // markup blocks (headings/bullets) → the item's emoji prefix is not shown
-        const mks = itObj.segments.map(seg => seg.type === 'text' ? _gmRenderMarkup(_i18n(seg.value) || '') : null);
-        if (!mks.some(m => m && m.block)) {
+        // first text segment in block mode (heading/bullets): the emoji goes inside its first block
+        // (the default "•" is not shown there); otherwise the usual inline emoji prefix
+        const emo = itObj.emoji || '•';
+        const firstTi = itObj.segments.findIndex(seg => seg.type === 'text' && _i18n(seg.value));
+        const mks = itObj.segments.map((seg, si) => seg.type === 'text'
+          ? _gmRenderMarkup(_i18n(seg.value) || '', (si === firstTi && emo !== '•') ? _gmMkEsc(emo) + ' ' : '') : null);
+        if (!(firstTi >= 0 && mks[firstTi].block)) {
           const head = document.createElement('span');
           head.textContent = (itObj.emoji || '•') + ' ';
           d.appendChild(head);
@@ -1664,8 +1670,9 @@ function _gmOpenOverlay(node, parentNodes, parentPath, standalone) {
           }
         });
       } else {
-        const mk = _gmRenderMarkup(_i18n(itObj.label) || '');
-        d.innerHTML = mk.block ? mk.html : (itObj.emoji || '•') + ' ' + mk.html;
+        const emo2 = itObj.emoji || '•';
+        const mk = _gmRenderMarkup(_i18n(itObj.label) || '', emo2 !== '•' ? _gmMkEsc(emo2) + ' ' : '');
+        d.innerHTML = mk.block ? mk.html : emo2 + ' ' + mk.html;
       }
       body.appendChild(d);
     }

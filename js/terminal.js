@@ -1959,6 +1959,7 @@ function _tmSubmitCmd() {
   if (_tmEditMode === 'menuTitle') { _tmSaveMenuTitle(v); return; }
   if (_tmEditMode === 'legend')    { _tmSaveLegend(v); return; }
   if (_tmEditMode === 'area')      { _tmSaveArea(v); return; }
+  if (_tmEditMode === 'nodeText')  { _tmSaveNodeText(v); return; }
   if (_tmEditMode === 'todoList')  { _tmSaveTodoList(v); return; }
   _tmSaveDlg(v);
 }
