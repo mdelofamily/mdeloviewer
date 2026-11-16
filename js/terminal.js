@@ -477,8 +477,8 @@ async function _tmRun(raw) {
   if (todoPathM) {
     if (_tmTierDenied('todo')) { _tmDenyMsg('todo'); return; }
     var tsegs = todoPathM[1].split('/').map(function (s) { return s.trim(); }).filter(Boolean);
-    if (!tsegs.length || !/^\d+(?:\.\d+)*$/.test(tsegs[tsegs.length - 1])) {
-      _tmL('ter', 'გამოყენება: /შესრულება/სექცია/.../N  (ან N.K — ქვე-ჩეკისთვის)');
+    if (tsegs.length < 2) {
+      _tmL('ter', 'გამოყენება: /todo/სექცია/.../<N | N.K | სახელი | id>');
     } else {
       var tRef = tsegs[tsegs.length - 1];
       var tNode = _tmFindMenuNodeByPath(tsegs.slice(0, -1));
@@ -842,7 +842,7 @@ function _tmHelp() {
     ['/ლეგენდა რედაქტირება', 'მთავარი ლეგენდის ტექსტის რედაქტირება'],
     ['/მენიუ',            'მენიუს toggle'],
     ['/მენიუ/სექცია/.../N', 'პირდაპირი ლინკი ნესტ. სექციაზე ან item-ზე'],
-    ['/todo/სექცია/.../N[.K]', 'todo-ის toggle ნებისმიერი branch-დან, /cd-ის გარეშე'],
+    ['/todo/სექცია/.../<N|სახელი|id>', 'todo-ის toggle ნებისმიერი branch-დან, /cd-ის გარეშე'],
     ['/გახსნა',           'ტერმინალის გახსნა (macro/window hook-ისთვის)'],
     ['/შეყვანა',          'Enter/Send — ღია edit-სესიის submit (macro-chain-ისთვის)'],
     ['/სრული',            'სრული ↔ ნახევარი'],
@@ -1526,6 +1526,72 @@ async function _tmSaveLegend(text) {
 }
 function _tmMenu() { closeTerm(); toggleMenu(); }
 
+// ── leaf references: index | id | name ──
+// A leaf (menu item) is addressed by its index (fast, but shifts when a sibling is deleted), its stable
+// id, or its NAME — the first line of its text / the todo or indicator label (ka or en; case and extra
+// spaces ignored; a unique beginning is enough unless opts.exact). Macros should prefer name or id.
+function _tmNormName(s) { return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim(); }
+function _tmItemTitles(it) {
+  if (typeof it === 'string') return [_gmPlainTitle(_gmSplitFirst(it).first)].filter(Boolean);
+  if (!it || typeof it !== 'object') return [];
+  function pick(v, lang) { return (typeof v === 'string') ? (lang === 'ka' ? v : '') : (v ? (v[lang] || '') : ''); }
+  var out = [];
+  ['ka', 'en'].forEach(function (lang) {
+    var text = '';
+    if (it.segments && it.segments.length && it.type !== 'todo' && it.type !== 'progress') {
+      for (var i = 0; i < it.segments.length; i++) {
+        if (it.segments[i].type !== 'text') continue;
+        var tx = pick(it.segments[i].value, lang);
+        if (tx.trim()) { text = tx; break; }
+      }
+    } else text = pick(it.label, lang);
+    var title = _gmPlainTitle(_gmSplitFirst(text).first);
+    if (title && out.indexOf(title) < 0) out.push(title);
+  });
+  return out;
+}
+function _tmResolveItem(node, ref, type, opts) {
+  var items = (node && node.items) || [];
+  ref = String(ref == null ? '' : ref).trim();
+  if (!ref) return { error: 'ფოთლის სახელი, id ან ინდექსი არ არის მითითებული', kind: 'none' };
+  if (/^\d+$/.test(ref)) {
+    var n = parseInt(ref, 10);
+    return (n < items.length) ? { idx: n } : { error: 'item [' + n + '] არ არსებობს', kind: 'range' };
+  }
+  function ok(it) {
+    if (typeof it === 'string') return !type || type === 'text';
+    return !!it && typeof it === 'object' && (!type || it.type === type || (type === 'text' && !it.type));
+  }
+  for (var i = 0; i < items.length; i++) {
+    if (items[i] && typeof items[i] === 'object' && items[i].id === ref && ok(items[i])) return { idx: i };
+  }
+  var q = _tmNormName(ref), exact = [], pref = [];
+  items.forEach(function (it, ix) {
+    if (!ok(it)) return;
+    var isEx = false, isPf = false;
+    _tmItemTitles(it).map(_tmNormName).forEach(function (tt) { if (tt === q) isEx = true; else if (tt.indexOf(q) === 0) isPf = true; });
+    if (isEx) exact.push(ix); else if (isPf) pref.push(ix);
+  });
+  function amb(list) {
+    return { error: 'რამდენიმე ფოთოლი ემთხვევა "' + ref + '": ' + list.map(function (ix) { return '[' + ix + '] ' + (_tmItemTitles(items[ix])[0] || ''); }).join(', ') + ' — მიუთითე ინდექსი, id ან სრული სახელი', kind: 'ambiguous' };
+  }
+  if (exact.length === 1) return { idx: exact[0] };
+  if (exact.length > 1) return amb(exact);
+  if (!(opts && opts.exact)) {
+    if (pref.length === 1) return { idx: pref[0] };
+    if (pref.length > 1) return amb(pref);
+  }
+  return { error: 'ფოთოლი "' + ref + '" ვერ მოიძებნა — /ls', kind: 'none' };
+}
+// Name clash inside one section (sub-sections + other leaves): a name address would be ambiguous.
+function _tmDupWarn(node, title, selfItem) {
+  var q = _tmNormName(title);
+  if (!q || !node) return;
+  var clash = (node.children || []).some(function (c) { return _tmNormName(_tmTodoKa(c.title)) === q; }) ||
+    (node.items || []).some(function (it) { return it !== selfItem && _tmItemTitles(it).some(function (x) { return _tmNormName(x) === q; }); });
+  if (clash) _tmL('tdm', '⚠ ამ სექციაში უკვე არის "' + title + '" — სახელით მისამართი ორაზროვანი იქნება (გამოიყენე ინდექსი ან id)');
+}
+
 // ── /მენიუ/<section>/<section>/.../<leaf-item-index?> — deep link ──
 // Drills the visible game-menu UI (runtime.js's _gmShowPanel/_gmOpenOverlay)
 // straight to a nested section or a specific item inside a leaf, instead of
@@ -1555,12 +1621,30 @@ function _tmMenuOpenPath(segs) {
   if (/^\d+$/.test(segs[segs.length - 1])) { itemIdx = parseInt(segs[segs.length - 1]); segs = segs.slice(0, -1); }
   if (!segs.length) { _tmMenu(); return; }
 
-  var nodes = _gmCfg.menu || [], path = [], node = null;
+  var nodes = _gmCfg.menu || [], path = [], node = null, sibNodes = null, sibPath = null;
   for (var i = 0; i < segs.length; i++) {
-    node = nodes.find(function (n) { return typeof _lbMatches === 'function' && _lbMatches(n.title, segs[i]); });
-    if (!node) { _tmL('ter', 'მენიუში ვერ მოიძებნა: "' + segs[i] + '"'); return; }
+    var found = nodes.find(function (n) { return typeof _lbMatches === 'function' && _lbMatches(n.title, segs[i]); });
+    // last segment is not a section → it names a leaf of the section above (name or id); a section wins on a name clash
+    if (!found && i > 0 && i === segs.length - 1 && itemIdx == null && node && node.items && node.items.length) {
+      var rr = _tmResolveItem(node, segs[i]);
+      if (rr.error) { _tmL('ter', rr.error); return; }
+      itemIdx = rr.idx; segs = segs.slice(0, -1); nodes = sibNodes; path = sibPath;
+      break;
+    }
+    if (!found) { _tmL('ter', 'მენიუში ვერ მოიძებნა: "' + segs[i] + '"'); return; }
+    node = found;
     if (i < segs.length - 1) {
-      if (!node.children || !node.children.length) { _tmL('ter', '"' + _i18n(node.title) + '" — ქვესექციები არ აქვს'); return; }
+      if (!node.children || !node.children.length) {
+        // a leaf-section followed by one more segment → that segment names one of its leaves (name or id)
+        if (i === segs.length - 2 && itemIdx == null && node.items && node.items.length) {
+          var rl = _tmResolveItem(node, segs[i + 1]);
+          if (rl.error) { _tmL('ter', rl.error); return; }
+          itemIdx = rl.idx; segs = segs.slice(0, -1);
+          break;      // nodes / path already describe where this leaf-section sits
+        }
+        _tmL('ter', '"' + _i18n(node.title) + '" — ქვესექციები არ აქვს'); return;
+      }
+      sibNodes = nodes; sibPath = path.slice();
       path.push(_gmPathEntry(node));
       nodes = node.children;
     }
@@ -2786,8 +2870,10 @@ async function _tmMenuLeaf(args) {
     var text = rest.join(' ').trim();
     if (!text) { _tmL('ter', 'გამოყენება: /ფოთოლი ტექსტი <ტექსტი> [ემოჯი]'); return; }
     if (!node.items) node.items = [];
-    node.items.push({ type: 'text', emoji: emoji, label: text });
+    var newText = { type: 'text', emoji: emoji, label: text };
+    node.items.push(newText);
     _tmL('tok', '+ [' + (node.items.length - 1) + '] ' + emoji + ' ტექსტი დაემატა');
+    _tmDupWarn(node, _gmPlainTitle(_gmSplitFirst(text).first), newText);
     await _tmMenuSaveNode(node.id, { items_json: node.items });
   } else if (sub === 'ინდიკატორი') {
     var rest2  = args.slice(1);
@@ -2802,21 +2888,24 @@ async function _tmMenuLeaf(args) {
     if (!label) { _tmL('ter', 'გამოყენება: /ფოთოლი ინდიკატორი <სახელი> <%> [ემოჯი]'); return; }
     var val = hasPct ? Math.max(0, Math.min(100, pct)) : 100;
     if (!node.items) node.items = [];
-    node.items.push({ type: 'progress', emoji: emoji2, label: label, value: val });
+    var newBar = { type: 'progress', emoji: emoji2, label: label, value: val };
+    node.items.push(newBar);
     _tmL('tok', '+ [' + (node.items.length - 1) + '] ' + emoji2 + ' ინდიკატორი დაემატა (' + val + '%)');
+    _tmDupWarn(node, label, newBar);
     await _tmMenuSaveNode(node.id, { items_json: node.items });
   } else if (sub === 'todo') {
     var todoSub = (args[1] || '').trim();
     if (!todoSub) { _tmTodoListOpen(node, null); return; }   // bare → editor for a new nested list
     if (todoSub === 'ls') { _tmTodoLs(node); return; }
     if (todoSub === 'რედ') {
-      var todoEditIdx = parseInt(args[2], 10);
-      if (isNaN(todoEditIdx)) { _tmL('ter', 'გამოყენება: /ფოთოლი todo რედ <N>'); return; }
-      _tmTodoListOpen(node, todoEditIdx); return;
+      var todoEditRef = args.slice(2).join(' ').trim();
+      if (!todoEditRef) { _tmL('ter', 'გამოყენება: /ფოთოლი todo რედ <N | სახელი | id>'); return; }
+      var tr = _tmResolveItem(node, todoEditRef, 'todo');
+      if (tr.error) { _tmL('ter', tr.error); return; }
+      _tmTodoListOpen(node, tr.idx); return;
     }
-    if (/^\d+(?:\.\d+)*$/.test(todoSub)) { await _tmTodoToggle(node, todoSub); return; }
-    // single-name todo creation was removed: lists are written in the editor (bare /ფოთოლი todo)
-    _tmL('ter', 'ერთი todo-ს ბრძანება მოხსნილია. გამოიყენე: /ფოთოლი todo (ახალი სია) · todo რედ <N> · todo <N> · todo ls');
+    // N / N.K.J / a todo's name or id → toggle (lists are created in the editor: bare /ფოთოლი todo)
+    await _tmTodoToggle(node, args.slice(1).join(' ').trim());
     return;
   } else {
     _tmL('tdm', _SEP);
@@ -2824,8 +2913,8 @@ async function _tmMenuLeaf(args) {
     _tmL('tnf', '  ტექსტი <ტექსტი> [ემოჯი]         — ტექსტური item (default •)');
     _tmL('tnf', '  ინდიკატორი <სახელი> <%> [ემოჯი] — progress item (default 📊)');
     _tmL('tnf', '  todo                    — ახალი todo სია (რედაქტორი, - დონეებით)');
-    _tmL('tnf', '  todo რედ <N>            — todo-ს რედაქტორი (/რედ <N>-იც)');
-    _tmL('tnf', '  todo <N> | <N.K.J>      — toggle (მშობელი = ყველა ქვე-ჩეკი)');
+    _tmL('tnf', '  todo რედ <N|სახელი|id>  — todo-ს რედაქტორი (/რედ-იც)');
+    _tmL('tnf', '  todo <N|სახელი|id>      — toggle; <N.K.J> ქვე-ჩეკი (მშობელი = ყველა ქვე-ჩეკი)');
     _tmL('tnf', '  todo ls                 — todos ხე ⬜/✅');
     _tmL('tdm', _SEP);
   }
@@ -2989,6 +3078,7 @@ async function _tmSaveTodoList(text) {
   var at;
   if (idx != null) { node.items[idx] = built.item; at = idx; }
   else { node.items.push(built.item); at = node.items.length - 1; }
+  _tmDupWarn(node, _tmTodoKa(built.item.label), built.item);
   _tmL('tok', (idx != null ? '✎ [' + at + '] ' : '+ [' + at + '] ') + 'todo' + (built.count > 1 ? ' სია (' + (built.count - 1) + ' ქვე-ჩეკი)' : '') + ' შენახულია');
   await _tmMenuSaveNode(node.id, { items_json: node.items });
 }
@@ -3014,7 +3104,18 @@ function _tmTodoLs(node) {
 // Toggle todo N or child N.K.J. A parent toggles all its leaves together.
 // State goes through runtime.js (menu_todo_state) — the same store the panel reads.
 async function _tmTodoToggle(node, ref) {
-  var parts = String(ref).split('.').map(function (x) { return parseInt(x, 10); });
+  var base = String(ref).trim(), parts;
+  if (/^\d+(?:\.\d+)*$/.test(base)) parts = base.split('.').map(Number);
+  else {
+    // a todo's name or id, optionally followed by a child path ".K.J"
+    var r = _tmResolveItem(node, base, 'todo'), rest = [];
+    if (r.error && r.kind === 'none') {
+      var m = /^(.+?)((?:\.\d+)+)$/.exec(base);
+      if (m) { var r2 = _tmResolveItem(node, m[1], 'todo'); if (!r2.error) { r = r2; rest = m[2].slice(1).split('.').map(Number); } }
+    }
+    if (r.error) { _tmL('ter', r.error); return; }
+    parts = [r.idx].concat(rest);
+  }
   var item = node.items && node.items[parts[0]];
   if (!item || typeof item !== 'object' || item.type !== 'todo') {
     _tmL('ter', 'todo [' + parts[0] + '] ვერ მოიძებნა — /ფოთოლი todo ls');
@@ -3035,35 +3136,42 @@ async function _tmTodoToggle(node, ref) {
 
 async function _tmMenuRm(args) {
   var arg = args.join(' ').trim();
-  if (!arg) { _tmL('ter', 'გამოყენება: /rm <სახელი>  ან  /rm <ინდექსი>'); return; }
-  var node     = _tmMenuCwdNode();
-  var isIndex  = /^\d+$/.test(arg);
+  if (!arg) { _tmL('ter', 'გამოყენება: /rm <სახელი | id | ინდექსი>'); return; }
+  var node = _tmMenuCwdNode();
+  var idx = -1;
 
-  if (isIndex) {
-    var idx = parseInt(arg);
+  if (/^\d+$/.test(arg)) {
+    idx = parseInt(arg);
     if (!node) { _tmL('ter', 'root-ში items არ არსებობს'); return; }
     if (!node.items || !node.items[idx]) { _tmL('ter', 'item [' + idx + '] ვერ მოიძებნა — /ls'); return; }
-    var removedIt = node.items[idx];
-    if (removedIt && typeof removedIt === 'object' && removedIt.segments && typeof window.mdMediaDelete === 'function') {
-      var itUrls = _tmSegmentFileUrls(removedIt.segments);
-      if (itUrls.length) window.mdMediaDelete(itUrls);
-    }
-    node.items.splice(idx, 1);
-    _tmL('tok', '✗ item [' + idx + '] წაიშალა');
-    await _tmMenuSaveNode(node.id, { items_json: node.items });
   } else {
     var list = _tmMenuCwdList();
     var fIdx = list.findIndex(function (n) { return typeof _lbMatches === 'function' && _lbMatches(n.title, arg); });
-    if (fIdx < 0) { _tmL('ter', 'ვერ მოიძებნა: "' + arg + '" — /ls'); return; }
-    var removed = list[fIdx];
-    if (typeof window.mdMediaDelete === 'function') {
-      var subtreeUrls = _tmCollectMediaUrls(removed);
-      if (subtreeUrls.length) window.mdMediaDelete(subtreeUrls);
+    if (fIdx >= 0) {
+      var removed = list[fIdx];
+      if (typeof window.mdMediaDelete === 'function') {
+        var subtreeUrls = _tmCollectMediaUrls(removed);
+        if (subtreeUrls.length) window.mdMediaDelete(subtreeUrls);
+      }
+      list.splice(fIdx, 1);
+      _tmL('tok', '✗ "' + arg + '" — სექცია წაიშალა (ქვე-შემცველობასთან ერთად)');
+      await _tmMenuSaveNode(removed.id, { deleted: true });
+      return;
     }
-    list.splice(fIdx, 1);
-    _tmL('tok', '✗ "' + arg + '" — სექცია წაიშალა (ქვე-შემცველობასთან ერთად)');
-    await _tmMenuSaveNode(removed.id, { deleted: true });
+    // not a section: a leaf of this section by exact name or id
+    var rr = node ? _tmResolveItem(node, arg, null, { exact: true }) : { error: 'ვერ მოიძებნა: "' + arg + '" — /ls', kind: 'none' };
+    if (rr.error) { _tmL('ter', rr.kind === 'ambiguous' ? rr.error : 'ვერ მოიძებნა: "' + arg + '" — /ls'); return; }
+    idx = rr.idx;
   }
+
+  var removedIt = node.items[idx];
+  if (removedIt && typeof removedIt === 'object' && removedIt.segments && typeof window.mdMediaDelete === 'function') {
+    var itUrls = _tmSegmentFileUrls(removedIt.segments);
+    if (itUrls.length) window.mdMediaDelete(itUrls);
+  }
+  node.items.splice(idx, 1);
+  _tmL('tok', '✗ item [' + idx + '] წაიშალა');
+  await _tmMenuSaveNode(node.id, { items_json: node.items });
 }
 
 // Edit an existing item in place by index.
@@ -3074,12 +3182,13 @@ async function _tmMenuRm(args) {
 async function _tmMenuEdit(args) {
   var node = _tmMenuCwdNode();
   if (!node) { _tmL('ter', 'root-ში items არ არსებობს'); return; }
-  var idx = parseInt(args[0]);
-  if (isNaN(idx) || !node.items || !node.items[idx]) {
-    _tmL('ter', 'გამოყენება: /edit <ინდექსი> [ახალი შინაარსი] — სია: /ls');
-    return;
-  }
-  var rest  = args.slice(1);
+  // ref = index or id (inline new content allowed) — or a NAME (opens the editor, no inline content)
+  var ref = (args[0] || '').trim(), rest = args.slice(1);
+  var rr = _tmResolveItem(node, ref, null, { exact: true });
+  var byIdx = !rr.error && (/^\d+$/.test(ref) || (node.items[rr.idx] && node.items[rr.idx].id === ref));
+  if (!byIdx) { rest = []; rr = _tmResolveItem(node, args.join(' ')); }
+  if (rr.error) { _tmL('ter', rr.error); _tmL('tdm', 'გამოყენება: /edit <ინდექსი | id | სახელი> [ახალი შინაარსი — მხოლოდ ინდექსით ან id-ით] — სია: /ls'); return; }
+  var idx = rr.idx;
   var itObj = typeof node.items[idx] === 'string' ? { type: 'text', emoji: '•', label: node.items[idx] } : node.items[idx];
 
   if (!rest.length) {
@@ -3464,6 +3573,7 @@ async function _tmSaveMenuItem(text) {
   }
   if (ctx.type === 'progress' && parsed.value != null) itObj.value = parsed.value;
   node.items[idx] = itObj;
+  _tmDupWarn(node, _tmItemTitles(itObj)[0] || '', itObj);
 
   // Orphan cleanup: covers both a token deleted from an already-saved item's
   // text AND a file uploaded-then-deleted again within this same session

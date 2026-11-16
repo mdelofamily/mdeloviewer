@@ -1463,11 +1463,27 @@ function _gmShowItem(it, info, crumbPath) {
   wrap.appendChild(it.type === 'todo' ? _gmRenderItem(it, { skipRoot: true }) : _gmRenderItem(info.bodyItem, { noEmoji: true }));
   panel.appendChild(wrap);
 }
+// Indicator as a panel row: same icon column, title font and left edge as every other row
+// (icon · title · bar · % · arrow-width spacer so the right edges line up too).
+function _gmProgressRow(it) {
+  const v = Math.max(0, Math.min(100, it.value || 0));
+  const color = v > 60 ? '#4ade80' : v > 30 ? '#facc15' : '#f87171';
+  const el = document.createElement('div'); el.className = 'gm-panel-item gm-item-row gm-pi-bar-row';
+  const icon  = document.createElement('span'); icon.className = 'gm-pi-icon'; icon.textContent = it.emoji || '📊';
+  const title = document.createElement('span'); title.className = 'gm-pi-title'; title.textContent = _i18n(it.label) || '';
+  const bar = document.createElement('div'); bar.className = 'gm-pi-bar';
+  const fill = document.createElement('div'); fill.className = 'gm-pi-bar-fill'; fill.style.width = v + '%'; fill.style.background = color;
+  bar.appendChild(fill);
+  const pct = document.createElement('span'); pct.className = 'gm-pi-pct'; pct.textContent = v + '%';
+  const sp = document.createElement('span'); sp.className = 'gm-pi-arrow'; sp.textContent = '›'; sp.style.visibility = 'hidden';
+  el.appendChild(icon); el.appendChild(title); el.appendChild(bar); el.appendChild(pct); el.appendChild(sp);
+  return el;
+}
 // rows for node.items appended to `container`; myPath = breadcrumb path ending with this node
 function _gmItemRows(container, node, myPath) {
   (node.items || []).forEach(item => {
     const it = _gmNormItem(item);
-    if (!_gmIsTitled(it)) { container.appendChild(_gmRenderItem(it)); return; }
+    if (!_gmIsTitled(it)) { container.appendChild(_gmProgressRow(it)); return; }
     const info = _gmItemInfo(it);
     const el = document.createElement('div'); el.className = 'gm-panel-item gm-item-row';
     const icon  = document.createElement('span'); icon.className = 'gm-pi-icon'; icon.textContent = info.icon;
@@ -1551,7 +1567,11 @@ function _gmShowPanel(nodes, path) {
   st.textContent =
     '.gm-item-row .gm-pi-title{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
     '.gm-pi-meta{flex-shrink:0;font-size:12px;color:rgba(180,190,200,0.6);}' +
-    '.gm-item-view{padding:6px 4px 14px;}';
+    '.gm-item-view{padding:6px 4px 14px;}' +
+    '.gm-pi-bar-row{cursor:default;}.gm-pi-bar-row:hover{background:none;}' +
+    '.gm-pi-bar{flex:0 0 36%;height:8px;background:rgba(48,54,61,0.6);border-radius:4px;overflow:hidden;}' +
+    '.gm-pi-bar-fill{height:100%;border-radius:4px;transition:width .3s;}' +
+    '.gm-pi-pct{flex-shrink:0;min-width:32px;text-align:right;font:11px monospace;color:#8b949e;}';
   document.head.appendChild(st);
 })();
 
