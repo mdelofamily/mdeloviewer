@@ -16,6 +16,7 @@ var _tmEditMenuCtx = null; // { node, idx, type } — set only when _tmEditMode 
 var _tmEditLabel = null;   // human-readable label shown in cancel/header messages
 var _tmNodeCtx = null;    // { kind:'node'|'scene', name, ka, en } — set only when _tmEditMode === 'nodeText'
 var _tmTodoCtx = null;    // { node, idx|null } — set only when _tmEditMode === 'todoList'
+var _tmChainDepth = 0;    // >0 while a macro / ";" chain runs — leaf creation must not open an editor then
 var _tmEditBuf = null;     // raw content buffered from a chain segment, consumed by /შეყვანა
 var _tmEditLang = (typeof _mdeloLang !== 'undefined' && _mdeloLang === 'en') ? 'en' : 'ka'; // 'ka' | 'en' — session-wide dialogue/menu edit-language target,
                             // set by /ენა. Drives the prompt text (see _tmApplyLangPrompt) and
@@ -2874,7 +2875,18 @@ async function _tmMenuLeaf(args) {
     node.items.push(newText);
     _tmL('tok', '+ [' + (node.items.length - 1) + '] ' + emoji + ' ტექსტი დაემატა');
     _tmDupWarn(node, _gmPlainTitle(_gmSplitFirst(text).first), newText);
+    var newIdx = node.items.length - 1;
     await _tmMenuSaveNode(node.id, { items_json: node.items });
+    // The typed text is only the NAME (first line). Typed by hand (not inside a macro / chain, ka mode) the
+    // item editor opens right away so the full text can be written below it; Esc keeps just the name.
+    if (_tmChainDepth === 0 && _tmEditLang !== 'en') {
+      _tmMenuEditOpen(node, newIdx, newText);
+      var nta = document.getElementById('tmTa');
+      nta.value = nta.value.replace(/\s+$/, '') + '\n';
+      _tmTaResize();
+      nta.focus();
+      nta.setSelectionRange(nta.value.length, nta.value.length);
+    }
   } else if (sub === 'ინდიკატორი') {
     var rest2  = args.slice(1);
     var emoji2 = '📊';
@@ -3688,23 +3700,26 @@ function _tmSplitChain(full) {
 // Run a list of command strings (each with or without a leading "/") in order,
 // awaiting each before starting the next, echoing every step to the log.
 async function _tmRunChain(cmds) {
-  for (var i = 0; i < cmds.length; i++) {
-    var c = (cmds[i] || '').trim();
-    if (!c) continue;
+  _tmChainDepth++;
+  try {
+    for (var i = 0; i < cmds.length; i++) {
+      var c = (cmds[i] || '').trim();
+      if (!c) continue;
 
-    // While an edit session is open (_tmEditObj truthy), a segment that isn't
-    // an explicit "/" command is raw content for that session — buffer it for
-    // /შეყვანა to submit, instead of force-dispatching it as an unknown command.
-    if (_tmEditObj && c.charAt(0) !== '/') {
-      _tmEditBuf = c;
+      // While an edit session is open (_tmEditObj truthy), a segment that isn't
+      // an explicit "/" command is raw content for that session — buffer it for
+      // /შეყვანა to submit, instead of force-dispatching it as an unknown command.
+      if (_tmEditObj && c.charAt(0) !== '/') {
+        _tmEditBuf = c;
+        _tmL('ti', c);
+        continue;
+      }
+
+      if (c.charAt(0) !== '/') c = '/' + c;
       _tmL('ti', c);
-      continue;
+      await _tmRun(c);
     }
-
-    if (c.charAt(0) !== '/') c = '/' + c;
-    _tmL('ti', c);
-    await _tmRun(c);
-  }
+  } finally { _tmChainDepth--; }
 }
 
 function _tmMacroLocalKey() { return 'mdelo_macro_local_' + ((typeof _CFG !== 'undefined' && _CFG && _CFG.title) || 'map'); }
