@@ -27,7 +27,7 @@
       if (typeof window.menuTodoCount !== 'function') return null;
       var c = window.menuTodoCount(item);
       var v = c.total > 0 ? Math.round(c.done / c.total * 100) : 0;
-      return { id: item.id, label: i18n(item.label), emoji: '📋', value: _clamp(v), derived: true, kind: 'mission' };
+      return { id: item.id, label: i18n(item.label), emoji: item.emoji || '📋', value: _clamp(v), derived: true, kind: 'mission' };
     }
     return null;
   }
@@ -134,7 +134,7 @@
         '.gmh-ic{width:14px;text-align:center;font-size:11px;flex-shrink:0;}' +
         '.gmh-bar{position:relative;flex:1;height:9px;border-radius:3px;background:rgba(0,0,0,.45);overflow:hidden;}' +
         '.gmh-fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;opacity:.65;}' +
-        '.gmh-pct{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;' +
+        '.gmh-pct{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:flex-end;padding-right:3px;' +
         'font-size:9px;line-height:1;color:rgba(200,210,220,.95);}' +
         '.gmh-head{height:10px;line-height:10px;font-size:8px;letter-spacing:.3px;text-align:right;white-space:nowrap;' +
         'overflow:hidden;text-overflow:ellipsis;opacity:.75;margin-top:4px;' +

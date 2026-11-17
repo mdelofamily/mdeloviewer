@@ -2952,9 +2952,9 @@ function _tmTodoNewId(used) {
   return id;
 }
 
-// Item -> editor text: first line = title, children as "-" / "--" / "---" lines.
+// Item -> editor text: line 1 = "[emoji: X]" tag, then the title, children as "-" / "--" / "---" lines.
 function _tmTodoToText(item, lang) {
-  var out = [];
+  var out = ['[emoji: ' + (item.emoji || '📋') + ']'];   // line 1: the list's HUD emoji (default 📋)
   (function walk(n, level) {
     var ka = _tmTodoKa(n.label), en = _tmTodoEn(n.label);
     var txt = (lang === 'en' && en) ? en : ka;
@@ -2966,7 +2966,15 @@ function _tmTodoToText(item, lang) {
 
 // Editor text -> flat rows [{ level, text }]; { error } on invalid input.
 function _tmTodoParse(text) {
-  var lines = String(text).split('\n'), rows = [];
+  var lines = String(text).split('\n'), rows = [], emoji;
+  // optional "[emoji: X]" tag as the first content line; blanked in place so "ხაზი N" stays the textarea line number
+  for (var t = 0; t < lines.length; t++) {
+    if (!lines[t].trim()) continue;
+    var tm = /^\[emoji:\s*(.*)\]$/.exec(lines[t].trim());
+    if (tm) { emoji = tm[1].trim(); lines[t] = ''; }
+    break;
+  }
+  if (emoji !== undefined && emoji.length > 8) return { error: 'ემოჯი: მაქს. 8 სიმბოლო' };
   for (var i = 0; i < lines.length; i++) {
     var raw = lines[i].replace(/\s+$/, '');
     if (!raw.trim()) continue;
@@ -2975,7 +2983,7 @@ function _tmTodoParse(text) {
     // tolerate a typed checkbox marker — state is never part of the text
     var label = m[2].replace(/^(?:□|☐|\[\s?\]|\[[xX]\])\s*/, '').trim();
     if (!rows.length) {
-      if (level) return { error: 'ხაზი 1 — სიის სახელია, "-"-ის გარეშე' };
+      if (level) return { error: 'პირველი ხაზი (ემოჯის ხაზის შემდეგ) — სიის სახელია, "-"-ის გარეშე' };
     } else {
       if (!level) return { error: 'ხაზი ' + (i + 1) + ': ქვე-ჩეკი "-"-ით უნდა დაიწყოს' };
       if (level > _TM_TODO_MAX_LEVEL) return { error: 'ხაზი ' + (i + 1) + ': მაქსიმუმ ' + _TM_TODO_MAX_LEVEL + ' დონე' };
@@ -2986,7 +2994,7 @@ function _tmTodoParse(text) {
     if (rows.length > _TM_TODO_MAX_NODES) return { error: 'მაქსიმუმ ' + _TM_TODO_MAX_NODES + ' ხაზი სიაში' };
   }
   if (!rows.length) return { error: 'სია ცარიელია' };
-  return { rows: rows };
+  return { rows: rows, emoji: emoji };   // emoji === undefined: no tag line in the text
 }
 
 // Rows -> item. ka mode: ids are carried over from the old tree (same level+text
@@ -3053,7 +3061,7 @@ function _tmTodoListOpen(node, idx) {
   }
   if (!_tmMulti) tmToggleMulti();
   document.getElementById('mdlTerm').classList.add('dlg-edit'); // big editor in fullscreen
-  document.getElementById('tmTa').value = item ? _tmTodoToText(item, _tmEditLang) : '';
+  document.getElementById('tmTa').value = item ? _tmTodoToText(item, _tmEditLang) : '[emoji: 📋]\n';
   _tmTaResize();
   var title = item ? (_tmTodoKa(item.label) || ('[' + idx + ']')) : 'ახალი სია';
   _tmEditObj = '__todolist__'; _tmEditMode = 'todoList'; _tmEditLabel = 'todo: ' + title;
@@ -3062,7 +3070,7 @@ function _tmTodoListOpen(node, idx) {
   if (_tmEditLang === 'en') {
     _tmL('tdm', 'EN რეჟიმი — მხოლოდ ტექსტი ითარგმნება; ხაზების რაოდენობა და "-" უცვლელია');
   } else {
-    _tmL('tdm', 'ხაზი 1 — სიის სახელი · ქვე-ჩეკი: "- ტექსტი" · მის ქვეშ: "-- ტექსტი" (მაქს. ' + _TM_TODO_MAX_LEVEL + ' დონე, ' + _TM_TODO_MAX_NODES + ' ხაზი)');
+    _tmL('tdm', 'ხაზი 1 — [emoji: X] (ემოჯი HUD-ისთვის) · ხაზი 2 — სიის სახელი · ქვე-ჩეკი: "- ტექსტი" · მის ქვეშ: "-- ტექსტი" (მაქს. ' + _TM_TODO_MAX_LEVEL + ' დონე, ' + _TM_TODO_MAX_NODES + ' ხაზი)');
   }
   _tmL('tdm', 'Ctrl+Enter — შენახვა · Esc — გაუქმება');
 }
@@ -3084,6 +3092,8 @@ async function _tmSaveTodoList(text) {
   if (parsed.error) { _tmTodoKeepOpen(parsed.error); return; }
   var built = _tmTodoBuild(ctx, parsed.rows);
   if (built.error) { _tmTodoKeepOpen(built.error); return; }
+  // list emoji (shown by the HUD): empty or the default 📋 clears the field; no tag line leaves it as it was
+  if (parsed.emoji !== undefined) { if (!parsed.emoji || parsed.emoji === '📋') delete built.item.emoji; else built.item.emoji = parsed.emoji; }
 
   _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; _tmEditMediaBuf = []; _tmTodoCtx = null;
   document.getElementById('tmTa').value = '';
