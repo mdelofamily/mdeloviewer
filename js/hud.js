@@ -4,7 +4,7 @@
 (function () {
   'use strict';
 
-  var MAX_BARS = 6;            // rows shown; the rest collapse into a "+K" chip
+  var MAX_BARS = 6;            // rows shown; any further bars are simply not shown
   var MIN_TIER = 'caretaker';  // HUD is hidden for everyone below this tier
 
   var _demoOn = false;
@@ -41,8 +41,7 @@
       { type: 'todo', id: 'demo_todo', label: { ka: 'ეზოს გასუფთავება', en: 'Yard cleanup' },
         children: [{ id: 'demo_t1', label: 'ტოტები', checked: true }, { id: 'demo_t2', label: 'ფოთლები', checked: false }, { id: 'demo_t3', label: 'ნაგავი', checked: false }] },
       { type: 'progress', id: 'demo_4', emoji: '🔥', label: 'ცეცხლი', value: 100 },
-      { type: 'progress', id: 'demo_5', emoji: '🌾', label: 'მარცვალი', value: 5 },
-      { type: 'progress', id: 'demo_6', emoji: '🧂', label: 'მარილი', value: 60 }   // 7th bar: shows the "+1" chip
+      { type: 'progress', id: 'demo_5', emoji: '🌾', label: 'მარცვალი', value: 5 }
     ];
   }
 
@@ -62,17 +61,15 @@
       var st = document.createElement('style');
       st.id = 'gmHudStyles';
       st.textContent =
-        '#gmHud{position:fixed;top:48px;right:12px;z-index:25;pointer-events:none;display:none;flex-direction:column;gap:3px;' +
-        'width:128px;box-sizing:border-box;padding:5px 6px;border-radius:8px;background:rgba(13,17,23,.55);' +
-        'border:1px solid rgba(48,54,61,.5);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);' +
-        'font:10px/1 sans-serif;color:rgba(200,210,220,.9);}' +
+        '#gmHud{position:fixed;top:54px;right:12px;z-index:25;pointer-events:none;display:none;flex-direction:column;gap:3px;' +
+        'width:116px;box-sizing:border-box;font:10px/1 sans-serif;color:rgba(200,210,220,.9);' +
+        'text-shadow:0 0 3px rgba(0,0,0,.9),0 0 1px rgba(0,0,0,.9);}' +
         '#gmHud.show{display:flex;}' +
         '.gmh-row{display:flex;align-items:center;gap:5px;height:14px;}' +
         '.gmh-ic{width:14px;text-align:center;font-size:11px;flex-shrink:0;}' +
-        '.gmh-bar{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden;}' +
+        '.gmh-bar{flex:1;height:5px;border-radius:3px;background:rgba(0,0,0,.45);overflow:hidden;}' +
         '.gmh-fill{height:100%;border-radius:3px;}' +
-        '.gmh-pct{width:26px;text-align:right;font-size:9px;color:rgba(200,210,220,.75);flex-shrink:0;}' +
-        '.gmh-more{text-align:right;font-size:9px;opacity:.7;}';
+        '.gmh-pct{width:26px;text-align:right;font-size:9px;color:rgba(200,210,220,.85);flex-shrink:0;}';
       document.head.appendChild(st);
     }
     if (!_el || !document.body.contains(_el)) {
@@ -103,10 +100,6 @@
     var el = _ensureDom();
     while (el.firstChild) el.removeChild(el.firstChild);
     bars.slice(0, MAX_BARS).forEach(function (b) { el.appendChild(_row(b)); });
-    if (bars.length > MAX_BARS) {
-      var more = document.createElement('div'); more.className = 'gmh-more'; more.textContent = '+' + (bars.length - MAX_BARS);
-      el.appendChild(more);
-    }
     el.classList.add('show');
   }
 
