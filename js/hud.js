@@ -47,10 +47,10 @@
     ];
   }
 
-  // bars to show right now (later steps: the active HUD's items, resolved by id)
+  // what to show right now: { name (HUD name given at creation), bars } (later steps: the active HUD, items resolved by id)
   function _collect() {
-    if (_demoOn) return _demoItems().map(_barOf).filter(Boolean);
-    return [];
+    if (_demoOn) return { name: 'ზამთრის მარაგები', bars: _demoItems().map(_barOf).filter(Boolean) };
+    return { name: '', bars: [] };
   }
 
   function _allowed() {
@@ -63,16 +63,19 @@
       var st = document.createElement('style');
       st.id = 'gmHudStyles';
       st.textContent =
-        '#gmHud{position:fixed;top:54px;right:12px;z-index:25;pointer-events:none;display:none;flex-direction:column;gap:3px;' +
-        'width:116px;box-sizing:border-box;font:10px/1 sans-serif;color:rgba(200,210,220,.9);' +
+        '#gmHud{position:fixed;top:54px;right:5px;z-index:25;pointer-events:none;display:none;flex-direction:column;gap:3px;' +
+        'width:85px;box-sizing:border-box;font:10px/1 sans-serif;color:rgba(200,210,220,.9);' +
         'text-shadow:0 0 3px rgba(0,0,0,.9),0 0 1px rgba(0,0,0,.9);}' +
         '#gmHud.show{display:flex;}' +
         '.gmh-row{display:flex;align-items:center;gap:5px;height:14px;}' +
         '.gmh-ic{width:14px;text-align:center;font-size:11px;flex-shrink:0;}' +
-        '.gmh-bar{flex:1;height:5px;border-radius:3px;background:rgba(0,0,0,.45);overflow:hidden;}' +
-        '.gmh-fill{height:100%;border-radius:3px;}' +
-        '.gmh-pct{width:26px;text-align:right;font-size:9px;color:rgba(200,210,220,.85);flex-shrink:0;}' +
-        '.gmh-head{height:10px;line-height:10px;font-size:8px;letter-spacing:.3px;opacity:.65;margin-top:4px;}' +
+        '.gmh-bar{position:relative;flex:1;height:12px;border-radius:3px;background:rgba(0,0,0,.45);overflow:hidden;}' +
+        '.gmh-fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;}' +
+        '.gmh-pct{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;' +
+        'font-size:9px;color:rgba(200,210,220,.95);}' +
+        '.gmh-head{height:10px;line-height:10px;font-size:8px;letter-spacing:.3px;text-align:left;white-space:nowrap;' +
+        'overflow:hidden;text-overflow:ellipsis;opacity:.7;margin-top:4px;' +
+        'text-shadow:0 0 3px rgba(0,0,0,.9),0 0 1px rgba(0,0,0,.9);}' +
         '.gmh-head:first-child{margin-top:0;}';
       document.head.appendChild(st);
     }
@@ -91,29 +94,32 @@
     var bar = document.createElement('div'); bar.className = 'gmh-bar';
     var fill = document.createElement('div'); fill.className = 'gmh-fill';
     fill.style.width = b.value + '%'; fill.style.background = _color(b.value);
-    bar.appendChild(fill);
     var pct = document.createElement('span'); pct.className = 'gmh-pct'; pct.textContent = b.value + '%';
-    row.appendChild(ic); row.appendChild(bar); row.appendChild(pct);
+    bar.appendChild(fill); bar.appendChild(pct);   // number sits inside the bar, above the fill
+    row.appendChild(ic); row.appendChild(bar);
     return row;
   }
 
   // single refresh entry point — safe to call at any time, any number of times
   function hudRefresh() {
-    var bars = _collect();
+    var cur = _collect();
+    var bars = cur.bars;
     if (!bars.length || !_allowed()) { if (_el) _el.classList.remove('show'); return; }
     var el = _ensureDom();
     while (el.firstChild) el.removeChild(el.firstChild);
     var i18n = typeof window._i18n === 'function' ? window._i18n : function (x) { return x.ka; };
-    // two categories, sorted automatically by bar kind: missions first, then resources
-    [
-      { kind: 'mission',  title: { ka: 'მისია', en: 'Missions' } },
-      { kind: 'resource', title: { ka: 'რესურსები', en: 'Resources' } }
-    ].forEach(function (g) {
-      var list = bars.filter(function (b) { return b.kind === g.kind; });
-      if (!list.length) return;
-      var head = document.createElement('div'); head.className = 'gmh-head'; head.textContent = i18n(g.title);
+    // two categories, sorted automatically by bar kind: missions (todo) first, then resources (indicators).
+    // The first header is always the HUD's own name; "რესურსები" is only a separate header when both groups exist.
+    var missions  = bars.filter(function (b) { return b.kind === 'mission'; });
+    var resources = bars.filter(function (b) { return b.kind === 'resource'; });
+    var nameTitle = cur.name || (missions.length ? { ka: 'მისია', en: 'Missions' } : { ka: 'რესურსები', en: 'Resources' });
+    var groups = [];
+    if (missions.length)  groups.push({ title: nameTitle, list: missions });
+    if (resources.length) groups.push({ title: missions.length ? { ka: 'რესურსები', en: 'Resources' } : nameTitle, list: resources });
+    groups.forEach(function (g) {
+      var head = document.createElement('div'); head.className = 'gmh-head'; head.textContent = typeof g.title === 'string' ? g.title : i18n(g.title);
       el.appendChild(head);
-      list.slice(0, MAX_PER_GROUP).forEach(function (b) { el.appendChild(_row(b)); });
+      g.list.slice(0, MAX_PER_GROUP).forEach(function (b) { el.appendChild(_row(b)); });
     });
     el.classList.add('show');
   }
