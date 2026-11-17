@@ -4,7 +4,7 @@
 (function () {
   'use strict';
 
-  var MAX_BARS = 6;            // rows shown; any further bars are simply not shown
+  var MAX_PER_GROUP = 6;       // rows shown per category; any further bars are simply not shown
   var MIN_TIER = 'caretaker';  // HUD is hidden for everyone below this tier
 
   var _demoOn = false;
@@ -12,19 +12,20 @@
 
   // ── bar abstraction: HUD never looks at item types itself ──
   // Returns null if the item cannot be shown as a bar, else
-  // { id, label, emoji, value (0..100), derived }.
+  // { id, label, emoji, value (0..100), derived, kind: 'resource' | 'mission' }.
+  // kind is automatic: indicator leaves are resources, todo leaves are missions.
   function _barOf(item) {
     if (!item || typeof item !== 'object') return null;
     var i18n = typeof window._i18n === 'function' ? window._i18n : function (x) { return x == null ? '' : (typeof x === 'string' ? x : (x.ka || x.en || '')); };
     if (item.type === 'progress') {
-      return { id: item.id, label: i18n(item.label), emoji: item.emoji || '📊', value: _clamp(item.value), derived: false };
+      return { id: item.id, label: i18n(item.label), emoji: item.emoji || '📊', value: _clamp(item.value), derived: false, kind: 'resource' };
     }
     if (item.type === 'todo') {
       // top-level todo title only; value = checked leaves / all leaves (runtime.js todo state)
       if (typeof window.menuTodoCount !== 'function') return null;
       var c = window.menuTodoCount(item);
       var v = c.total > 0 ? Math.round(c.done / c.total * 100) : 0;
-      return { id: item.id, label: i18n(item.label), emoji: '📋', value: _clamp(v), derived: true };
+      return { id: item.id, label: i18n(item.label), emoji: '📋', value: _clamp(v), derived: true, kind: 'mission' };
     }
     return null;
   }
@@ -41,7 +42,8 @@
       { type: 'todo', id: 'demo_todo', label: { ka: 'ეზოს გასუფთავება', en: 'Yard cleanup' },
         children: [{ id: 'demo_t1', label: 'ტოტები', checked: true }, { id: 'demo_t2', label: 'ფოთლები', checked: false }, { id: 'demo_t3', label: 'ნაგავი', checked: false }] },
       { type: 'progress', id: 'demo_4', emoji: '🔥', label: 'ცეცხლი', value: 100 },
-      { type: 'progress', id: 'demo_5', emoji: '🌾', label: 'მარცვალი', value: 5 }
+      { type: 'progress', id: 'demo_5', emoji: '🌾', label: 'მარცვალი', value: 5 },
+      { type: 'todo', id: 'demo_todo2', label: 'სავსე მთვარისთვის მზადება', children: [{ id: 'demo_u1', label: 'ა', checked: false }, { id: 'demo_u2', label: 'ბ', checked: false }] }
     ];
   }
 
@@ -69,7 +71,9 @@
         '.gmh-ic{width:14px;text-align:center;font-size:11px;flex-shrink:0;}' +
         '.gmh-bar{flex:1;height:5px;border-radius:3px;background:rgba(0,0,0,.45);overflow:hidden;}' +
         '.gmh-fill{height:100%;border-radius:3px;}' +
-        '.gmh-pct{width:26px;text-align:right;font-size:9px;color:rgba(200,210,220,.85);flex-shrink:0;}';
+        '.gmh-pct{width:26px;text-align:right;font-size:9px;color:rgba(200,210,220,.85);flex-shrink:0;}' +
+        '.gmh-head{height:10px;line-height:10px;font-size:8px;letter-spacing:.3px;opacity:.65;margin-top:4px;}' +
+        '.gmh-head:first-child{margin-top:0;}';
       document.head.appendChild(st);
     }
     if (!_el || !document.body.contains(_el)) {
@@ -99,7 +103,18 @@
     if (!bars.length || !_allowed()) { if (_el) _el.classList.remove('show'); return; }
     var el = _ensureDom();
     while (el.firstChild) el.removeChild(el.firstChild);
-    bars.slice(0, MAX_BARS).forEach(function (b) { el.appendChild(_row(b)); });
+    var i18n = typeof window._i18n === 'function' ? window._i18n : function (x) { return x.ka; };
+    // two categories, sorted automatically by bar kind: missions first, then resources
+    [
+      { kind: 'mission',  title: { ka: 'მისია', en: 'Missions' } },
+      { kind: 'resource', title: { ka: 'რესურსები', en: 'Resources' } }
+    ].forEach(function (g) {
+      var list = bars.filter(function (b) { return b.kind === g.kind; });
+      if (!list.length) return;
+      var head = document.createElement('div'); head.className = 'gmh-head'; head.textContent = i18n(g.title);
+      el.appendChild(head);
+      list.slice(0, MAX_PER_GROUP).forEach(function (b) { el.appendChild(_row(b)); });
+    });
     el.classList.add('show');
   }
 
