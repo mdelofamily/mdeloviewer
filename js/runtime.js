@@ -1750,6 +1750,7 @@ function _gmRenderItem(itObj, opts) {
       row.classList.toggle('checked', next);
       box.textContent = next ? '✅' : '⬜';
       _gmSaveTodoStateSafe(itObj.id, next);
+      if (window.hudRefresh) window.hudRefresh();
     };
     return row;
   } else {
@@ -3316,6 +3317,7 @@ async function _gmSaveTodoStateBulk(ids, checked) {
 async function _gmTodoSetMany(ids, checked) {
   if (!ids || !ids.length) return true;
   ids.forEach(function (id) { _gmTodoState.set(id, checked); });
+  if (window.hudRefresh) window.hudRefresh();
   function queueAll() {
     ids.forEach(function (id) { window.pendingAdd('todo', id, 'todo item', { todoId: id, checked: checked }); });
     return 'queued';
@@ -4202,8 +4204,9 @@ window.addEventListener('load', async () => {
   // lookup for a console object finds it by its .hs-object DOM element (see
   // _dlgTargetByTitle), which only exists once loadObjectOverrides() has run.
   loadObjectOverrides().then(function () { loadDialogueOverrides().then(_markerRestore); });
-  loadTodoState();
-  loadMenuOverrides();
+  // HUD (hud.js) draws from the menu tree + todo state: redraw once each has loaded
+  loadTodoState().then(function () { if (window.hudRefresh) window.hudRefresh(); });
+  loadMenuOverrides().then(function () { if (window.hudRefresh) window.hudRefresh(); });
   loadMacroOverrides();
   loadLegendOverride();
   loadAreaOverrides();

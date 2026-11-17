@@ -836,7 +836,7 @@ function _tmHelp() {
     ['/სცენა შექმნა|წაშ|რედ|ფონი', 'ინტერიერი/world-view სცენის მართვა'],
     ['/პანელი [სახელი|№|ახალი|რედ|წაშ]', 'პირადი ღილაკების პანელი (resident+)'],
     ['/ჰექსაგონი [სახელი|№|ახალი|რედ|წაშ|გამორთვა]', 'ჰექსაგონის ლაუნჩერი — სწრაფი ღილაკები (resident+)'],
-    ['/ჰუდი ტესტი|გამორთვა', 'HUD — პროგრეს ბარები ეკრანზე (caretaker+, მზადების ეტაპი)'],
+    ['/ჰუდი [სახელი [დიახ]|+ <ref>|− [<ref>]|წაშ <სახელი> დიახ|გამორთვა]', 'HUD — პროგრეს ბარები ეკრანზე (caretaker+)'],
     ['/კვანძი სია|დამატება|დიალოგი|წაშ', 'ღია სცენაში ინვენტარის კვანძი'],
     ['/წერტილი დადება|წაშ|ნახვა|გაუქმება', 'hotspot-ის დადება (თითით თავისუფალი ხატვა)'],
     ['/წერტილი <სახელი>, <სახელი>', 'მითითებული კვანძის წერტილების ანთება სცენაზე'],
@@ -3631,6 +3631,7 @@ function _tmEnsureItemIds(items) {
 }
 async function _tmMenuSaveNode(nodeId, fields) {
   if (fields && Array.isArray(fields.items_json)) _tmEnsureItemIds(fields.items_json);
+  if (window.hudRefresh) window.hudRefresh();   // HUD bars read the live menu tree, which the caller has already mutated
   if (typeof window.menuOverrideSave !== 'function') {
     _tmL('ter', '✗ menuOverrideSave ვერ მოიძებნა (runtime.js?)');
     return;
@@ -3973,7 +3974,7 @@ async function _tmHexagon(args) {
 // /ჰუდი — thin wrapper; the whole feature lives in js/hud.js (loaded after this file)
 async function _tmHud(args) {
   if (typeof window.hudCommand !== 'function') { _tmL('ter', '✗ hud.js ვერ მოიძებნა'); return; }
-  window.hudCommand(args, _tmL);
+  await window.hudCommand(args, _tmL, { cwd: _tmMenuCwdNode, resolve: _tmResolveItem, saveNode: _tmMenuSaveNode });
 }
 
 // Expose raw command/chain execution for runtime.js (consensus terminal_cmd field).
