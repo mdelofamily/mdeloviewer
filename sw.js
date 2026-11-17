@@ -12,7 +12,7 @@ const CHECK_INTERVAL = 5 * 60 * 1000; // 5 წუთი
 // Paths relative to this file's own scope (mdeloviewer root) — confirmed
 // correct. Precaches the skins (objects.png 164KB, tiles.png 224KB) plus
 // the rest of the app shell so the site is visually usable offline.
-const CACHE_NAME = 'mdelo-shell-v4'; // bumped: terminal_cmd waits for the closing vote to be written (runtime.js) — drops v3
+const CACHE_NAME = 'mdelo-shell-v5'; // bumped: HUD (js/hud.js + terminal.js /ჰუდი) — drops v4
 const PRECACHE_URLS = [
   './',
   './index.html',
@@ -20,6 +20,7 @@ const PRECACHE_URLS = [
   './js/runtime.js',
   './js/canvas-renderer.js',
   './js/terminal.js',
+  './js/hud.js',
   './js/unlock.js',
   './js/upload.js',
   './js/bulk-parser.js',
