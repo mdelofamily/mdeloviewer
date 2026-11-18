@@ -1,5 +1,5 @@
 // hud.js — HUD: small transparent progress bars under the burger button (caretaker+).
-// STEP B: named local HUDs (this device only) + /ჰუდი commands. Shared HUDs (/საერთოჰუდი) come in a later step.
+// STEP D: named HUDs — local (this device) via /ჰუდი, shared (table huds) via /საერთოჰუდი. Shared: seen by caretaker+, edited by resident+.
 // Loaded after runtime.js and terminal.js (see viewer.html). No ES modules: public API is on window.
 (function () {
   'use strict';
@@ -65,7 +65,7 @@
     return 'mdelo_huds_' + (uid || 'anon') + '_' + ((window._CFG && window._CFG.title) || '');
   }
   function _load(key) {
-    var st = { active: null, huds: [] };
+    var st = { active: null, activeShared: null, huds: [] };
     try {
       var o = JSON.parse(window.localStorage.getItem(key) || 'null');
       var seen = {};
@@ -75,6 +75,7 @@
         st.huds.push({ name: h.name, items: Array.isArray(h.items) ? h.items.filter(function (x) { return typeof x === 'string' && x; }) : [] });
       });
       if (o && typeof o.active === 'string' && seen[_norm(o.active)]) st.active = o.active;
+      else if (o && typeof o.activeShared === 'string' && o.activeShared) st.activeShared = o.activeShared;   // validated against the shared list once it is loaded
     } catch (e) {}
     return st;
   }
@@ -85,12 +86,12 @@
     if (!_state || k !== _stateKey) { _state = _load(k); _stateKey = k; }
     return _state;
   }
-  function _hudIndex(st, name) {
+  function _indexIn(list, name) {
     var q = _norm(name);
-    for (var i = 0; i < st.huds.length; i++) if (_norm(st.huds[i].name) === q) return i;
+    for (var i = 0; i < list.length; i++) if (_norm(list[i].name) === q) return i;
     return -1;
   }
-  function _activeIndex(st) { return st.active ? _hudIndex(st, st.active) : -1; }
+  function _activeIndex(st) { return st.active ? _indexIn(st.huds, st.active) : -1; }
 
   // id -> item for every leaf item in the live menu tree (one walk per refresh)
   function _indexItems() {
@@ -106,14 +107,131 @@
     return map;
   }
 
+  // ── shared HUDs (Supabase table huds; SQL: huds-migration.sql) ──
+  // Everyone caretaker+ sees them (/ჰუდი <სახელი> switches one on); only resident+ edits (/საერთოჰუდი).
+  // Same model as area_overrides: public read/insert/update, soft delete, tier is enforced by the UI only.
+  // Editing needs a connection (like panels); reading falls back to the offline snapshot.
+  var _shared = { list: [] };   // [ { id, name, items } ]
+
+  function _supa() { return (typeof SUPA_URL === 'string' && typeof SUPA_KEY === 'string') ? { url: SUPA_URL, key: SUPA_KEY } : null; }
+  function _mapId() { return typeof _MAP_ID === 'string' ? _MAP_ID : ((window._CFG && window._CFG.title) || 'map'); }
+  function _newHudId() { return 'hud_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); }
+
+  function _applyShared(rows) {
+    var list = [];
+    (Array.isArray(rows) ? rows : []).forEach(function (r) {
+      if (!r || r.deleted || typeof r.hud_id !== 'string' || typeof r.name !== 'string' || !r.name) return;
+      list.push({ id: r.hud_id, name: r.name, items: Array.isArray(r.items) ? r.items.filter(function (x) { return typeof x === 'string' && x; }) : [] });
+    });
+    list.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });   // ids start with a timestamp = creation order
+    _shared.list = list;
+  }
+  function _snapSaveShared() {
+    if (typeof _syncSnapSave !== 'function') return;
+    _syncSnapSave('huds', _shared.list.map(function (h) { return { hud_id: h.id, name: h.name, items: h.items, deleted: false }; }));
+  }
+  function _sharedActiveIndex(st) {
+    if (!st.activeShared) return -1;
+    for (var i = 0; i < _shared.list.length; i++) if (_shared.list[i].id === st.activeShared) return i;
+    return -1;
+  }
+
+  // load (caretaker+ only); called by runtime.js at boot. Never throws.
+  async function hudLoadShared() {
+    if (!_allowed()) return;
+    var restore = function () { if (typeof _syncSnapRestore === 'function') _syncSnapRestore('huds', _applyShared); };
+    var sp = _supa();
+    if (!sp) { restore(); hudRefresh(); return; }
+    try {
+      var r = await fetch(sp.url + '/rest/v1/huds?map_id=eq.' + encodeURIComponent(_mapId()) + '&deleted=eq.false&order=hud_id.asc',
+        { headers: { 'apikey': sp.key, 'Authorization': 'Bearer ' + sp.key } });
+      if (!r.ok) restore();
+      else {
+        var rows = await r.json();
+        _applyShared(rows);
+        if (typeof _syncSnapSave === 'function') _syncSnapSave('huds', rows);
+      }
+    } catch (e) { restore(); }
+    hudRefresh();
+  }
+
+  // one upsert covers create / edit / soft delete (all columns always present). true | { error }
+  async function _sharedUpsert(h, deleted) {
+    var sp = _supa();
+    if (!sp) return { error: 'კავშირი ვერ მოიძებნა' };
+    var row = { map_id: _mapId(), hud_id: h.id, name: h.name, items: h.items, deleted: !!deleted, updated_at: new Date().toISOString() };
+    try {
+      var hdr = typeof _authHeaders === 'function' ? _authHeaders() : { 'apikey': sp.key, 'Authorization': 'Bearer ' + sp.key };
+      var r = await fetch(sp.url + '/rest/v1/huds', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' }, hdr),
+        body: JSON.stringify([row])
+      });
+      if (r.ok) return true;
+      var body = r.text ? await r.text().catch(function () { return ''; }) : '';
+      return { error: 'სერვერმა უარყო (' + r.status + ') ' + body.slice(0, 120) };
+    } catch (e) { return { error: 'ქსელი მიუწვდომელია — საერთო HUD ოფლაინ ვერ შეიცვლება' }; }
+  }
+
+  // ── stores: the commands below work on a "store" so local and shared HUDs share one implementation ──
+  // list() / activeIdx() / activate(i) / create(name) / setItems(h, items) / remove(h); async ones return true | { error }
+  function _localStore() {
+    var st = _ensureState();
+    return {
+      shared: false,
+      list: function () { return st.huds; },
+      activeIdx: function () { return _activeIndex(st); },
+      activate: function (i) { st.active = st.huds[i].name; st.activeShared = null; _save(); },
+      create: async function (name) { st.huds.push({ name: name, items: [] }); st.active = name; st.activeShared = null; _save(); return true; },
+      setItems: async function (h, items) { h.items = items; _save(); return true; },
+      remove: async function (h) {
+        st.huds.splice(st.huds.indexOf(h), 1);
+        if (st.active && _norm(st.active) === _norm(h.name)) st.active = null;
+        _save(); return true;
+      }
+    };
+  }
+  function _sharedStore() {
+    var st = _ensureState();
+    return {
+      shared: true,
+      list: function () { return _shared.list; },
+      activeIdx: function () { return _sharedActiveIndex(st); },
+      activate: function (i) { st.activeShared = _shared.list[i].id; st.active = null; _save(); },
+      create: async function (name) {
+        var h = { id: _newHudId(), name: name, items: [] };
+        var r = await _sharedUpsert(h, false);
+        if (r !== true) return r;
+        _shared.list.push(h); st.activeShared = h.id; st.active = null; _save(); _snapSaveShared();
+        return true;
+      },
+      setItems: async function (h, items) {
+        var r = await _sharedUpsert({ id: h.id, name: h.name, items: items }, false);
+        if (r !== true) return r;
+        h.items = items; _snapSaveShared();
+        return true;
+      },
+      remove: async function (h) {
+        var r = await _sharedUpsert(h, true);
+        if (r !== true) return r;
+        _shared.list.splice(_shared.list.indexOf(h), 1);
+        if (st.activeShared === h.id) st.activeShared = null;
+        _save(); _snapSaveShared();
+        return true;
+      }
+    };
+  }
+
   // what to show right now: { name (HUD name), bars }
   function _collect() {
     if (_demoOn) return { name: 'ზამთრის მარაგები', bars: _demoItems().map(_barOf).filter(Boolean) };
-    var st = _ensureState(), i = _activeIndex(st);
-    if (i < 0) return { name: '', bars: [] };
+    var st = _ensureState(), h = null, i;
+    if (st.activeShared) { i = _sharedActiveIndex(st); if (i >= 0) h = _shared.list[i]; }
+    else { i = _activeIndex(st); if (i >= 0) h = st.huds[i]; }
+    if (!h) return { name: '', bars: [] };
     var map = _indexItems(), bars = [];
-    st.huds[i].items.forEach(function (id) { var b = _barOf(map[id]); if (b) bars.push(b); });
-    return { name: st.huds[i].name, bars: bars };
+    h.items.forEach(function (id) { var b = _barOf(map[id]); if (b) bars.push(b); });
+    return { name: h.name, bars: bars };
   }
 
   function _allowed() {
@@ -187,9 +305,10 @@
     el.classList.add('show');
   }
 
-  // ── /ჰუდი ──
+  // ── /ჰუდი (local + view of shared) and /საერთოჰუდი (shared, resident+) ──
   // say(kind, text) = terminal logger (_tmL); ctx = { cwd, resolve, saveNode } from terminal.js (current menu node,
   // _tmResolveItem, _tmMenuSaveNode). Kinds: tok = ok, ter = error, tdm = hint, tnf = info line.
+  // Numbers: "N" = local list, "სN" = shared list (in /საერთოჰუდი plain "N" also means the shared list).
   function _nameError(name) {
     if (!name) return 'გამოყენება: /ჰუდი <სახელი>';
     if (name.length > MAX_NAME) return '✗ სახელი ძალიან გრძელია (მაქს. ' + MAX_NAME + ')';
@@ -198,46 +317,75 @@
     return null;
   }
   function _itemLabel(it) { var b = _barOf(it); return b ? (b.emoji + ' ' + (b.label || '(უსახელო)')) : null; }
-
-  function _cmdList(say) {
-    var st = _ensureState();
-    if (!st.huds.length) { say('tdm', 'HUD ჯერ არ არის — შესაქმნელად: /ჰუდი <სახელი> დიახ'); return; }
-    say('tdm', 'HUD-ები (ამ მოწყობილობაზე):');
-    var ai = _activeIndex(st);
-    st.huds.forEach(function (h, i) { say('tnf', (i === ai ? '▶ ' : '  ') + '[' + i + '] ' + h.name + ' — ' + h.items.length + ' ბარი'); });
+  function _parseNum(tok) { var m = /^(ს)?(\d+)$/.exec(tok); return m ? { shared: !!m[1], n: parseInt(m[2], 10) } : null; }
+  function _cmdName(store) { return store && store.shared ? '/საერთოჰუდი' : '/ჰუდი'; }
+  function _noActiveMsg(store, st) {
+    if (store.shared) return '✗ ჯერ აირჩიე საერთო HUD: /საერთოჰუდი <სახელი>';
+    return st.activeShared ? '✗ აქტიური HUD საერთოა — შესაცვლელად: /საერთოჰუდი + ... (ან აირჩიე ლოკალური: /ჰუდი <სახელი>)' : '✗ ჯერ აირჩიე HUD: /ჰუდი <სახელი>';
   }
 
-  function _activate(st, idx, say) {
-    st.active = st.huds[idx].name; _save(); _demoOn = false; hudRefresh();
-    say('tok', '✓ HUD „' + st.active + '“ ჩაირთო (' + st.huds[idx].items.length + ' ბარი)');
+  function _cmdList(say, sharedOnly) {
+    var st = _ensureState(), sl = _shared.list;
+    if (!sharedOnly) {
+      if (!st.huds.length && !sl.length) { say('tdm', 'HUD ჯერ არ არის — შესაქმნელად: /ჰუდი <სახელი> დიახ'); return; }
+      if (st.huds.length) {
+        say('tdm', 'ლოკალური HUD-ები (ამ მოწყობილობაზე):');
+        var ai = _activeIndex(st);
+        st.huds.forEach(function (h, i) { say('tnf', (i === ai ? '▶ ' : '  ') + '[' + i + '] ' + h.name + ' — ' + h.items.length + ' ბარი'); });
+      }
+    }
+    if (sl.length) {
+      say('tdm', 'საერთო HUD-ები:');
+      var si = _sharedActiveIndex(st);
+      sl.forEach(function (h, i) { say('tnf', (i === si ? '▶ ' : '  ') + '[ს' + i + '] ' + h.name + ' — ' + h.items.length + ' ბარი'); });
+    } else if (sharedOnly) {
+      say('tdm', 'საერთო HUD ჯერ არ არის — შესაქმნელად: /საერთოჰუდი <სახელი> დიახ');
+    }
   }
 
-  // /ჰუდი <სახელი | [N]> [დიახ] — switch on (the previous HUD switches off); unknown name needs "დიახ" to be created
-  function _cmdSelect(args, say) {
+  function _activate(store, idx, say) {
+    store.activate(idx); _demoOn = false; hudRefresh();
+    var h = store.list()[idx];
+    say('tok', '✓ HUD „' + h.name + '“ ჩაირთო (' + (store.shared ? 'საერთო, ' : '') + h.items.length + ' ბარი)');
+  }
+
+  // <სახელი | N | სN> [დიახ] — switch on (the previous HUD switches off); an unknown name needs "დიახ" to be created
+  // store = the shared store for /საერთოჰუდი (look up + create there only), null for /ჰუდი (local first, then shared; creates local)
+  async function _cmdSelect(args, say, store) {
     var parts = args.slice(), confirm = false;
     if (parts.length > 1 && parts[parts.length - 1] === 'დიახ') { confirm = true; parts.pop(); }
-    var name = parts.join(' ').trim(), st = _ensureState();
-    if (/^\d+$/.test(name)) {
-      var n = parseInt(name, 10);
-      if (n < st.huds.length) _activate(st, n, say); else say('ter', '✗ HUD [' + n + '] არ არსებობს — /ჰუდი');
+    var name = parts.join(' ').trim();
+    var loc = _localStore(), sh = _sharedStore(), cmd = _cmdName(store);
+    var num = _parseNum(name);
+    if (num) {
+      var target = (num.shared || (store && store.shared)) ? sh : loc, list = target.list();
+      if (num.n < list.length) _activate(target, num.n, say);
+      else say('ter', '✗ HUD [' + (target.shared ? 'ს' : '') + num.n + '] არ არსებობს — ' + cmd);
       return;
     }
     var err = _nameError(name);
     if (err) { say('ter', err); return; }
-    var idx = _hudIndex(st, name);
-    if (idx >= 0) { _activate(st, idx, say); return; }
-    if (!confirm) { say('tdm', 'HUD „' + name + '“ არ არსებობს — შესაქმნელად: /ჰუდი ' + name + ' დიახ'); return; }
-    if (st.huds.length >= MAX_HUDS) { say('ter', '✗ HUD-ების ლიმიტი: ' + MAX_HUDS); return; }
-    st.huds.push({ name: name, items: [] }); st.active = name; _save(); _demoOn = false; hudRefresh();
-    say('tok', '✓ HUD „' + name + '“ შეიქმნა და ჩაირთო');
-    say('tdm', 'ბარის დასამატებლად გადადი სექციაში (/cd) და: /ჰუდი + <სახელი|id|ინდექსი>');
+    var order = (store && store.shared) ? [sh] : [loc, sh];
+    for (var k = 0; k < order.length; k++) {
+      var i = _indexIn(order[k].list(), name);
+      if (i >= 0) { _activate(order[k], i, say); return; }
+    }
+    var cstore = store || loc;
+    if (!confirm) { say('tdm', 'HUD „' + name + '“ არ არსებობს — შესაქმნელად: ' + cmd + ' ' + name + ' დიახ'); return; }
+    if (cstore.list().length >= MAX_HUDS) { say('ter', '✗ HUD-ების ლიმიტი: ' + MAX_HUDS); return; }
+    var r = await cstore.create(name);
+    if (r !== true) { say('ter', '✗ ' + r.error); return; }
+    _demoOn = false; hudRefresh();
+    say('tok', '✓ HUD „' + name + '“ შეიქმნა და ჩაირთო' + (cstore.shared ? ' (საერთო)' : ''));
+    say('tdm', 'ბარის დასამატებლად გადადი სექციაში (/cd) და: ' + cmd + ' + <სახელი|id|ინდექსი>');
+    if (cstore.shared && _indexIn(loc.list(), name) >= 0) say('tdm', '⚠ ამავე სახელის ლოკალური HUD ამ მოწყობილობაზე /ჰუდი <სახელი>-ზე უპირატესობს');
   }
 
-  // /ჰუდი + <ref> — add an indicator or a todo of the CURRENT menu section to the active HUD
-  async function _cmdAdd(ref, say, ctx) {
-    var st = _ensureState(), hi = _activeIndex(st);
-    if (hi < 0) { say('ter', '✗ ჯერ აირჩიე HUD: /ჰუდი <სახელი>'); return; }
-    if (!ref.trim()) { say('ter', 'გამოყენება: /ჰუდი + <სახელი | id | ინდექსი> (მიმდინარე სექციიდან)'); return; }
+  // + <ref> — add an indicator or a todo of the CURRENT menu section to the active HUD of this store
+  async function _cmdAdd(ref, say, ctx, store) {
+    var st = _ensureState(), hi = store.activeIdx();
+    if (hi < 0) { say('ter', _noActiveMsg(store, st)); return; }
+    if (!ref.trim()) { say('ter', 'გამოყენება: ' + _cmdName(store) + ' + <სახელი | id | ინდექსი> (მიმდინარე სექციიდან)'); return; }
     var node = ctx && ctx.cwd ? ctx.cwd() : null;
     if (!node) { say('ter', '✗ root-ში ფოთლები არ არსებობს — გადადი სექციაში (/cd)'); return; }
     var rr = ctx.resolve(node, ref, null);
@@ -249,29 +397,31 @@
     // old items may have no id yet: any node save stamps ids on all its items (same mechanism as every menu edit)
     if (!item.id) { await ctx.saveNode(node.id, { items_json: node.items }); }
     if (!item.id) { say('ter', '✗ id ვერ მიენიჭა — სცადე ისევ'); return; }
-    var h = st.huds[hi];
+    var h = store.list()[hi];
     if (h.items.indexOf(item.id) >= 0) { say('tdm', 'უკვე არის HUD „' + h.name + '“-ში'); return; }
     if (h.items.length >= MAX_ITEMS) { say('ter', '✗ HUD-ში მაქს. ' + MAX_ITEMS + ' ბარია'); return; }
-    h.items.push(item.id); _save(); hudRefresh();
+    var r = await store.setItems(h, h.items.concat([item.id]));
+    if (r !== true) { say('ter', '✗ ' + r.error); return; }
+    hudRefresh();
     say('tok', '✓ + ' + _itemLabel(item) + ' → HUD „' + h.name + '“ (' + h.items.length + ')');
   }
 
-  // /ჰუდი − [<[N] | სახელი | id>] — no argument: numbered list of the active HUD's bars
-  function _cmdRemove(ref, say) {
-    var st = _ensureState(), hi = _activeIndex(st);
-    if (hi < 0) { say('ter', '✗ ჯერ აირჩიე HUD: /ჰუდი <სახელი>'); return; }
-    var h = st.huds[hi], map = _indexItems();
+  // − [<N | სახელი | id>] — no argument: numbered list of the active HUD's bars
+  async function _cmdRemove(ref, say, store) {
+    var st = _ensureState(), hi = store.activeIdx();
+    if (hi < 0) { say('ter', _noActiveMsg(store, st)); return; }
+    var h = store.list()[hi], map = _indexItems(), cmd = _cmdName(store);
     if (!ref.trim()) {
       if (!h.items.length) { say('tdm', 'HUD „' + h.name + '“ ცარიელია'); return; }
       say('tdm', 'HUD „' + h.name + '“ — ბარები:');
       h.items.forEach(function (id, i) { say('tnf', '[' + i + '] ' + (_itemLabel(map[id]) || '(ვერ მოიძებნა: ' + id + ')')); });
-      say('tdm', 'ამოსაღებად: /ჰუდი − <[N] | სახელი | id>');
+      say('tdm', 'ამოსაღებად: ' + cmd + ' − <[N] | სახელი | id>');
       return;
     }
     var idx = -1;
     if (/^\d+$/.test(ref)) {
       var n = parseInt(ref, 10);
-      if (n >= h.items.length) { say('ter', '✗ ბარი [' + n + '] არ არსებობს — /ჰუდი −'); return; }
+      if (n >= h.items.length) { say('ter', '✗ ბარი [' + n + '] არ არსებობს — ' + cmd + ' −'); return; }
       idx = n;
     } else {
       var q = _norm(ref), exact = [], pref = [];
@@ -286,35 +436,41 @@
         say('ter', '✗ რამდენიმე ბარი ემთხვევა „' + ref + '“: ' + pick.map(function (i) { return '[' + i + '] ' + (_itemLabel(map[h.items[i]]) || h.items[i]); }).join(', ') + ' — მიუთითე ინდექსი');
         return;
       }
-      if (!pick.length) { say('ter', '✗ ბარი „' + ref + '“ HUD-ში ვერ მოიძებნა — /ჰუდი −'); return; }
+      if (!pick.length) { say('ter', '✗ ბარი „' + ref + '“ HUD-ში ვერ მოიძებნა — ' + cmd + ' −'); return; }
       idx = pick[0];
     }
     var id0 = h.items[idx], lbl = _itemLabel(map[id0]) || id0;
-    h.items.splice(idx, 1); _save(); hudRefresh();
+    var items = h.items.slice(); items.splice(idx, 1);
+    var r = await store.setItems(h, items);
+    if (r !== true) { say('ter', '✗ ' + r.error); return; }
+    hudRefresh();
     say('tok', '✗ − ' + lbl + ' ამოღებულია HUD „' + h.name + '“-დან');
   }
 
-  // /ჰუდი წაშ <სახელი | [N]> დიახ — without "დიახ" only a preview
-  function _cmdDelete(rest, say) {
-    var parts = rest.slice(), confirm = false;
+  // წაშ <სახელი | N | სN> დიახ — without "დიახ" only a preview
+  async function _cmdDelete(rest, say, store) {
+    var parts = rest.slice(), confirm = false, cmd = _cmdName(store);
     if (parts.length && parts[parts.length - 1] === 'დიახ') { confirm = true; parts.pop(); }
-    var name = parts.join(' ').trim(), st = _ensureState();
-    if (!name) { say('ter', 'გამოყენება: /ჰუდი წაშ <სახელი | [N]> დიახ'); return; }
-    var idx = /^\d+$/.test(name) ? parseInt(name, 10) : _hudIndex(st, name);
-    if (idx < 0 || idx >= st.huds.length) { say('ter', '✗ HUD „' + name + '“ ვერ მოიძებნა — /ჰუდი'); return; }
-    var h = st.huds[idx];
-    if (!confirm) { say('tdm', 'HUD „' + h.name + '“ (' + h.items.length + ' ბარი) წაიშლება — დასადასტურებლად: /ჰუდი წაშ ' + h.name + ' დიახ'); return; }
-    var wasActive = st.active && _norm(st.active) === _norm(h.name);
-    st.huds.splice(idx, 1);
-    if (wasActive) st.active = null;
-    _save(); hudRefresh();
+    var name = parts.join(' ').trim();
+    if (!name) { say('ter', 'გამოყენება: ' + cmd + ' წაშ <სახელი | [N]> დიახ'); return; }
+    var list = store.list(), num = _parseNum(name), idx;
+    if (num) idx = (num.shared && !store.shared) ? -1 : num.n;   // "სN" only means something in the shared list
+    else idx = _indexIn(list, name);
+    if (idx < 0 || idx >= list.length) { say('ter', '✗ HUD „' + name + '“ ვერ მოიძებნა — ' + cmd); return; }
+    var h = list[idx];
+    if (!confirm) { say('tdm', 'HUD „' + h.name + '“ (' + h.items.length + ' ბარი) წაიშლება — დასადასტურებლად: ' + cmd + ' წაშ ' + h.name + ' დიახ'); return; }
+    var r = await store.remove(h);
+    if (r !== true) { say('ter', '✗ ' + r.error); return; }
+    hudRefresh();
     say('tok', '✗ HUD „' + h.name + '“ წაიშალა');
   }
+
+  function _isMinus(x) { return x === '\u2212' || x === '-' || x === '\u2013'; }
 
   async function hudCommand(args, say, ctx) {
     args = (args || []).map(String);
     var first = args[0] || '';
-    if (!args.length) { _cmdList(say); return; }
+    if (!args.length) { _cmdList(say, false); return; }
     if (args.length === 1 && first === 'ტესტი') {
       _demoOn = true; hudRefresh();
       say('tok', '✓ HUD — სატესტო ბარები ჩაირთო (გამოსართავად: /ჰუდი გამორთვა)');
@@ -322,18 +478,33 @@
     }
     if (args.length === 1 && first === 'გამორთვა') {
       _demoOn = false;
-      var st = _ensureState(); st.active = null; _save();
+      var st = _ensureState(); st.active = null; st.activeShared = null; _save();
       hudRefresh();
       say('tok', '✓ HUD გამოირთო');
       return;
     }
-    if (first === '+') { await _cmdAdd(args.slice(1).join(' '), say, ctx); return; }
-    if (first === '\u2212' || first === '-' || first === '\u2013') { _cmdRemove(args.slice(1).join(' '), say); return; }
-    if (first === 'წაშ') { _cmdDelete(args.slice(1), say); return; }
-    _cmdSelect(args, say);
+    if (first === '+') { await _cmdAdd(args.slice(1).join(' '), say, ctx, _localStore()); return; }
+    if (_isMinus(first)) { await _cmdRemove(args.slice(1).join(' '), say, _localStore()); return; }
+    if (first === 'წაშ') { await _cmdDelete(args.slice(1), say, _localStore()); return; }
+    await _cmdSelect(args, say, null);
+  }
+
+  // /საერთოჰუდი — manage shared HUDs (resident+; the terminal tier table gates it, re-checked here)
+  async function hudSharedCommand(args, say, ctx) {
+    if (typeof window._tierAtLeast !== 'function' || !window._tierAtLeast('resident')) { say('ter', '✗ საერთო HUD-ის შეცვლა მხოლოდ resident+-ს შეუძლია'); return; }
+    args = (args || []).map(String);
+    var first = args[0] || '', sh = _sharedStore();
+    if (!args.length) { _cmdList(say, true); return; }
+    if (args.length === 1 && first === 'გამორთვა') { await hudCommand(args, say, ctx); return; }
+    if (first === '+') { await _cmdAdd(args.slice(1).join(' '), say, ctx, sh); return; }
+    if (_isMinus(first)) { await _cmdRemove(args.slice(1).join(' '), say, sh); return; }
+    if (first === 'წაშ') { await _cmdDelete(args.slice(1), say, sh); return; }
+    await _cmdSelect(args, say, sh);
   }
 
   window._hudBarOf = _barOf;
   window.hudRefresh = hudRefresh;
   window.hudCommand = hudCommand;
+  window.hudSharedCommand = hudSharedCommand;
+  window.hudLoadShared = hudLoadShared;
 })();

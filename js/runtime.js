@@ -4207,6 +4207,7 @@ window.addEventListener('load', async () => {
   // HUD (hud.js) draws from the menu tree + todo state: redraw once each has loaded
   loadTodoState().then(function () { if (window.hudRefresh) window.hudRefresh(); });
   loadMenuOverrides().then(function () { if (window.hudRefresh) window.hudRefresh(); });
+  if (window.hudLoadShared) window.hudLoadShared();   // shared HUDs (table huds); caretaker+ only, handled inside
   loadMacroOverrides();
   loadLegendOverride();
   loadAreaOverrides();

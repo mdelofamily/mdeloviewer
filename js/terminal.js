@@ -406,7 +406,8 @@ var _TM_MIN_TIER = {
   'წერტილი':     'resident', // interior_hotspots placement/deletion (temporary 2-tap rectangle)
   'პანელი':      'resident', // personal button panels (panels table, owner-only RLS)
   'ჰექსაგონი':   'resident', // hexagon launcher (panels table, layout='ring'; hexagon.js)
-  'ჰუდი':        'caretaker'  // HUD progress bars (hud.js)
+  'ჰუდი':        'caretaker', // HUD progress bars (hud.js)
+  'საერთოჰუდი':  'resident'   // shared HUDs: create/edit (hud.js, table huds); caretaker only views them via /ჰუდი
 };
 
 // Scoped elevation flag — true only while executing the commands *inside* a
@@ -534,6 +535,7 @@ async function _tmRun(raw) {
     'პანელი':      _tmPanel,
     'ჰექსაგონი':   _tmHexagon,
     'ჰუდი':        _tmHud,
+    'საერთოჰუდი':  _tmSharedHud,
     'კვანძი':      _tmNode,
     'წერტილი':     _tmSpot,
     'წერტილები':   _tmSpotsAll,
@@ -837,6 +839,7 @@ function _tmHelp() {
     ['/პანელი [სახელი|№|ახალი|რედ|წაშ]', 'პირადი ღილაკების პანელი (resident+)'],
     ['/ჰექსაგონი [სახელი|№|ახალი|რედ|წაშ|გამორთვა]', 'ჰექსაგონის ლაუნჩერი — სწრაფი ღილაკები (resident+)'],
     ['/ჰუდი [სახელი [დიახ]|+ <ref>|− [<ref>]|წაშ <სახელი> დიახ|გამორთვა]', 'HUD — პროგრეს ბარები ეკრანზე (caretaker+)'],
+    ['/საერთოჰუდი [სახელი [დიახ]|+ <ref>|− [<ref>]|წაშ <სახელი> დიახ]', 'საერთო HUD-ების შექმნა/რედაქტირება (resident+); caretaker-ი მათ /ჰუდი <სახელი>-ით ხედავს'],
     ['/კვანძი სია|დამატება|დიალოგი|წაშ', 'ღია სცენაში ინვენტარის კვანძი'],
     ['/წერტილი დადება|წაშ|ნახვა|გაუქმება', 'hotspot-ის დადება (თითით თავისუფალი ხატვა)'],
     ['/წერტილი <სახელი>, <სახელი>', 'მითითებული კვანძის წერტილების ანთება სცენაზე'],
@@ -3671,7 +3674,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
 var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
-  'დახმარება','ჰექსაგონი','ჰუდი','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება','პანელი'];
+  'დახმარება','ჰექსაგონი','ჰუდი','საერთოჰუდი','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება','პანელი'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
 // ";" inside ordinary command args is left alone) — PLUS treats any [...]
@@ -3985,6 +3988,12 @@ async function _tmHexagon(args) {
 async function _tmHud(args) {
   if (typeof window.hudCommand !== 'function') { _tmL('ter', '✗ hud.js ვერ მოიძებნა'); return; }
   await window.hudCommand(args, _tmL, { cwd: _tmMenuCwdNode, resolve: _tmResolveItem, saveNode: _tmMenuSaveNode });
+}
+
+// /საერთოჰუდი — shared HUDs (resident+); same module, shared store
+async function _tmSharedHud(args) {
+  if (typeof window.hudSharedCommand !== 'function') { _tmL('ter', '✗ hud.js ვერ მოიძებნა'); return; }
+  await window.hudSharedCommand(args, _tmL, { cwd: _tmMenuCwdNode, resolve: _tmResolveItem, saveNode: _tmMenuSaveNode });
 }
 
 // Expose raw command/chain execution for runtime.js (consensus terminal_cmd field).
