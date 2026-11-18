@@ -1468,7 +1468,7 @@ function _gmShowItem(it, info, crumbPath) {
   panel.appendChild(wrap);
 }
 // Slider as a panel row: same icon column, title font and left edge as every other row
-// (icon · title · bar · % · arrow so the right edges line up too). Tapping it opens the slider view.
+// (icon · title · bar with the % in its centre · arrow). Tapping it opens the slider view.
 function _gmProgressRow(it) {
   const v = _gmSliderValue(it);
   const color = _gmBarColor(v);
@@ -1477,10 +1477,10 @@ function _gmProgressRow(it) {
   const title = document.createElement('span'); title.className = 'gm-pi-title'; title.textContent = _gmPlainTitle(_i18n(it.label) || '');
   const bar = document.createElement('div'); bar.className = 'gm-pi-bar';
   const fill = document.createElement('div'); fill.className = 'gm-pi-bar-fill'; fill.style.width = v + '%'; fill.style.background = color;
-  bar.appendChild(fill);
-  const pct = document.createElement('span'); pct.className = 'gm-pi-pct'; pct.textContent = v + '%';
+  const num = document.createElement('span'); num.className = 'gm-pi-num'; num.textContent = v + '%';
+  bar.appendChild(fill); bar.appendChild(num);   // number sits inside the bar, above the fill (like a phone battery)
   const sp = document.createElement('span'); sp.className = 'gm-pi-arrow'; sp.textContent = '›';
-  el.appendChild(icon); el.appendChild(title); el.appendChild(bar); el.appendChild(pct); el.appendChild(sp);
+  el.appendChild(icon); el.appendChild(title); el.appendChild(bar); el.appendChild(sp);
   return el;
 }
 // rows for node.items appended to `container`; myPath = breadcrumb path ending with this node
@@ -1576,10 +1576,10 @@ function _gmShowPanel(nodes, path) {
     '.gm-item-row .gm-pi-title{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
     '.gm-pi-meta{flex-shrink:0;font-size:12px;color:rgba(180,190,200,0.6);}' +
     '.gm-item-view{padding:6px 4px 14px;}' +
-    '.gm-pi-bar-row{cursor:default;}.gm-pi-bar-row:hover{background:none;}' +
-    '.gm-pi-bar{flex:0 0 36%;height:8px;background:rgba(48,54,61,0.6);border-radius:4px;overflow:hidden;}' +
+    '.gm-pi-bar-row{cursor:pointer;}' +
+    '.gm-pi-bar{position:relative;flex:0 0 40%;height:16px;background:rgba(48,54,61,0.6);border-radius:4px;overflow:hidden;}' +
     '.gm-pi-bar-fill{height:100%;border-radius:4px;transition:width .3s;}' +
-    '.gm-pi-pct{flex-shrink:0;min-width:32px;text-align:right;font:11px monospace;color:#8b949e;}';
+    '.gm-pi-num{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;font:10px/1 sans-serif;color:rgba(220,228,236,.95);text-shadow:0 0 3px rgba(0,0,0,.9),0 0 1px rgba(0,0,0,.9);}';
   document.head.appendChild(st);
 })();
 
@@ -3298,12 +3298,10 @@ function _gmEnsureSliderStyles() {
   st.textContent =
     '.gm-slider-view{padding:10px 4px;}' +
     '.gm-sl-title{font-size:15px;margin-bottom:8px;}' +
-    '.gm-sl-pct{font-size:34px;font-weight:600;text-align:center;margin:6px 0;}' +
-    '.gm-sl-bar{height:14px;border-radius:7px;background:rgba(128,128,128,.25);overflow:hidden;margin:6px 0 14px;}' +
-    '.gm-sl-fill{height:100%;border-radius:7px;transition:width .12s;}' +
+    '.gm-sl-bar{position:relative;height:24px;border-radius:6px;background:rgba(48,54,61,.6);overflow:hidden;margin:8px 0 14px;}' +
+    '.gm-sl-fill{height:100%;border-radius:6px;transition:width .12s;}' +
+    '.gm-sl-num{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;font:13px/1 sans-serif;color:rgba(220,228,236,.95);text-shadow:0 0 3px rgba(0,0,0,.9),0 0 1px rgba(0,0,0,.9);}' +
     '.gm-sl-range{width:100%;margin:4px 0 12px;}' +
-    '.gm-sl-btns{display:flex;gap:8px;justify-content:center;}' +
-    '.gm-sl-btn{flex:1;max-width:80px;padding:9px 0;border-radius:8px;border:1px solid rgba(128,128,128,.4);background:rgba(128,128,128,.12);color:inherit;font-size:14px;}' +
     '.gm-sl-note{font-size:11px;opacity:.65;text-align:center;margin-top:8px;min-height:14px;}';
   document.head.appendChild(st);
 }
@@ -3320,12 +3318,12 @@ function _gmSliderView(itObj, opts) {
     t.textContent = (itObj.emoji || '📊') + ' ' + _gmPlainTitle(_i18n(itObj.label) || '');
     root.appendChild(t);
   }
-  const pct = document.createElement('div'); pct.className = 'gm-sl-pct';
   const bar = document.createElement('div'); bar.className = 'gm-sl-bar';
   const fill = document.createElement('div'); fill.className = 'gm-sl-fill';
-  bar.appendChild(fill); root.appendChild(pct); root.appendChild(bar);
+  const num = document.createElement('span'); num.className = 'gm-sl-num';
+  bar.appendChild(fill); bar.appendChild(num); root.appendChild(bar);   // % in the middle of the bar, like the list row
   const note = document.createElement('div'); note.className = 'gm-sl-note';
-  const paint = function () { pct.textContent = v + '%'; fill.style.width = v + '%'; fill.style.background = _gmBarColor(v); };
+  const paint = function () { num.textContent = v + '%'; fill.style.width = v + '%'; fill.style.background = _gmBarColor(v); };
   paint();
   if (!can) {
     note.textContent = id ? 'მნიშვნელობას caretaker+ ცვლის' : 'id აკლია — /რედ-ით ერთხელ შეინახე';
@@ -3333,7 +3331,7 @@ function _gmSliderView(itObj, opts) {
   }
   const range = document.createElement('input');
   range.type = 'range'; range.min = '0'; range.max = '100'; range.step = '1'; range.value = String(v); range.className = 'gm-sl-range';
-  // local state follows every move; the save is queued once the finger / taps stop (350 ms)
+  // local state follows every move; the save is queued once the finger stops (350 ms after the last change)
   const queue = function () {
     clearTimeout(timer);
     timer = setTimeout(async function () {
@@ -3344,15 +3342,37 @@ function _gmSliderView(itObj, opts) {
   range.addEventListener('input', function () { v = _gmClampPct(range.value); paint(); _gmSliderLocal(id, v); });
   range.addEventListener('change', function () { v = _gmClampPct(range.value); paint(); _gmSliderLocal(id, v); queue(); });
   root.appendChild(range);
-  const btns = document.createElement('div'); btns.className = 'gm-sl-btns';
-  [-10, -5, 5, 10].forEach(function (d) {
-    const b = document.createElement('button'); b.className = 'gm-sl-btn'; b.textContent = (d > 0 ? '+' : '−') + Math.abs(d) + '%';
-    b.onclick = function () { v = _gmClampPct(v + d); range.value = String(v); paint(); _gmSliderLocal(id, v); queue(); };
-    btns.appendChild(b);
-  });
-  root.appendChild(btns); root.appendChild(note);
+  root.appendChild(note);
   return root;
 }
+// open the burger menu straight on the leaf that holds the item with this id (a HUD emoji tap):
+// a checklist todo opens its list, a slider opens its slider view
+function _gmFindItemNode(id) {
+  let hit = null;
+  const cfg = _gmCfg || _CFG;
+  (function walk(nodes, path) {
+    for (let k = 0; k < nodes.length && !hit; k++) {
+      const node = nodes[k];
+      const idx = (node.items || []).findIndex(function (it) { return it && typeof it === 'object' && it.id === id; });
+      if (idx >= 0) { hit = { node: node, nodes: nodes, path: path, idx: idx }; return; }
+      if (node.children && node.children.length) walk(node.children, [...path, _gmPathEntry(node)]);
+    }
+  })((cfg && cfg.menu) || [], []);
+  return hit;
+}
+function _gmOpenItemById(id) {
+  const hit = _gmFindItemNode(id);
+  if (!hit) { toast('⚠️ ფოთოლი ვერ მოიძებნა'); return; }
+  const gm = document.getElementById('gameMenu');
+  if (!gm.classList.contains('open')) {   // same opening steps as _gmGoToSlug
+    gm.classList.add('open');
+    wrap.style.overflow = 'hidden';
+    if (!window._cfgLoaded) { window._cfgLoaded = true; _gmCfg = _CFG; }
+  }
+  _gmOpenLeaf(hit.node, hit.nodes, hit.path, false, hit.idx);
+}
+window.menuOpenItem = _gmOpenItemById;
+
 window.menuIsSlider = _gmIsSlider;
 window.menuSliderValue = _gmSliderValue;
 window.menuSliderSet = _gmSetSliderValue;

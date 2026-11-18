@@ -1,5 +1,5 @@
 // hud.js — HUD: small transparent progress bars under the burger button (caretaker+).
-// STEP D: named HUDs — local (this device) via /ჰუდი, shared (table huds) via /საერთოჰუდი. Shared: seen by caretaker+, edited by resident+.
+// Named HUDs — local (this device) via /ჰუდი, shared (table huds) via /საერთოჰუდი. Shared: seen by caretaker+, edited by resident+.
 // Loaded after runtime.js and terminal.js (see viewer.html). No ES modules: public API is on window.
 (function () {
   'use strict';
@@ -7,9 +7,8 @@
   var MAX_PER_GROUP = 6;       // rows shown per category; any further bars are simply not shown
   var MIN_TIER = 'caretaker';  // HUD is hidden for everyone below this tier
   var MAX_HUDS = 20, MAX_ITEMS = 30, MAX_NAME = 60;
-  var RESERVED = ['გამორთვა', 'ტესტი', 'წაშ', 'დიახ'];   // sub-commands / confirm word: never HUD names
+  var RESERVED = ['გამორთვა', 'წაშ', 'დიახ'];   // sub-commands / confirm word: never HUD names
 
-  var _demoOn = false;
   var _el = null;
 
   // ── bar abstraction: HUD never looks at item types itself ──
@@ -34,20 +33,6 @@
 
   function _clamp(v) { return Math.max(0, Math.min(100, Math.round(Number(v) || 0))); }
   function _color(v) { return v > 60 ? '#4ade80' : v > 30 ? '#facc15' : '#f87171'; }
-
-  // temporary demo items (step A only) — they go through _barOf like real ones
-  function _demoItems() {
-    return [
-      { type: 'todo', id: 'demo_1', emoji: '💧', label: { ka: 'წყალი', en: 'Water' }, value: 72 },
-      { type: 'todo', id: 'demo_2', emoji: '🪵', label: { ka: 'შეშა', en: 'Firewood' }, value: 45 },
-      { type: 'todo', id: 'demo_3', emoji: '🍞', label: { ka: 'საკვები', en: 'Food' }, value: 18 },
-      { type: 'todo', id: 'demo_todo', label: { ka: 'ეზოს გასუფთავება', en: 'Yard cleanup' },
-        children: [{ id: 'demo_t1', label: 'ტოტები', checked: true }, { id: 'demo_t2', label: 'ფოთლები', checked: false }, { id: 'demo_t3', label: 'ნაგავი', checked: false }] },
-      { type: 'todo', id: 'demo_4', emoji: '🔥', label: 'ცეცხლი', value: 100 },
-      { type: 'todo', id: 'demo_5', emoji: '🌾', label: 'მარცვალი', value: 5 },
-      { type: 'todo', id: 'demo_todo2', label: 'სავსე მთვარისთვის მზადება', children: [{ id: 'demo_u1', label: 'ა', checked: false }, { id: 'demo_u2', label: 'ბ', checked: false }] }
-    ];
-  }
 
   // ── HUD storage: local (this device only), per user + map ──
   // { active: name | null, huds: [ { name, items: [leaf id, ...] } ] }
@@ -224,7 +209,6 @@
 
   // what to show right now: { name (HUD name), bars }
   function _collect() {
-    if (_demoOn) return { name: 'ზამთრის მარაგები', bars: _demoItems().map(_barOf).filter(Boolean) };
     var st = _ensureState(), h = null, i;
     if (st.activeShared) { i = _sharedActiveIndex(st); if (i >= 0) h = _shared.list[i]; }
     else { i = _activeIndex(st); if (i >= 0) h = st.huds[i]; }
@@ -249,7 +233,8 @@
         'text-shadow:0 0 3px rgba(0,0,0,.9),0 0 1px rgba(0,0,0,.9);}' +
         '#gmHud.show{display:flex;}' +
         '.gmh-row{display:flex;align-items:center;gap:5px;height:14px;}' +
-        '.gmh-ic{width:14px;text-align:center;font-size:11px;flex-shrink:0;}' +
+        '.gmh-ic{position:relative;width:14px;text-align:center;font-size:11px;flex-shrink:0;pointer-events:auto;cursor:pointer;}' +
+        '.gmh-ic::after{content:"";position:absolute;left:-6px;right:-6px;top:-3px;bottom:-3px;}' +
         '.gmh-bar{position:relative;flex:1;height:9px;border-radius:3px;background:rgba(0,0,0,.45);overflow:hidden;}' +
         '.gmh-fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;opacity:.65;}' +
         '.gmh-pct{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:flex-end;padding-right:3px;' +
@@ -272,6 +257,8 @@
   function _row(b) {
     var row = document.createElement('div'); row.className = 'gmh-row';
     var ic = document.createElement('span'); ic.className = 'gmh-ic'; ic.textContent = b.emoji;
+    // tap the emoji = open this item in the menu (checklist -> its list, slider -> its slider)
+    ic.addEventListener('click', function (e) { if (e && e.stopPropagation) e.stopPropagation(); if (b.id && typeof window.menuOpenItem === 'function') window.menuOpenItem(b.id); });
     var bar = document.createElement('div'); bar.className = 'gmh-bar';
     var fill = document.createElement('div'); fill.className = 'gmh-fill';
     fill.style.width = b.value + '%'; fill.style.background = _color(b.value);
@@ -344,7 +331,7 @@
   }
 
   function _activate(store, idx, say) {
-    store.activate(idx); _demoOn = false; hudRefresh();
+    store.activate(idx); hudRefresh();
     var h = store.list()[idx];
     say('tok', '✓ HUD „' + h.name + '“ ჩაირთო (' + (store.shared ? 'საერთო, ' : '') + h.items.length + ' ბარი)');
   }
@@ -375,7 +362,7 @@
     if (cstore.list().length >= MAX_HUDS) { say('ter', '✗ HUD-ების ლიმიტი: ' + MAX_HUDS); return; }
     var r = await cstore.create(name);
     if (r !== true) { say('ter', '✗ ' + r.error); return; }
-    _demoOn = false; hudRefresh();
+    hudRefresh();
     say('tok', '✓ HUD „' + name + '“ შეიქმნა და ჩაირთო' + (cstore.shared ? ' (საერთო)' : ''));
     say('tdm', 'ბარის დასამატებლად გადადი სექციაში (/cd) და: ' + cmd + ' + <სახელი|id|ინდექსი>');
     if (cstore.shared && _indexIn(loc.list(), name) >= 0) say('tdm', '⚠ ამავე სახელის ლოკალური HUD ამ მოწყობილობაზე /ჰუდი <სახელი>-ზე უპირატესობს');
@@ -471,13 +458,7 @@
     args = (args || []).map(String);
     var first = args[0] || '';
     if (!args.length) { _cmdList(say, false); return; }
-    if (args.length === 1 && first === 'ტესტი') {
-      _demoOn = true; hudRefresh();
-      say('tok', '✓ HUD — სატესტო ბარები ჩაირთო (გამოსართავად: /ჰუდი გამორთვა)');
-      return;
-    }
     if (args.length === 1 && first === 'გამორთვა') {
-      _demoOn = false;
       var st = _ensureState(); st.active = null; st.activeShared = null; _save();
       hudRefresh();
       say('tok', '✓ HUD გამოირთო');
