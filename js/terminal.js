@@ -869,7 +869,7 @@ function _tmHelp() {
     ['/ჩვ',               'მენიუს კვანძის შემცველობა'],
     ['/გად [სახელი|..|/|a/b/c]', 'ნავიგაცია — ერთი ნაბიჯი ან slash-path'],
     ['/md <სახელი> [ემოჯი]', 'ახალი ქვე-სექცია + ავტო-cd (default 📁)'],
-    ['/ფოთოლი ტექსტი|ინდიკატორი [ემოჯი]|todo', 'item-ის დამატება მიმდინარე კვანძში'],
+    ['/ფოთოლი ტექსტი|todo [ემოჯი]', 'item-ის დამატება მიმდინარე კვანძში (todo ქვე-ჩეკების გარეშე = სლაიდერი)'],
     ['/წაშ <სახელი|N>',    'სექციის (სახელით) ან item-ის (ინდექსით) წაშლა'],
     ['/რედ <N>',         'item [N] — multiline რედაქტირება'],
     ['/რედ <N> <...>',   'item [N] — სწრაფი ერთხაზიანი ედიტი'],
@@ -1545,7 +1545,7 @@ function _tmItemTitles(it) {
   var out = [];
   ['ka', 'en'].forEach(function (lang) {
     var text = '';
-    if (it.segments && it.segments.length && it.type !== 'todo' && it.type !== 'progress') {
+    if (it.segments && it.segments.length && it.type !== 'todo') {
       for (var i = 0; i < it.segments.length; i++) {
         if (it.segments[i].type !== 'text') continue;
         var tx = pick(it.segments[i].value, lang);
@@ -2772,8 +2772,8 @@ function _tmMenuLs() {
   });
   items.forEach(function (it, idx) {
     var itObj = typeof it === 'string' ? { type: 'text', emoji: '•', label: it } : it;
-    if (itObj.type === 'progress') {
-      _tmL('tnf', '  [' + idx + '] ინდიკატორი: "' + (_i18n(itObj.label) || '') + '" (' + (itObj.value != null ? itObj.value : 0) + '%)');
+    if (itObj.type === 'todo' && window.menuIsSlider && window.menuIsSlider(itObj)) {
+      _tmL('tnf', '  [' + idx + '] სლაიდერი: "' + (_i18n(itObj.label) || '') + '" (' + window.menuSliderValue(itObj) + '%)');
     } else {
       var lbl = (_i18n(itObj.label) || '').replace(/\n/g, ' ');
       if (lbl.length > 60) lbl = lbl.slice(0, 60) + '…';
@@ -2893,24 +2893,6 @@ async function _tmMenuLeaf(args) {
       nta.focus();
       nta.setSelectionRange(nta.value.length, nta.value.length);
     }
-  } else if (sub === 'ინდიკატორი') {
-    var rest2  = args.slice(1);
-    var emoji2 = '📊';
-    if (rest2.length > 1 && _tmIsIconToken(rest2[rest2.length - 1])) {
-      emoji2 = rest2[rest2.length - 1];
-      rest2 = rest2.slice(0, -1);
-    }
-    var pct    = parseInt(rest2[rest2.length - 1]);
-    var hasPct = !isNaN(pct) && rest2.length > 1;
-    var label  = (hasPct ? rest2.slice(0, -1) : rest2).join(' ').trim();
-    if (!label) { _tmL('ter', 'გამოყენება: /ფოთოლი ინდიკატორი <სახელი> <%> [ემოჯი]'); return; }
-    var val = hasPct ? Math.max(0, Math.min(100, pct)) : 100;
-    if (!node.items) node.items = [];
-    var newBar = { type: 'progress', emoji: emoji2, label: label, value: val };
-    node.items.push(newBar);
-    _tmL('tok', '+ [' + (node.items.length - 1) + '] ' + emoji2 + ' ინდიკატორი დაემატა (' + val + '%)');
-    _tmDupWarn(node, label, newBar);
-    await _tmMenuSaveNode(node.id, { items_json: node.items });
   } else if (sub === 'todo') {
     var todoSub = (args[1] || '').trim();
     if (!todoSub) { _tmTodoListOpen(node, null); return; }   // bare → editor for a new nested list
@@ -2929,10 +2911,11 @@ async function _tmMenuLeaf(args) {
     _tmL('tdm', _SEP);
     _tmL('tsy', '/ფოთოლი ბრძანებები:');
     _tmL('tnf', '  ტექსტი <ტექსტი> [ემოჯი]         — ტექსტური item (default •)');
-    _tmL('tnf', '  ინდიკატორი <სახელი> <%> [ემოჯი] — progress item (default 📊)');
+    _tmL('tnf', '  todo ქვე-ჩეკების გარეშე  — სლაიდერი 0–100% (მენიუში caretaker+ ცვლის)');
     _tmL('tnf', '  todo                    — ახალი todo სია (რედაქტორი, - დონეებით)');
     _tmL('tnf', '  todo რედ <N|სახელი|id>  — todo-ს რედაქტორი (/რედ-იც)');
     _tmL('tnf', '  todo <N|სახელი|id>      — toggle; <N.K.J> ქვე-ჩეკი (მშობელი = ყველა ქვე-ჩეკი)');
+    _tmL('tnf', '  todo <N|სახელი|id> <%>% — სლაიდერის მნიშვნელობა (მაგ. წყალი 40%); სლაიდერის toggle = 0 ↔ 100');
     _tmL('tnf', '  todo ls                 — todos ხე ⬜/✅');
     _tmL('tdm', _SEP);
   }
@@ -3073,6 +3056,7 @@ function _tmTodoListOpen(node, idx) {
   if (_tmEditLang === 'en') {
     _tmL('tdm', 'EN რეჟიმი — მხოლოდ ტექსტი ითარგმნება; ხაზების რაოდენობა და "-" უცვლელია');
   } else {
+    _tmL('tdm', 'ქვე-ჩეკების გარეშე სია = სლაიდერი (0–100%, მენიუში caretaker+ ცვლის)');
     _tmL('tdm', 'ხაზი 1 — [emoji: X] (ემოჯი HUD-ისთვის) · ხაზი 2 — სიის სახელი · ქვე-ჩეკი: "- ტექსტი" · მის ქვეშ: "-- ტექსტი" (მაქს. ' + _TM_TODO_MAX_LEVEL + ' დონე, ' + _TM_TODO_MAX_NODES + ' ხაზი)');
   }
   _tmL('tdm', 'Ctrl+Enter — შენახვა · Esc — გაუქმება');
@@ -3120,8 +3104,9 @@ function _tmTodoLs(node) {
     if (!any) { any = true; _tmL('tdm', _SEP); }
     (function walk(n, path, depth) {
       var c = window.menuTodoCount(n), kids = n.children && n.children.length;
-      var st = window.menuTodoIsDone(n) ? '✅' : '⬜';
-      _tmL('tnf', '  '.repeat(depth) + '[' + path + '] ' + st + ' ' + (_tmTodoKa(n.label) || '(უსახელო)') + (kids ? '  (' + c.done + '/' + c.total + ')' : ''));
+      var isSl = depth === 0 && window.menuIsSlider && window.menuIsSlider(n);
+      var st = isSl ? '📊' : (window.menuTodoIsDone(n) ? '✅' : '⬜');
+      _tmL('tnf', '  '.repeat(depth) + '[' + path + '] ' + st + ' ' + (_tmTodoKa(n.label) || '(უსახელო)') + (kids ? '  (' + c.done + '/' + c.total + ')' : (isSl ? '  (' + window.menuSliderValue(n) + '%)' : '')));
       (n.children || []).forEach(function (ch, k) { walk(ch, path + '.' + k, depth + 1); });
     })(it, String(idx), 0);
   });
@@ -3133,6 +3118,20 @@ function _tmTodoLs(node) {
 // State goes through runtime.js (menu_todo_state) — the same store the panel reads.
 async function _tmTodoToggle(node, ref) {
   var base = String(ref).trim(), parts;
+  // "<todo> 40%" — set a slider (a todo without children) to an exact value
+  var pm = /^(.+?)\s+(\d{1,3})%$/.exec(base);
+  if (pm) {
+    var pr = _tmResolveItem(node, pm[1], 'todo');
+    if (pr.error) { _tmL('ter', pr.error); return; }
+    var pit = node.items[pr.idx];
+    if (!window.menuIsSlider || !window.menuIsSlider(pit)) { _tmL('ter', '✗ „' + _tmTodoKa(pit.label) + '“ სლაიდერი არ არის (ქვე-ჩეკებიანი სიაა)'); return; }
+    if (!pit.id) { _tmL('ter', '✗ id აკლია — ჯერ /რედ ' + pr.idx + ' და შეინახე'); return; }
+    var pv = Math.min(100, parseInt(pm[2], 10));
+    var pres = await window.menuSliderSet(pit.id, pv);
+    _tmL('tok', '[' + pr.idx + '] ' + pv + '% განახლდა');
+    if (pres === 'queued') _tmL('tdm', '⚠ ოფლაინ/ქსელის შეცდომა — queue-შია (' + window.pendingCount() + ')');
+    return;
+  }
   if (/^\d+(?:\.\d+)*$/.test(base)) parts = base.split('.').map(Number);
   else {
     // a todo's name or id, optionally followed by a child path ".K.J"
@@ -3153,6 +3152,14 @@ async function _tmTodoToggle(node, ref) {
   for (var k = 1; k < parts.length; k++) {
     target = target.children && target.children[parts[k]];
     if (!target) { _tmL('ter', 'todo [' + parts.slice(0, k + 1).join('.') + '] ვერ მოიძებნა — /ფოთოლი todo ls'); return; }
+  }
+  if (parts.length === 1 && window.menuIsSlider && window.menuIsSlider(target)) {   // slider: toggle = 0 <-> 100
+    if (!target.id) { _tmL('ter', '✗ id აკლია — ჯერ /რედ ' + parts[0] + ' და შეინახე'); return; }
+    var sNext = window.menuSliderValue(target) >= 100 ? 0 : 100;
+    var sres = await window.menuSliderSet(target.id, sNext);
+    _tmL('tok', '[' + parts[0] + '] ' + sNext + '% განახლდა');
+    if (sres === 'queued') _tmL('tdm', '⚠ ოფლაინ/ქსელის შეცდომა — queue-შია (' + window.pendingCount() + ')');
+    return;
   }
   if (typeof window.menuTodoSetMany !== 'function') { _tmL('ter', '✗ menuTodoSetMany ვერ მოიძებნა (runtime.js?)'); return; }
   var ids = window.menuTodoLeafIds(target);
@@ -3205,8 +3212,6 @@ async function _tmMenuRm(args) {
 // Edit an existing item in place by index.
 //   /edit <N>                          — multiline editor (Ctrl+Enter — შენახვა · Esc — გაუქმება)
 //   /edit <N> <ახალი ტექსტი>           — text item: ცვლის label-ს მთლიანად, inline
-//   /edit <N> <ახალი ტექსტი> <%>       — progress item: ცვლის label-სა და value-ს ერთად, inline
-//   /edit <N> <%>                      — progress item: ცვლის მხოლოდ value-ს, label ხელუხლებელია
 async function _tmMenuEdit(args) {
   var node = _tmMenuCwdNode();
   if (!node) { _tmL('ter', 'root-ში items არ არსებობს'); return; }
@@ -3224,14 +3229,7 @@ async function _tmMenuEdit(args) {
     _tmMenuEditOpen(node, idx, itObj); return;
   }
 
-  if (itObj.type === 'progress') {
-    var lastIsNum = /^\d+$/.test(rest[rest.length - 1]);
-    var label = (lastIsNum ? rest.slice(0, -1) : rest).join(' ').trim();
-    if (lastIsNum) itObj.value = Math.max(0, Math.min(100, parseInt(rest[rest.length - 1])));
-    if (label) itObj.label = label;
-  } else {
-    itObj.label = rest.join(' ').trim();
-  }
+  itObj.label = rest.join(' ').trim();
 
   node.items[idx] = itObj;
   _tmL('tok', '✎ [' + idx + '] განახლდა');
@@ -3279,17 +3277,14 @@ function _tmMediaCleanupOnCancel() {
 
 // Serialize an item into editable plain text for the multiline textarea.
 // Line 1 is a tagged "[emoji: X]" line so it can't be confused with real
-// label content — progress items also keep their value on a trailing "NN%" line.
+// label content.
 // For text items carrying segments[], each files-segment is rehydrated into
 // _tmEditMediaBuf and represented inline as a [[მედია:N]] token, so re-editing
 // an already-illustrated item doesn't lose its images.
 function _tmMenuItemToEditText(itObj) {
-  var emoji = itObj.emoji || (itObj.type === 'progress' ? '📊' : '•');
+  var emoji = itObj.emoji || '•';
   var head  = '[emoji: ' + emoji + ']';
   var lbl   = _i18n(itObj.label);
-  if (itObj.type === 'progress') {
-    return head + '\n' + lbl + '\n\n' + (itObj.value != null ? itObj.value : 0) + '%';
-  }
   if (itObj.type === 'text' && itObj.segments && itObj.segments.length) {
     var body = itObj.segments.map(function (seg) {
       if (seg.type === 'files') {
@@ -3340,20 +3335,10 @@ function _tmParseTextSegments(rest) {
 // guessing — nothing gets silently swallowed into the label.
 function _tmParseMenuEditText(text, type, fallbackEmoji) {
   var lines = text.split('\n');
-  var emoji = fallbackEmoji || (type === 'progress' ? '📊' : '•');
+  var emoji = fallbackEmoji || '•';
   var tagMatch = /^\[emoji:\s*(.*)\]$/.exec((lines[0] || '').trim());
   if (tagMatch) { emoji = tagMatch[1].trim() || emoji; lines.shift(); }
   var rest = lines;
-
-  if (type === 'progress') {
-    while (rest.length && rest[rest.length - 1].trim() === '') rest.pop();
-    var last  = rest.length ? rest[rest.length - 1].trim() : '';
-    var m     = /^(\d{1,3})%?$/.exec(last);
-    var value = null, labelLines = rest;
-    if (m) { value = Math.max(0, Math.min(100, parseInt(m[1]))); labelLines = rest.slice(0, -1); }
-    while (labelLines.length && labelLines[labelLines.length - 1].trim() === '') labelLines.pop();
-    return { emoji: emoji, label: labelLines.join('\n').trim(), value: value };
-  }
 
   if (type === 'text') {
     var ts = _tmParseTextSegments(rest);
@@ -3561,7 +3546,7 @@ async function _tmSaveMenuItem(text) {
   }
 
   var existing      = node.items[idx];
-  var currentEmoji  = (existing && typeof existing === 'object' && existing.emoji) ? existing.emoji : (ctx.type === 'progress' ? '📊' : '•');
+  var currentEmoji  = (existing && typeof existing === 'object' && existing.emoji) ? existing.emoji : '•';
   var parsed        = _tmParseMenuEditText(text, ctx.type, currentEmoji);
   var itObj         = typeof existing === 'string' ? { type: ctx.type } : existing;
 
@@ -3599,7 +3584,6 @@ async function _tmSaveMenuItem(text) {
     }
     else delete itObj.segments; // nothing left but plain text — label-only fallback
   }
-  if (ctx.type === 'progress' && parsed.value != null) itObj.value = parsed.value;
   node.items[idx] = itObj;
   _tmDupWarn(node, _tmItemTitles(itObj)[0] || '', itObj);
 
@@ -3637,7 +3621,7 @@ function _tmEnsureItemIds(items) {
   items.forEach(function (it) { if (it && typeof it === 'object' && it.id) used[it.id] = true; });
   items.forEach(function (it) {
     if (!it || typeof it !== 'object' || it.id) return;
-    var p = it.type === 'progress' ? 'bar' : (it.type === 'todo' ? 'todo' : 'text'), id;
+    var p = it.type === 'todo' ? 'todo' : 'text', id;
     do { id = p + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); } while (used[id]);
     used[id] = true; it.id = id;
   });

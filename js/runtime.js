@@ -1386,10 +1386,13 @@ function toggleMenu() {
 // ── leaf items as separate titled rows ──
 // A leaf's items (text / todo) are listed by TITLE (= the item's first line, or the
 // todo list's name) and each opens alone; the title joins the title bar next to the
-// section name. Indicators (progress) are NOT split out: they stay inline, and a
-// leaf that has only indicators keeps the old overlay.
-function _gmNormItem(item) { return typeof item === 'string' ? { type: 'text', emoji: '•', label: item } : item; }
-function _gmIsTitled(it) { return it.type !== 'progress'; }
+// section name. A todo WITHOUT children is a slider (0..100%): its row shows the bar
+// and tapping it opens the slider view. (Legacy "progress" items are read as sliders.)
+function _gmNormItem(item) {
+  if (typeof item === 'string') return { type: 'text', emoji: '•', label: item };
+  return (item && item.type === 'progress') ? Object.assign({}, item, { type: 'todo' }) : item;   // legacy indicator -> slider
+}
+function _gmIsTitled(it) { return true; }   // every item type is listed by title now (indicators became sliders)
 // breadcrumb entry for a node we have entered; `go` (optional) overrides the default "show its children panel"
 function _gmPathEntry(node) { return { title: _i18n(node.title) || '', icon: node.icon || '', nodes: node.children || [], node: node }; }
 function _gmPlainTitle(line) {
@@ -1407,6 +1410,7 @@ function _gmSplitFirst(text) {
 function _gmItemInfo(it) {
   if (it.type === 'todo') {
     const kids = !!(it.children && it.children.length);
+    if (!kids) return { icon: it.emoji || '📊', title: _gmPlainTitle(_i18n(it.label) || '') || '(უსახელო)', meta: _gmSliderValue(it) + '%', bodyItem: it };
     const c = kids ? _gmTodoCount(it) : null;
     return { icon: _gmTodoIsDone(it) ? '✅' : '⬜', title: _gmPlainTitle(_i18n(it.label) || '') || '(უსახელო)',
              meta: kids ? c.done + '/' + c.total : '', bodyItem: it };
@@ -1463,19 +1467,19 @@ function _gmShowItem(it, info, crumbPath) {
   wrap.appendChild(it.type === 'todo' ? _gmRenderItem(it, { skipRoot: true }) : _gmRenderItem(info.bodyItem, { noEmoji: true }));
   panel.appendChild(wrap);
 }
-// Indicator as a panel row: same icon column, title font and left edge as every other row
-// (icon · title · bar · % · arrow-width spacer so the right edges line up too).
+// Slider as a panel row: same icon column, title font and left edge as every other row
+// (icon · title · bar · % · arrow so the right edges line up too). Tapping it opens the slider view.
 function _gmProgressRow(it) {
-  const v = Math.max(0, Math.min(100, it.value || 0));
-  const color = v > 60 ? '#4ade80' : v > 30 ? '#facc15' : '#f87171';
+  const v = _gmSliderValue(it);
+  const color = _gmBarColor(v);
   const el = document.createElement('div'); el.className = 'gm-panel-item gm-item-row gm-pi-bar-row';
   const icon  = document.createElement('span'); icon.className = 'gm-pi-icon'; icon.textContent = it.emoji || '📊';
-  const title = document.createElement('span'); title.className = 'gm-pi-title'; title.textContent = _i18n(it.label) || '';
+  const title = document.createElement('span'); title.className = 'gm-pi-title'; title.textContent = _gmPlainTitle(_i18n(it.label) || '');
   const bar = document.createElement('div'); bar.className = 'gm-pi-bar';
   const fill = document.createElement('div'); fill.className = 'gm-pi-bar-fill'; fill.style.width = v + '%'; fill.style.background = color;
   bar.appendChild(fill);
   const pct = document.createElement('span'); pct.className = 'gm-pi-pct'; pct.textContent = v + '%';
-  const sp = document.createElement('span'); sp.className = 'gm-pi-arrow'; sp.textContent = '›'; sp.style.visibility = 'hidden';
+  const sp = document.createElement('span'); sp.className = 'gm-pi-arrow'; sp.textContent = '›';
   el.appendChild(icon); el.appendChild(title); el.appendChild(bar); el.appendChild(pct); el.appendChild(sp);
   return el;
 }
@@ -1483,8 +1487,12 @@ function _gmProgressRow(it) {
 function _gmItemRows(container, node, myPath) {
   (node.items || []).forEach(item => {
     const it = _gmNormItem(item);
-    if (!_gmIsTitled(it)) { container.appendChild(_gmProgressRow(it)); return; }
     const info = _gmItemInfo(it);
+    if (_gmIsSlider(it)) {   // slider: the familiar bar row; tap opens the slider view
+      const sr = _gmProgressRow(it);
+      sr.onclick = () => _gmShowItem(it, info, [...myPath, { title: info.title, icon: info.icon }]);
+      container.appendChild(sr); return;
+    }
     const el = document.createElement('div'); el.className = 'gm-panel-item gm-item-row';
     const icon  = document.createElement('span'); icon.className = 'gm-pi-icon'; icon.textContent = info.icon;
     const title = document.createElement('span'); title.className = 'gm-pi-title'; title.textContent = info.title;
@@ -1727,32 +1735,11 @@ function _gmLightboxOpen(images, idx) {
 // skipRoot (todo list: the list title is in the title bar, show only its checks).
 function _gmRenderItem(itObj, opts) {
   opts = opts || {};
-  if (itObj.type === 'progress') {
-    const v = Math.max(0, Math.min(100, itObj.value || 0));
-    const color = v > 60 ? '#4ade80' : v > 30 ? '#facc15' : '#f87171';
-    const row = document.createElement('div'); row.className = 'gm-progress-row';
-    const pfx = itObj.emoji ? itObj.emoji + ' ' : '';
-    row.innerHTML = '<span class="gm-progress-label">' + pfx + _i18n(itObj.label) + '</span><div class="gm-bar"><div class="gm-bar-fill" style="width:' + v + '%;background:' + color + ';"></div></div><span class="gm-bar-pct">' + v + '%</span>';
-    return row;
-  } else if (itObj.type === 'todo' && itObj.children && itObj.children.length) {
+  if (itObj.type === 'progress') itObj = Object.assign({}, itObj, { type: 'todo' });   // legacy indicator -> slider
+  if (itObj.type === 'todo' && itObj.children && itObj.children.length) {
     return _gmBuildTodoTree(itObj, { skipRoot: !!opts.skipRoot });
   } else if (itObj.type === 'todo') {
-    const checked = _gmTodoState.has(itObj.id) ? _gmTodoState.get(itObj.id) : !!itObj.checked;
-    const row = document.createElement('div'); row.className = 'gm-todo-row' + (checked ? ' checked' : '');
-    const box = document.createElement('span'); box.className = 'gm-todo-box'; box.textContent = checked ? '✅' : '⬜';
-    const lbl = document.createElement('span'); lbl.className = 'gm-todo-label';
-    lbl.innerHTML = parseLinks(_i18n(itObj.label) || '');
-    row.appendChild(box); row.appendChild(lbl);
-    row.onclick = (e) => {
-      if (e.target.closest('a')) return;
-      const next = !(_gmTodoState.has(itObj.id) ? _gmTodoState.get(itObj.id) : !!itObj.checked);
-      _gmTodoState.set(itObj.id, next);
-      row.classList.toggle('checked', next);
-      box.textContent = next ? '✅' : '⬜';
-      _gmSaveTodoStateSafe(itObj.id, next);
-      if (window.hudRefresh) window.hudRefresh();
-    };
-    return row;
+    return _gmSliderView(itObj, opts);   // a todo without children is a slider
   } else {
     const d = document.createElement('div'); d.className = 'gm-item';
     if (itObj.segments && itObj.segments.length) {
@@ -3220,6 +3207,7 @@ function _applyDlgToTarget(tgt, row) {
 // Load all overrides for this map on startup
 // ── menu todo checkbox state (persisted in Supabase, table: menu_todo_state) ──
 var _gmTodoState = new Map(); // todo_id -> checked (bool)
+var _gmValueState = new Map(); // slider id -> 0..100 (menu_todo_state.value; see todo-value-migration.sql)
 
 async function loadTodoState() {
   try {
@@ -3229,11 +3217,14 @@ async function loadTodoState() {
     );
     if (!r.ok) return;
     var rows = await r.json();
-    rows.forEach(function(row) { _gmTodoState.set(row.todo_id, !!row.checked); });
+    rows.forEach(function(row) {
+      _gmTodoState.set(row.todo_id, !!row.checked);
+      if (row.value != null) _gmValueState.set(row.todo_id, row.value);
+    });
   } catch (e) {}
 }
 
-async function _gmSaveTodoState(todoId, checked) {
+async function _gmSaveTodoState(todoId, checked, value) {   // value (optional): slider 0..100
   try {
     const r = await fetch(SUPA_URL + '/rest/v1/menu_todo_state?on_conflict=map_id,todo_id', {
       method: 'POST',
@@ -3241,12 +3232,12 @@ async function _gmSaveTodoState(todoId, checked) {
         'Content-Type': 'application/json',
         'Prefer': 'resolution=merge-duplicates,return=minimal'
       }, _authHeaders()),
-      body: JSON.stringify({
+      body: JSON.stringify(Object.assign({
         map_id: _MAP_ID,
         todo_id: todoId,
         checked: checked,
         updated_at: new Date().toISOString()
-      })
+      }, value != null ? { value: value } : {}))
     });
     if (r.ok) return true;
     const errBody = r.text ? await r.text().catch(function () { return ''; }) : '';
@@ -3272,10 +3263,104 @@ async function _gmSaveTodoStateSafe(todoId, checked) {
   }
 }
 
+// ── slider = a todo WITHOUT children: one value 0..100, changed by caretaker+ ──
+// The value lives in menu_todo_state.value (one row per id, like todo checks — editing it never rewrites the
+// menu node). `checked` follows it (value >= 100) so counts / old code keep working. Legacy "progress" items
+// fall back to their stored items_json value until the first change.
+function _gmClampPct(x) { return Math.max(0, Math.min(100, Math.round(Number(x) || 0))); }
+function _gmBarColor(v) { return v > 60 ? '#4ade80' : v > 30 ? '#facc15' : '#f87171'; }
+function _gmIsSlider(it) { return !!it && (it.type === 'todo' || it.type === 'progress') && !(it.children && it.children.length); }
+function _gmSliderValue(it) {
+  if (it && it.id && _gmValueState.has(it.id)) return _gmClampPct(_gmValueState.get(it.id));
+  if (it && it.id && _gmTodoState.get(it.id)) return 100;   // an old single checkbox that was checked
+  return _gmClampPct(it && it.value);
+}
+function _gmSliderLocal(id, v) {
+  _gmValueState.set(id, v); _gmTodoState.set(id, v >= 100);
+  if (window.hudRefresh) window.hudRefresh();
+}
+// persist (offline-safe, same queue as todo checks). true | 'queued'
+async function _gmSaveTodoValueSafe(id, v) {
+  const q = function () { window.pendingAdd('todo', id, 'todo item', { todoId: id, checked: v >= 100, value: v }); return 'queued'; };
+  if (!navigator.onLine) return q();
+  let res;
+  try { res = await _gmSaveTodoState(id, v >= 100, v); } catch (e) { res = { ok: false }; }
+  return res === true ? true : q();
+}
+function _gmSetSliderValue(id, value) {   // local apply + immediate save (terminal / macros)
+  const v = _gmClampPct(value);
+  _gmSliderLocal(id, v);
+  return _gmSaveTodoValueSafe(id, v);
+}
+function _gmEnsureSliderStyles() {
+  if (document.getElementById('gmSliderStyles')) return;
+  const st = document.createElement('style'); st.id = 'gmSliderStyles';
+  st.textContent =
+    '.gm-slider-view{padding:10px 4px;}' +
+    '.gm-sl-title{font-size:15px;margin-bottom:8px;}' +
+    '.gm-sl-pct{font-size:34px;font-weight:600;text-align:center;margin:6px 0;}' +
+    '.gm-sl-bar{height:14px;border-radius:7px;background:rgba(128,128,128,.25);overflow:hidden;margin:6px 0 14px;}' +
+    '.gm-sl-fill{height:100%;border-radius:7px;transition:width .12s;}' +
+    '.gm-sl-range{width:100%;margin:4px 0 12px;}' +
+    '.gm-sl-btns{display:flex;gap:8px;justify-content:center;}' +
+    '.gm-sl-btn{flex:1;max-width:80px;padding:9px 0;border-radius:8px;border:1px solid rgba(128,128,128,.4);background:rgba(128,128,128,.12);color:inherit;font-size:14px;}' +
+    '.gm-sl-note{font-size:11px;opacity:.65;text-align:center;margin-top:8px;min-height:14px;}';
+  document.head.appendChild(st);
+}
+// the opened view of a slider. opts.skipRoot: the title is already in the title bar.
+function _gmSliderView(itObj, opts) {
+  opts = opts || {};
+  _gmEnsureSliderStyles();
+  const id = itObj.id;
+  const can = !!id && typeof window._tierAtLeast === 'function' && window._tierAtLeast('caretaker');
+  let v = _gmSliderValue(itObj), timer = null;
+  const root = document.createElement('div'); root.className = 'gm-slider-view';
+  if (!opts.skipRoot) {
+    const t = document.createElement('div'); t.className = 'gm-sl-title';
+    t.textContent = (itObj.emoji || '📊') + ' ' + _gmPlainTitle(_i18n(itObj.label) || '');
+    root.appendChild(t);
+  }
+  const pct = document.createElement('div'); pct.className = 'gm-sl-pct';
+  const bar = document.createElement('div'); bar.className = 'gm-sl-bar';
+  const fill = document.createElement('div'); fill.className = 'gm-sl-fill';
+  bar.appendChild(fill); root.appendChild(pct); root.appendChild(bar);
+  const note = document.createElement('div'); note.className = 'gm-sl-note';
+  const paint = function () { pct.textContent = v + '%'; fill.style.width = v + '%'; fill.style.background = _gmBarColor(v); };
+  paint();
+  if (!can) {
+    note.textContent = id ? 'მნიშვნელობას caretaker+ ცვლის' : 'id აკლია — /რედ-ით ერთხელ შეინახე';
+    root.appendChild(note); return root;
+  }
+  const range = document.createElement('input');
+  range.type = 'range'; range.min = '0'; range.max = '100'; range.step = '1'; range.value = String(v); range.className = 'gm-sl-range';
+  // local state follows every move; the save is queued once the finger / taps stop (350 ms)
+  const queue = function () {
+    clearTimeout(timer);
+    timer = setTimeout(async function () {
+      const res = await _gmSaveTodoValueSafe(id, v);
+      note.textContent = res === true ? '✓ შეინახა' : '⚠ queue-შია (ოფლაინ/ქსელის შეცდომა)';
+    }, 350);
+  };
+  range.addEventListener('input', function () { v = _gmClampPct(range.value); paint(); _gmSliderLocal(id, v); });
+  range.addEventListener('change', function () { v = _gmClampPct(range.value); paint(); _gmSliderLocal(id, v); queue(); });
+  root.appendChild(range);
+  const btns = document.createElement('div'); btns.className = 'gm-sl-btns';
+  [-10, -5, 5, 10].forEach(function (d) {
+    const b = document.createElement('button'); b.className = 'gm-sl-btn'; b.textContent = (d > 0 ? '+' : '−') + Math.abs(d) + '%';
+    b.onclick = function () { v = _gmClampPct(v + d); range.value = String(v); paint(); _gmSliderLocal(id, v); queue(); };
+    btns.appendChild(b);
+  });
+  root.appendChild(btns); root.appendChild(note);
+  return root;
+}
+window.menuIsSlider = _gmIsSlider;
+window.menuSliderValue = _gmSliderValue;
+window.menuSliderSet = _gmSetSliderValue;
+
 // ── nested todo lists (children live INSIDE one todo item; unrelated to the menu tree) ──
 // Only leaf state is stored (menu_todo_state, one row per leaf id). A parent's
 // state is derived: done when every descendant leaf is done. A todo without
-// children is its own leaf, so old standalone todos behave exactly as before.
+// children is a slider (see above); its checked flag is value >= 100.
 function _gmTodoLeaves(n) {
   var out = [];
   (function walk(x) {
@@ -4095,7 +4180,7 @@ async function _pendingFlushOne(entry) {
   if (entry.kind === 'dlg') return await window.dlgOverrideSave(entry.payload.title, entry.payload.nodes, entry.payload.dsl, entry.payload.titleEn);
   if (entry.kind === 'menuItem') return await window.menuOverrideSave(entry.payload.nodeId, entry.payload.fields);
   if (entry.kind === 'legend') return await window.legendOverrideSave(entry.payload.textKa, entry.payload.textEn);
-  if (entry.kind === 'todo') return await _gmSaveTodoState(entry.payload.todoId, entry.payload.checked);
+  if (entry.kind === 'todo') return await _gmSaveTodoState(entry.payload.todoId, entry.payload.checked, entry.payload.value);
   return { ok: false, status: 0, msg: 'უცნობი queue ტიპი: ' + entry.kind };
 }
 

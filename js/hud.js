@@ -15,21 +15,21 @@
   // ── bar abstraction: HUD never looks at item types itself ──
   // Returns null if the item cannot be shown as a bar, else
   // { id, label, emoji, value (0..100), derived, kind: 'resource' | 'mission' }.
-  // kind is automatic: indicator leaves are resources, todo leaves are missions.
+  // kind is automatic: a todo without children (slider) is a resource, a todo with children (checklist) is a mission.
   function _barOf(item) {
     if (!item || typeof item !== 'object') return null;
     var i18n = typeof window._i18n === 'function' ? window._i18n : function (x) { return x == null ? '' : (typeof x === 'string' ? x : (x.ka || x.en || '')); };
-    if (item.type === 'progress') {
-      return { id: item.id, label: i18n(item.label), emoji: item.emoji || '📊', value: _clamp(item.value), derived: false, kind: 'resource' };
-    }
-    if (item.type === 'todo') {
-      // top-level todo title only; value = checked leaves / all leaves (runtime.js todo state)
+    if (item.type !== 'todo' && item.type !== 'progress') return null;   // 'progress' = legacy indicator, read like a slider
+    if (item.children && item.children.length) {
+      // checklist = mission: value = checked leaves / all leaves (runtime.js todo state)
       if (typeof window.menuTodoCount !== 'function') return null;
       var c = window.menuTodoCount(item);
       var v = c.total > 0 ? Math.round(c.done / c.total * 100) : 0;
       return { id: item.id, label: i18n(item.label), emoji: item.emoji || '📋', value: _clamp(v), derived: true, kind: 'mission' };
     }
-    return null;
+    // no children = slider = resource: live value from runtime.js (falls back to the stored value)
+    var sv = typeof window.menuSliderValue === 'function' ? window.menuSliderValue(item) : item.value;
+    return { id: item.id, label: i18n(item.label), emoji: item.emoji || '📊', value: _clamp(sv), derived: false, kind: 'resource' };
   }
 
   function _clamp(v) { return Math.max(0, Math.min(100, Math.round(Number(v) || 0))); }
@@ -38,13 +38,13 @@
   // temporary demo items (step A only) — they go through _barOf like real ones
   function _demoItems() {
     return [
-      { type: 'progress', id: 'demo_1', emoji: '💧', label: { ka: 'წყალი', en: 'Water' }, value: 72 },
-      { type: 'progress', id: 'demo_2', emoji: '🪵', label: { ka: 'შეშა', en: 'Firewood' }, value: 45 },
-      { type: 'progress', id: 'demo_3', emoji: '🍞', label: { ka: 'საკვები', en: 'Food' }, value: 18 },
+      { type: 'todo', id: 'demo_1', emoji: '💧', label: { ka: 'წყალი', en: 'Water' }, value: 72 },
+      { type: 'todo', id: 'demo_2', emoji: '🪵', label: { ka: 'შეშა', en: 'Firewood' }, value: 45 },
+      { type: 'todo', id: 'demo_3', emoji: '🍞', label: { ka: 'საკვები', en: 'Food' }, value: 18 },
       { type: 'todo', id: 'demo_todo', label: { ka: 'ეზოს გასუფთავება', en: 'Yard cleanup' },
         children: [{ id: 'demo_t1', label: 'ტოტები', checked: true }, { id: 'demo_t2', label: 'ფოთლები', checked: false }, { id: 'demo_t3', label: 'ნაგავი', checked: false }] },
-      { type: 'progress', id: 'demo_4', emoji: '🔥', label: 'ცეცხლი', value: 100 },
-      { type: 'progress', id: 'demo_5', emoji: '🌾', label: 'მარცვალი', value: 5 },
+      { type: 'todo', id: 'demo_4', emoji: '🔥', label: 'ცეცხლი', value: 100 },
+      { type: 'todo', id: 'demo_5', emoji: '🌾', label: 'მარცვალი', value: 5 },
       { type: 'todo', id: 'demo_todo2', label: 'სავსე მთვარისთვის მზადება', children: [{ id: 'demo_u1', label: 'ა', checked: false }, { id: 'demo_u2', label: 'ბ', checked: false }] }
     ];
   }
