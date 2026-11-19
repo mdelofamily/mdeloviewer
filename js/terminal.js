@@ -1781,7 +1781,6 @@ function _tmAreaTarget(argsArr) {
   if (typeof window.areaOverrideSaveMany !== 'function') { _tmL('ter', '✗ areaOverrideSaveMany ვერ მოიძებნა (runtime.js?)'); return null; }
   return f;
 }
-function _tmAreaBox(h) { return '(' + h.x1 + ',' + h.y1 + ')–(' + h.x2 + ',' + h.y2 + ')'; }
 function _tmAreaSaveErr(res) {
   return '✗ ვერ შეინახა' + (res && res.status ? ' (' + res.status + ')' : '') + (res && res.msg ? ': ' + res.msg : '');
 }
