@@ -1392,6 +1392,7 @@ function _gmNormItem(item) {
   if (typeof item === 'string') return { type: 'text', emoji: '•', label: item };
   return (item && item.type === 'progress') ? Object.assign({}, item, { type: 'todo' }) : item;   // legacy indicator -> slider
 }
+function _gmIsTitled(it) { return true; }   // every item type is listed by title now (indicators became sliders)
 // breadcrumb entry for a node we have entered; `go` (optional) overrides the default "show its children panel"
 function _gmPathEntry(node) { return { title: _i18n(node.title) || '', icon: node.icon || '', nodes: node.children || [], node: node }; }
 function _gmPlainTitle(line) {
@@ -1510,12 +1511,13 @@ function _gmShowItems(node, parentNodes, parentPath) {
   _gmDrawBc(myPath);
   _gmItemRows(panel, node, myPath);
 }
-// Entry point for a node that has items: one item (or a deep-linked item index) → that item directly;
-// otherwise the list of titles. A node without items opens the (empty) overlay.
+// Entry point for a node that has items: indicators-only → old overlay; one item (or a deep-linked
+// item index) → that item directly; otherwise the list of titles.
 function _gmOpenLeaf(node, parentNodes, parentPath, standalone, itemIdx) {
   const items = (node.items || []).map(_gmNormItem);
-  if (!items.length) { _gmOpenOverlay(node, parentNodes, parentPath, standalone); return; }
-  const direct = (itemIdx != null && items[itemIdx]) ? items[itemIdx] : (items.length === 1 ? items[0] : null);
+  if (!items.some(_gmIsTitled)) { _gmOpenOverlay(node, parentNodes, parentPath, standalone); return; }
+  const direct = (itemIdx != null && items[itemIdx] && _gmIsTitled(items[itemIdx])) ? items[itemIdx]
+               : (items.length === 1 ? items[0] : null);
   if (!direct) { _gmShowItems(node, parentNodes, parentPath); return; }
   const entry = _gmPathEntry(node);
   entry.go = () => items.length === 1 ? _gmShowPanel(parentNodes, parentPath) : _gmShowItems(node, parentNodes, parentPath);
@@ -1524,7 +1526,7 @@ function _gmOpenLeaf(node, parentNodes, parentPath, standalone, itemIdx) {
 }
 
 /* path = [{title, icon?, nodes, node}] — each entry is a node already entered; `nodes` = its children array (siblings shown at that level).
-   Root level is path = []. A section that also has items shows them after its sub-sections. */
+   Root level is path = []. A section that also has titled items shows them after its sub-sections. */
 function _gmShowPanel(nodes, path) {
   const panel = document.getElementById('gmPanel');
   panel.innerHTML = '';
@@ -1532,17 +1534,26 @@ function _gmShowPanel(nodes, path) {
   nodes.forEach(node => {
     const hasChildren = node.children && node.children.length > 0;
     const hasItems    = node.items && node.items.length > 0;
+    const titled      = hasItems && node.items.some(it => _gmIsTitled(_gmNormItem(it)));
     const el = document.createElement('div');
     el.className = 'gm-panel-item' + (hasItems && !hasChildren ? ' has-items' : '');
     const icon  = document.createElement('span'); icon.className = 'gm-pi-icon'; icon.textContent = node.icon || '📁';
     const title = document.createElement('span'); title.className = 'gm-pi-title'; title.textContent = _i18n(node.title) || '';
     el.appendChild(icon); el.appendChild(title);
-    if (hasChildren) {
+    if (hasChildren && hasItems && !titled) {
+      // sub-sections + indicators only: the 📄 button opens the indicators (unchanged)
+      const txtBtn = document.createElement('span'); txtBtn.className = 'gm-pi-textbtn'; txtBtn.textContent = '📄';
+      txtBtn.onclick = (e) => { e.stopPropagation(); _gmOpenOverlay(node, nodes, path); };
+      el.appendChild(txtBtn);
+      const arr = document.createElement('span'); arr.className = 'gm-pi-arrow'; arr.textContent = '›';
+      el.appendChild(arr);
+      el.onclick = () => _gmShowPanel(node.children, [...path, _gmPathEntry(node)]);
+    } else if (hasChildren) {
       const arr = document.createElement('span'); arr.className = 'gm-pi-arrow'; arr.textContent = '›';
       el.appendChild(arr);
       el.onclick = () => _gmShowPanel(node.children, [...path, _gmPathEntry(node)]);
     } else if (hasItems) {
-      const arr = document.createElement('span'); arr.className = 'gm-pi-arrow'; arr.textContent = '›';
+      const arr = document.createElement('span'); arr.className = 'gm-pi-arrow'; arr.textContent = titled ? '›' : '↗';
       el.appendChild(arr);
       el.onclick = () => _gmOpenLeaf(node, nodes, path);
     } else {
@@ -1552,7 +1563,7 @@ function _gmShowPanel(nodes, path) {
     panel.appendChild(el);
   });
   const owner = path.length ? path[path.length - 1].node : null;
-  if (owner && owner.children && owner.children.length && owner.items && owner.items.length) {
+  if (owner && owner.children && owner.children.length && owner.items && owner.items.some(it => _gmIsTitled(_gmNormItem(it)))) {
     _gmItemRows(panel, owner, path);
   }
 }
@@ -3234,6 +3245,24 @@ async function _gmSaveTodoState(todoId, checked, value) {   // value (optional):
   } catch (e) { return { ok: false, status: 0, msg: e.message }; }
 }
 
+// Offline-safe wrapper — the todo-checkbox click handler in _gmOpenOverlay
+// already applies the toggle to _gmTodoState (and the DOM) before calling
+// this, so there's nothing extra to "apply locally" here; only the
+// persistence step needs guarding, same pattern as _tmMenuSaveNode in
+// terminal.js.
+async function _gmSaveTodoStateSafe(todoId, checked) {
+  if (!navigator.onLine) {
+    window.pendingAdd('todo', todoId, 'todo item', { todoId: todoId, checked: checked });
+    return;
+  }
+  var res;
+  try { res = await _gmSaveTodoState(todoId, checked); }
+  catch (e) { res = { ok: false, status: 0, msg: e.message }; }
+  if (res !== true) {
+    window.pendingAdd('todo', todoId, 'todo item', { todoId: todoId, checked: checked });
+  }
+}
+
 // ── slider = a todo WITHOUT children: one value 0..100, changed by caretaker+ ──
 // The value lives in menu_todo_state.value (one row per id, like todo checks — editing it never rewrites the
 // menu node). `checked` follows it (value >= 100) so counts / old code keep working. Legacy "progress" items
@@ -3248,7 +3277,7 @@ function _gmSliderValue(it) {
 }
 function _gmSliderLocal(id, v) {
   _gmValueState.set(id, v); _gmTodoState.set(id, v >= 100);
-  if (window.hudRefreshSoon) window.hudRefreshSoon(); else if (window.hudRefresh) window.hudRefresh();   // a drag fires many events: one redraw per frame
+  if (window.hudRefresh) window.hudRefresh();
 }
 // persist (offline-safe, same queue as todo checks). true | 'queued'
 async function _gmSaveTodoValueSafe(id, v) {
