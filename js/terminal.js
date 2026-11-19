@@ -1864,7 +1864,7 @@ function _tmAreaEdit(argsArr) {
 //   · known tiles only (_TM_FILL_TILES) and the tile must exist in data.js dualTiles
 //   · a NOT-yet-active patch may not overlap an ACTIVE patch of a different name
 //   · there is no "remove fill" for a single patch: delete the whole area (/არე წაშ) and redraw
-var _TM_FILL_TILES = ['მოცელილი'];   // one tile so far; every future tile gets its own lifetimes
+var _TM_FILL_TILES = ['მოცელილი', 'მულჩი'];   // every tile must exist in data.js dualTiles (never placed on the map from the editor); the lifetime is given per command
 var _TM_FILL_MAX_DAYS = 365;
 
 // args = [name…, 'შევსება', tile…, 'ვადა', days] → { nameArgs, tile, days } | null
