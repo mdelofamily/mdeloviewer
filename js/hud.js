@@ -41,10 +41,6 @@
   var _state = null, _stateKey = null;
 
   function _norm(s) { return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim(); }
-  function _txt(x) {
-    if (typeof window._i18n === 'function') return window._i18n(x);
-    return typeof x === 'string' ? x : (x && (x.ka || x.en)) || '';
-  }
   function _key() {
     var uid = typeof window.myUserId === 'function' ? window.myUserId() : null;
     return 'mdelo_huds_' + (uid || 'anon') + '_' + ((window._CFG && window._CFG.title) || '');
@@ -292,6 +288,15 @@
     el.classList.add('show');
   }
 
+  // high-frequency callers (a slider drag fires many events per second): at most one redraw per frame
+  var _soonPending = false;
+  function hudRefreshSoon() {
+    if (_soonPending) return;
+    _soonPending = true;
+    var run = function () { _soonPending = false; hudRefresh(); };
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(run); else setTimeout(run, 16);
+  }
+
   // ── /ჰუდი (local + view of shared) and /საერთოჰუდი (shared, resident+) ──
   // say(kind, text) = terminal logger (_tmL); ctx = { cwd, resolve, saveNode } from terminal.js (current menu node,
   // _tmResolveItem, _tmMenuSaveNode). Kinds: tok = ok, ter = error, tdm = hint, tnf = info line.
@@ -485,6 +490,7 @@
 
   window._hudBarOf = _barOf;
   window.hudRefresh = hudRefresh;
+  window.hudRefreshSoon = hudRefreshSoon;
   window.hudCommand = hudCommand;
   window.hudSharedCommand = hudSharedCommand;
   window.hudLoadShared = hudLoadShared;
