@@ -1,4 +1,4 @@
-// hexagon.js — mdeloviewer: hexagon launcher (stage 1: ring; stage 2: linear scroll with edge fade).
+// hexagon.js — mdeloviewer: hexagon launcher (stage 1: ring; stage 2: linear scroll with edge shrink).
 // A hexagon = a row of the existing `panels` table with layout='ring' (+ `config` jsonb),
 // owner-only RLS, resident+ (server-side too). Personal; not shared.
 //
@@ -29,6 +29,7 @@
   var HX_HOLD_MS = 400;              // long-tap on the centre hex runs config.center.action
   var HX_SLOT_PX = 40;               // vertical finger travel per slot
   var HX_DEAD_PX = 6;                // movement below this is a tap, not a scroll
+  var HX_EDGE_SCALE = 0.5;           // size of a hex one slot beyond the arc end (1 at the end slots); outer hexes only shrink, they do not fade
   var HX_CENTER_IMG = 'logo.png';    // centre hex picture (mdeloviewer root, precached by sw.js); swap the file name to change it
   var HX_CLIP = 'polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)';
 
@@ -179,9 +180,9 @@
       '#hxRoot .hx{position:absolute;left:calc(50% - ' + (HX_W / 2) + 'px);top:calc(50% - ' + (HX_H / 2) + 'px);' +
         'width:' + HX_W + 'px;height:' + HX_H + 'px;' + glass + 'pointer-events:none;visibility:hidden;' +
         'transform:translate(0,0) scale(.2);touch-action:none;' +
-        'transition:transform 170ms ease,opacity 170ms ease,visibility 0s linear 170ms;}' +
-      '#hxRoot.open .hx{transform:translate(var(--dx),var(--dy)) scale(var(--sc,1));opacity:var(--op,1);pointer-events:auto;visibility:visible;' +
-        'transition:transform 170ms ease,opacity 170ms ease,visibility 0s;}' +
+        'transition:transform 170ms ease,visibility 0s linear 170ms;}' +
+      '#hxRoot.open .hx{transform:translate(var(--dx),var(--dy)) scale(var(--sc,1));pointer-events:auto;visibility:visible;' +
+        'transition:transform 170ms ease,visibility 0s;}' +
       '#hxRoot.drag .hx{transition:none !important;}' +
       '#hxRoot{touch-action:none;}' +
       '#hxRoot .hx-pad{position:absolute;right:0;bottom:0;pointer-events:none;touch-action:none;}' +
@@ -286,7 +287,7 @@
   var _clamp = function (v, lo, hi) { return Math.max(lo, Math.min(hi, v)); };
 
   // Place every hex for scroll offset `off` (in slots). Slot q = i - off; the arc has _slots positions.
-  // Hexes outside the arc ends shrink and fade away (alpha 1 at the end slots, 0 one slot beyond).
+  // Hexes outside the arc ends shrink (edge = 1 at the end slots, 0 one slot beyond, where they are hidden).
   function _place(off) {
     var g = _arc(_slots);
     var S = Math.round(g.R + HX_H / 2 + 10);   // radius of the touch area around the FAB centre
@@ -296,13 +297,12 @@
       var q = el._i - off;
       var a = (135 + (_slots - 1) / 2 * g.step - q * g.step) * Math.PI / 180;
       var d = Math.min(q, (_slots - 1) - q);
-      var alpha = _clamp(d + 1, 0, 1);
+      var edge = _clamp(d + 1, 0, 1);
       el.style.setProperty('--dx', Math.round(g.R * Math.cos(a)) + 'px');
       el.style.setProperty('--dy', Math.round(-g.R * Math.sin(a)) + 'px');
-      el.style.setProperty('--sc', (0.5 + 0.5 * alpha).toFixed(3));
-      el.style.setProperty('--op', alpha.toFixed(3));
-      el.style.visibility = alpha < 0.02 ? 'hidden' : '';
-      el.style.pointerEvents = alpha < 0.35 ? 'none' : '';
+      el.style.setProperty('--sc', (HX_EDGE_SCALE + (1 - HX_EDGE_SCALE) * edge).toFixed(3));
+      el.style.visibility = edge < 0.02 ? 'hidden' : '';
+      el.style.pointerEvents = edge < 0.35 ? 'none' : '';
     });
   }
 
