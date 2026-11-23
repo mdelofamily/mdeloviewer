@@ -2203,7 +2203,12 @@ function areaPickStart(onDone, onCancel) {
     cx.clearRect(0, 0, cols, rows);
     for (var i = 0; i < d.mask.length; i++) if (d.mask[i]) cx.fillRect(i % cols, (i / cols) | 0, 1, 1);
   }
-  function undoStroke(s) { s.forEach(function (i) { d.mask[i] = 0; d.count--; }); redraw(); }
+  // a stroke entry is an array of painted cell indexes; an erase entry is the same shape with .erased = true
+  function undoStroke(s) {
+    if (s.erased) s.forEach(function (i) { if (!d.mask[i]) { d.mask[i] = 1; d.count++; } });
+    else s.forEach(function (i) { if (d.mask[i]) { d.mask[i] = 0; d.count--; } });
+    redraw();
+  }
   function mid(e) { var a = e.touches[0], b = e.touches[1]; return [(a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2]; }
 
   // Gesture model: a plain swipe is the map's own pan (native scroll, untouched) and two fingers are
@@ -2225,6 +2230,13 @@ function areaPickStart(onDone, onCancel) {
       holdT = null;
       if (!d.on) return;
       var p = cellAt({ clientX: sx, clientY: sy });
+      var pi = p[1] * cols + p[0];
+      if (d.mask[pi]) {                           // long-press on an already painted cell: erase just that one cell (no stroke)
+        d.mask[pi] = 0; d.count--; redraw();
+        var er1 = [pi]; er1.erased = true; d.strokes.push(er1); status();
+        if (navigator.vibrate) { try { navigator.vibrate([15, 40, 15]); } catch (er) {} }
+        return;
+      }
       d.stroke = []; paint(p[0], p[1]); d.last = p; status();
       if (navigator.vibrate) { try { navigator.vibrate(25); } catch (er) {} }
     }, HOLD_MS);
