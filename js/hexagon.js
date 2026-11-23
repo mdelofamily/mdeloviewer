@@ -475,7 +475,13 @@
         ac.oninput = function () { r.action = ac.value; };
         ac.onchange = validate;
         var del = _panelBtnEl(_PANEL_BTN_CSS + 'width:44px;flex:none;margin:0;min-height:0;padding:0;', '✕', function () { rows.splice(idx, 1); drawRows(); });
-        line.appendChild(ic); line.appendChild(ac); line.appendChild(del);
+        // move this row one position up (to move a row down, press ↑ on the row below it)
+        var up = _panelBtnEl(_PANEL_BTN_CSS + 'width:32px;flex:none;margin:0;min-height:0;padding:0;', '↑', function () {
+          if (idx < 1) return;
+          var t = rows[idx]; rows[idx] = rows[idx - 1]; rows[idx - 1] = t; drawRows();
+        });
+        if (idx === 0) up.style.opacity = '0.35';
+        line.appendChild(ic); line.appendChild(ac); line.appendChild(up); line.appendChild(del);
         wrap.appendChild(line); wrap.appendChild(note);
         listEl.appendChild(wrap);
         if (r.action) validate();
