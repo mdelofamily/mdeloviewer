@@ -31,7 +31,7 @@ function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
   _tmOpen = true;
   document.getElementById('mdlTerm').classList.add('open');
-  setTimeout(function () { document.getElementById('tmIn').focus(); }, 240);
+  setTimeout(function () { if (_tmOpen) document.getElementById('tmIn').focus(); }, 240);   // guard: console may be closed again (e.g. area draw) before this fires
   if (!_tmBooted) { _tmBooted = true; _tmBoot(); }
 }
 function closeTerm() {
@@ -40,6 +40,8 @@ function closeTerm() {
   if (_tmEditObj) { _tmMediaCleanupOnCancel(); _tmEditObj = null; _tmEditMode = null; _tmEditMenuCtx = null; _tmEditLabel = null; _tmEditBuf = null; _tmEditMediaBuf = []; document.getElementById('tmTa').value = ''; if (_tmMulti) tmToggleMulti(); }
   if (typeof _tmHistPopHide === 'function') _tmHistPopHide();
   _tmOpen = false; _tmFull = false;
+  // drop focus so the soft keyboard does not stay up / pop back while the console is hidden (area drawing etc.)
+  ['tmIn', 'tmTa'].forEach(function (id) { var el = document.getElementById(id); if (el && document.activeElement === el) el.blur(); });
   var t = document.getElementById('mdlTerm');
   t.classList.remove('open', 'tmfull');
   document.getElementById('tmFullBtn').classList.remove('on');
@@ -137,7 +139,7 @@ function tmToggleMulti() {
   } else {
     ta.style.height = '';
   }
-  setTimeout(function () { (_tmMulti ? ta : inp).focus(); }, 50);
+  setTimeout(function () { if (_tmOpen) (_tmMulti ? ta : inp).focus(); }, 50);
 }
 
 function _tmTaResize(ta) {
