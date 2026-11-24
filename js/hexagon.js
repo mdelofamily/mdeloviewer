@@ -175,15 +175,15 @@
 
   // section = double frame (outer + inner polygon); a leaf keeps the single frame
   var HX_SVG_SEC = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">' +
-    '<polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="rgba(88,166,255,0.6)" ' +
-    'stroke-width="2" vector-effect="non-scaling-stroke"/>' +
-    '<polygon points="50,13 87,34 87,66 50,87 13,66 13,34" fill="none" stroke="rgba(88,166,255,0.6)" ' +
-    'stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>';
+    '<polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="rgba(88,166,255,0.35)" ' +
+    'stroke-width="1" vector-effect="non-scaling-stroke"/>' +
+    '<polygon points="50,13 87,34 87,66 50,87 13,66 13,34" fill="none" stroke="rgba(88,166,255,0.35)" ' +
+    'stroke-width="1" vector-effect="non-scaling-stroke"/></svg>';
 
   // copied leaf = dashed frame
   var HX_SVG_COPY = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">' +
-    '<polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="rgba(88,166,255,0.85)" ' +
-    'stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/></svg>';
+    '<polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="rgba(88,166,255,0.35)" ' +
+    'stroke-width="1" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/></svg>';
 
   function _ensureStyle() {
     if (document.getElementById('hexStyles')) return;
@@ -224,11 +224,11 @@
   //   section hex (double frame): tap = enter       leaf hex: tap = select it (centre shows its emoji)
   //   centre: tap = up, long-tap = root (at root: nav mode off); the ring never folds in nav mode
   //   ➕ (end of the ring): choose section / text / todo -> the terminal opens with /md, /ტექსტი or /todo typed in
-  //   selected leaf: ✏️ = /რედ <id>  📋 copy  ✂️ cut  🗑️ = /წაშ <index> (two taps); 📥 = paste into the current section
+  //   selected leaf: ✏️ = /რედ <id>  📋 copy  ✂️ cut  📌 pin/unpin on the active HUD (todo only, needs window.hudPinInfo from hud.js)  🗑️ = /წაშ <index> (two taps); 📥 = paste
   //   (marks: copied = dashed frame, cut = half transparent; the clipboard lives until reload / nav off)
   // Editing/deleting go through _panelPress -> tmRun, so the terminal re-checks the tier (resident+).
   // emoji of the nav-only buttons — change here (one place)
-  var HX_NAV_ICON = { add: '➕', sec: '📁', text: '📝', todo: '📋' };
+  var HX_NAV_ICON = { add: '➕', sec: '📁', text: '📝', todo: '📋', pin: '📌' };
 
   function _navKey() { return 'mdelo_hexagon_nav_' + (_uid() || 'anon') + '_' + _MAP_ID; }
   function _navOn() { try { return localStorage.getItem(_navKey()) === '1'; } catch (e) { return false; } }
@@ -254,7 +254,9 @@
     _navList(node).forEach(function (n) { s += (n.id || '') + ':' + (n.icon || '') + ';'; });
     s += '#';
     ((node && node.items) || []).forEach(function (it) { var o = _navItemObj(it); s += (o.id || '') + ':' + (o.emoji || '') + (o.type || '') + ';'; });
-    return s + '#' + _navFindSel(node) + (_navSel && _navSel.id ? _navSel.id : '') + (_navDel ? '!' : '') + (_navCreate ? '+' : '') +
+    var psi = _navFindSel(node);
+    return s + '#' + psi + (_navSel && _navSel.id ? _navSel.id : '') + (_navDel ? '!' : '') + (_navCreate ? '+' : '') +
+      (psi >= 0 && _navIsPin(node.items[psi]) ? 'P' : '') + (_navPinInfo() ? 'h' : '') +
       (_navBuf ? '|buf:' + _navBuf.mode + (_navBuf.id || '') + (_navBuf.node === node ? 's' : '') : '');
   }
   function _navReset() { _navSel = null; _navDel = false; _navCreate = false; if (_navDelT) { clearTimeout(_navDelT); _navDelT = null; } }
@@ -262,6 +264,21 @@
     var st = _navStack();
     if (!st.length) { _note('root'); return; }
     st.pop(); _navReset(); _refresh(false);
+  }
+  // pin = the leaf's id is added to the ACTIVE HUD (hud.js stores ids, so it is a live reference, not a copy). Only todo can be a bar.
+  function _navPinInfo() { return typeof window.hudPinInfo === 'function' ? window.hudPinInfo() : null; }
+  function _navIsPin(it) {
+    var o = _navItemObj(it), info = _navPinInfo();
+    return !!(info && o.id && info.ids.indexOf(o.id) >= 0);
+  }
+  function _navPin(el) {
+    var node = _navNode(), i = _navFindSel(node);
+    if (i < 0) { _navReset(); _refresh(false); return; }
+    var info = _navPinInfo();
+    if (!info) { _note('✗ ჯერ აირჩიე HUD: /ჰუდი <სახელი>'); return; }
+    var it = node.items[i], o = _navItemObj(it);
+    // same commands as by hand: /ჰუდი + <id>  /  /ჰუდი − <id>  (shared HUD: /საერთოჰუდი); the ring redraws when the HUD state changes
+    _panelPress({ action: (info.shared ? '/საერთოჰუდი' : '/ჰუდი') + (_navIsPin(it) ? ' − ' : ' + ') + (o.id || String(i)) }, el);
   }
   function _navRoot() {
     var st = _navStack();
@@ -388,6 +405,11 @@
       btns.push({ icon: '✏️', label: 'რედაქტირება', fn: _navEdit });
       btns.push({ icon: '📋', label: 'ასლი', fn: function () { _navBufSet('copy'); }, keepOpen: true });
       btns.push({ icon: '✂️', label: 'ამოჭრა', fn: function () { _navBufSet('cut'); }, keepOpen: true });
+      var sit = node.items[si], sto = _navItemObj(sit);
+      if (sto.type === 'todo' || sto.type === 'progress') {   // HUD bars exist only for todo (slider / checklist)
+        var pinned = _navIsPin(sit);
+        btns.push({ icon: HX_NAV_ICON.pin, label: pinned ? 'HUD-დან მოხსნა' : 'HUD-ზე მიპინვა', sec: pinned, keepOpen: true, fn: _navPin });   // pinned = double frame
+      }
       btns.push({ icon: _navDel ? '⚠️' : '🗑️', label: _navDel ? 'წაშლა — კიდევ ერთი ტაპი' : 'წაშლა', fn: _navRemove, keepOpen: true });
       return v;
     }

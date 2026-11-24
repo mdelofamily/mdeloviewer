@@ -488,7 +488,17 @@
     await _cmdSelect(args, say, sh);
   }
 
+  // for the hexagon's pin button: the active HUD (local or shared) and the leaf ids pinned in it, or null when none is active
+  function hudPinInfo() {
+    var st = _ensureState(), h = null, i;
+    if (st.activeShared) { i = _sharedActiveIndex(st); if (i >= 0) h = _shared.list[i]; }
+    else { i = _activeIndex(st); if (i >= 0) h = st.huds[i]; }
+    if (!h) return null;
+    return { name: h.name, shared: !!st.activeShared, ids: h.items.slice() };
+  }
+
   window._hudBarOf = _barOf;
+  window.hudPinInfo = hudPinInfo;
   window.hudRefresh = hudRefresh;
   window.hudRefreshSoon = hudRefreshSoon;
   window.hudCommand = hudCommand;
