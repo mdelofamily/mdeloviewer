@@ -48,6 +48,9 @@
   var _centerAction = '';            // command run by a long-tap on the centre hex (config.center.action)
   var _holdT = null, _holdXY = null, _fabLong = false;
   var _baseH = 0, _baseW = 0;        // largest viewport seen (keyboard detection)
+  var _centerFn = null;              // nav mode: function run by a long-tap on the centre hex (instead of _centerAction)
+  var _navSel = null;                // nav mode: selected leaf { node, id, idx } (null = none)
+  var _navDel = false, _navDelT = null;   // nav mode: delete waits for a second tap
 
   // ── helpers ──────────────────────────────────────────────────────────────
   function _uid() { return (typeof global.myUserId === 'function' && global.myUserId()) || null; }
@@ -167,6 +170,13 @@
     '<polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="rgba(88,166,255,0.35)" ' +
     'stroke-width="2" vector-effect="non-scaling-stroke"/></svg>';
 
+  // section = double frame (outer + inner polygon); a leaf keeps the single frame
+  var HX_SVG_SEC = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">' +
+    '<polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="rgba(88,166,255,0.6)" ' +
+    'stroke-width="2" vector-effect="non-scaling-stroke"/>' +
+    '<polygon points="50,13 87,34 87,66 50,87 13,66 13,34" fill="none" stroke="rgba(88,166,255,0.6)" ' +
+    'stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>';
+
   function _ensureStyle() {
     if (document.getElementById('hexStyles')) return;
     var st = document.createElement('style'); st.id = 'hexStyles';
@@ -199,6 +209,94 @@
     document.head.appendChild(st);
   }
 
+  // ── nav mode: the menu tree as a file manager ───────────────────────────
+  // Per device (localStorage), applies to the active hexagon: its saved buttons are NOT touched, the ring is
+  // just drawn from the terminal's current menu section (_tmMenuStack, terminal.js) instead.
+  //   section hex (double frame): tap = enter       leaf hex: tap = select it (centre shows its emoji)
+  //   centre long-tap: up one level / leave the selection
+  //   selected leaf: ✏️ = /რედ <id>   🗑️ = /წაშ <index> (two taps)
+  // Editing/deleting go through _panelPress -> tmRun, so the terminal re-checks the tier (resident+).
+  function _navKey() { return 'mdelo_hexagon_nav_' + (_uid() || 'anon') + '_' + _MAP_ID; }
+  function _navOn() { try { return localStorage.getItem(_navKey()) === '1'; } catch (e) { return false; } }
+  function _navSet(on) { try { localStorage.setItem(_navKey(), on ? '1' : '0'); } catch (e) {} }
+  function _navStack() { return (typeof _tmMenuStack !== 'undefined' && Array.isArray(_tmMenuStack)) ? _tmMenuStack : []; }
+  function _navNode() { var st = _navStack(); return st.length ? st[st.length - 1] : null; }
+  function _navList(node) { return node ? (node.children || []) : ((typeof _CFG !== 'undefined' && _CFG.menu) || []); }
+  function _navItemObj(it) { return typeof it === 'string' ? { type: 'text', emoji: '•', label: it } : (it || {}); }
+  function _navItemIcon(it) { var o = _navItemObj(it); return _firstGlyph(o.emoji) || (o.type === 'todo' ? '✅' : '📝'); }
+  // index of the selected leaf in the current section (by id; id-less old items by index), -1 = none/invalid
+  function _navFindSel(node) {
+    if (!_navSel || !node || _navSel.node !== node || !node.items) return -1;
+    if (_navSel.id) {
+      for (var i = 0; i < node.items.length; i++) { var o = node.items[i]; if (o && typeof o === 'object' && o.id === _navSel.id) return i; }
+      return -1;
+    }
+    return node.items[_navSel.idx] !== undefined ? _navSel.idx : -1;
+  }
+  // what the ring shows, as a string: any change (cd, add, delete, new emoji, selection) redraws it on the next _tick
+  function _navSig() {
+    var node = _navNode();
+    var s = _navStack().map(function (n) { return n.id || ''; }).join('>') + '#';
+    _navList(node).forEach(function (n) { s += (n.id || '') + ':' + (n.icon || '') + ';'; });
+    s += '#';
+    ((node && node.items) || []).forEach(function (it) { var o = _navItemObj(it); s += (o.id || '') + ':' + (o.emoji || '') + (o.type || '') + ';'; });
+    return s + '#' + _navFindSel(node) + (_navSel && _navSel.id ? _navSel.id : '') + (_navDel ? '!' : '');
+  }
+  function _navReset() { _navSel = null; _navDel = false; if (_navDelT) { clearTimeout(_navDelT); _navDelT = null; } }
+  function _navUp() {
+    var st = _navStack();
+    if (!st.length) { _note('root'); return; }
+    st.pop(); _navReset(); _refresh(false);
+  }
+  function _navEdit(el) {
+    var node = _navNode(), i = _navFindSel(node);
+    if (i < 0) { _navReset(); _refresh(false); return; }
+    var it = node.items[i], ref = (it && typeof it === 'object' && it.id) ? it.id : String(i);
+    // the editor lives inside the terminal overlay: it has to be open to be seen
+    if (typeof _tmOpen !== 'undefined' && !_tmOpen && typeof _tmOpen_ === 'function') _tmOpen_();
+    _panelPress({ action: '/რედ ' + ref }, el);
+    _navReset(); _refresh(false);
+  }
+  function _navRemove(el) {
+    var node = _navNode(), i = _navFindSel(node);
+    if (i < 0) { _navReset(); _refresh(false); return; }
+    if (!_navDel) {   // first tap: arm (⚠️), disarms itself after 3.5 s
+      _navDel = true;
+      if (_navDelT) clearTimeout(_navDelT);
+      _navDelT = setTimeout(function () { _navDelT = null; _navDel = false; _refresh(false); }, 3500);
+      _refresh(false); return;
+    }
+    _navReset();
+    _panelPress({ action: '/წაშ ' + i }, el);   // numeric = leaf by index (section names are never numeric here)
+    _refresh(false);
+  }
+  // virtual hexagon for _render(): same shape as a saved one, buttons carry local handlers (fn)
+  function _navVirtual(h) {
+    var node = _navNode(), btns = [], si = _navFindSel(node);
+    if (_navSel && si < 0) _navReset();
+    var v = { panel_id: h.panel_id + '|nav|' + _navStack().map(function (n) { return n.id || ''; }).join('>') + (_navSel ? '|sel' : ''),
+      buttons: btns, config: { center: {} } };
+    if (_navSel) {
+      v.config.center.icon = _navItemIcon(node.items[si]);
+      v._centerFn = function () { _navReset(); _refresh(false); };
+      btns.push({ icon: '✏️', label: 'რედაქტირება', fn: _navEdit });
+      btns.push({ icon: _navDel ? '⚠️' : '🗑️', label: _navDel ? 'წაშლა — კიდევ ერთი ტაპი' : 'წაშლა', fn: _navRemove, keepOpen: true });
+      return v;
+    }
+    v.config.center.icon = node ? (_firstGlyph(node.icon) || '📁') : '';   // root: empty = the default logo
+    v._centerFn = _navUp;
+    _navList(node).forEach(function (n) {
+      btns.push({ icon: _firstGlyph(n.icon) || '📁', label: _i18n(n.title) || '', sec: true, keepOpen: true,
+        fn: function () { _navStack().push(n); _navReset(); _refresh(false); } });
+    });
+    ((node && node.items) || []).forEach(function (it, i) {
+      var o = _navItemObj(it);
+      btns.push({ icon: _navItemIcon(it), label: String(_i18n(o.label) || '').replace(/\n/g, ' ').slice(0, 40), keepOpen: true,
+        fn: function () { _navSel = { node: node, id: o.id || null, idx: i }; _navDel = false; _refresh(false); } });
+    });
+    return v;
+  }
+
   // ── launcher DOM ─────────────────────────────────────────────────────────
   function _build() {
     if (_root) return;
@@ -215,11 +313,12 @@
     function _clearHold() { if (_holdT) { clearTimeout(_holdT); _holdT = null; } }
     _fab.addEventListener('pointerdown', function (e) {
       _fabLong = false; _clearHold();
-      if (!_centerAction) return;
+      if (!_centerAction && !_centerFn) return;
       _holdXY = { x: e.clientX, y: e.clientY };
       _holdT = setTimeout(function () {
         _holdT = null; _fabLong = true;
         try { if (navigator.vibrate) navigator.vibrate(12); } catch (x) {}
+        if (_centerFn) { _centerFn(); return; }   // nav mode: up / leave the selection; the ring stays as it is
         if (typeof _panelPress === 'function') _panelPress({ action: _centerAction }, _fab);
         _setOpen(false);
       }, HX_HOLD_MS);
@@ -307,7 +406,7 @@
   }
 
   function _render(h) {
-    var btns = (h.buttons || []).filter(function (b) { return b && b.action; }).slice(0, HX_MAX_BTNS);
+    var btns = (h.buttons || []).filter(function (b) { return b && (b.action || b.fn); }).slice(0, HX_MAX_BTNS);
     var n = btns.length;
     _ring.innerHTML = '';
     _els = [];
@@ -317,14 +416,15 @@
     _off = _clamp(Math.round(_off), 0, _maxOff);
     btns.forEach(function (btn, i) {
       var el = document.createElement('button'); el.className = 'hx'; el._i = i;
-      el.innerHTML = HX_SVG + '<span class="hx-in"></span>';
+      el.innerHTML = (btn.sec ? HX_SVG_SEC : HX_SVG) + '<span class="hx-in"></span>';
       var inner = el.querySelector('.hx-in');
       var act = (btn.action || '').trim();
       // icon (emoji) is optional; without it the hex shows the first letter of the command
       inner.textContent = (btn.icon && btn.icon.trim()) || _firstGlyph(act.replace(/^\/+/, '')) || '•';
-      el.title = act; el.setAttribute('aria-label', act);
+      var tt = btn.label || act; el.title = tt; el.setAttribute('aria-label', tt);
       el.onclick = function () {
         if (_wasDrag) { _wasDrag = false; return; }   // the click that ends a scroll is not a press
+        if (btn.fn) { btn.fn(el); if (!btn.keepOpen) _setOpen(false); return; }   // nav mode: local handler (commands inside still go through _panelPress)
         // same execution path as a panel button; tier is re-checked inside tmRun/runMacro
         if (typeof _panelPress === 'function') _panelPress(btn, el);
         _setOpen(false);
@@ -334,6 +434,7 @@
     });
     _place(_off);
     _centerAction = (h.config && h.config.center && h.config.center.action) || '';
+    _centerFn = h._centerFn || null;
     _fab.innerHTML = HX_SVG + '<span class="hx-in"></span>';
     var holder = _fab.querySelector('.hx-in');
     var cIcon = _firstGlyph(h.config && h.config.center && h.config.center.icon);   // per-hexagon emoji
@@ -409,8 +510,9 @@
     var h = want ? _active() : null;
     if (!h) { if (_root) { _root.style.display = 'none'; _setOpen(false); } _sig = ''; return; }
     _build();
-    var sig = h.panel_id + '|' + (h.updated_at || '') + '|' + _baseW + 'x' + _baseH;
-    if (sig !== _sig) { _sig = sig; _render(h); }
+    var nav = _navOn();
+    var sig = h.panel_id + '|' + (h.updated_at || '') + '|' + _baseW + 'x' + _baseH + (nav ? '|nav:' + _navSig() : '');
+    if (sig !== _sig) { _sig = sig; _render(nav ? _navVirtual(h) : h); }
     var hide = _hiddenNow();
     _root.style.display = hide ? 'none' : 'block';
     if (hide) _setOpen(false);
@@ -548,6 +650,7 @@
   //   რედ <სახელი|№>              editor
   //   წაშ <სახელი|№> დიახ         delete (without "დიახ": preview only)
   //   გამორთვა                    remove the launcher from the screen (state stays saved)
+  //   ნავ [ჩართვა|გამორთვა]       nav mode on/off (toggle without argument): the ring shows the menu tree
   async function hexagonCommand(args) {
     args = args || [];
     if (!_uid()) { _tmL('ter', '✗ ჰექსაგონისთვის საჭიროა შესვლა — /ლოგინი'); return; }
@@ -577,12 +680,21 @@
       return;
     }
 
+    if (sub === 'ნავ' || sub === 'ნავიგაცია') {
+      var narg = (args[1] || '').trim();
+      var nwant = narg === 'გამორთვა' ? false : (narg === 'ჩართვა' ? true : !_navOn());
+      if (nwant && !(st.on && st.id && _active())) { _tmL('ter', '✗ ჯერ ჩართე ჰექსაგონი: /ჰექსაგონი <სახელი>'); return; }
+      _navSet(nwant); _navReset();
+      closeTerm(); _refresh(nwant);
+      _tmL('tok', nwant ? '✓ ნავიგაცია ჩართულია (გასართავად: /ჰექსაგონი ნავ)' : '✓ ნავიგაცია გამორთულია');
+      return;
+    }
     var isEdit = sub === 'რედ', isDel = sub === 'წაშ';
     var rest = (isEdit || isDel) ? args.slice(1) : args.slice(0);
     var confirmed = false;
     if (isDel && rest.length && rest[rest.length - 1] === 'დიახ') { confirmed = true; rest = rest.slice(0, -1); }
     var q = rest.join(' ').trim();
-    if (!q) { _tmL('ter', 'გამოყენება: /ჰექსაგონი [სახელი|№] · ახალი [სახელი] · რედ <სახელი|№> · წაშ <სახელი|№> დიახ · გამორთვა'); return; }
+    if (!q) { _tmL('ter', 'გამოყენება: /ჰექსაგონი [სახელი|№] · ახალი [სახელი] · რედ <სახელი|№> · წაშ <სახელი|№> დიახ · გამორთვა · ნავ'); return; }
     var h = hexagonFind(q);
     if (!h) { _tmL('ter', '✗ ჰექსაგონი ვერ მოიძებნა: ' + q + '  (სია: /ჰექსაგონი)'); return; }
 
