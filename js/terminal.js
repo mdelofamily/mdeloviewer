@@ -25,7 +25,7 @@ var _tmFilesCache = [];    // last /ფაილები result — lets /play 
 var _tmEditMediaBuf = [];  // [{items:[{type,url,name}...]}...] — files-segments captured via /მედია
                             // during the current 'text' menuItem session; [[მედია:N]] tokens in tmTa
                             // point into this by index. Cleared on every session open/close/save/cancel.
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/არე','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/მარკერი','/დახურვა','/დროშა','/მეტსახელი','/მე','/ვინ','/ფერი','/help','/გზა','/ჩვ','/გად','/md','/წაშ','/რედ','/ფოთოლი','/მაკრო','/ლოგინი','/ლოგაუთი','/სახელი','/სესია','/სია','/იუზერი','/სურვილი','/შენახვა','/ჩატვირთვა','/სინქრონიზაცია','/შესრულება','/play','/მუსიკა','/ფაილები','/ფაილი','/ენა','/სექცია'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/არე','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/მარკერი','/დახურვა','/დროშა','/მეტსახელი','/მე','/ვინ','/ფერი','/help','/გზა','/ჩვ','/გად','/md','/წაშ','/რედ','/ჩატი','/todo','/მაკრო','/ლოგინი','/ლოგაუთი','/სახელი','/სესია','/სია','/იუზერი','/სურვილი','/შენახვა','/ჩატვირთვა','/სინქრონიზაცია','/შესრულება','/play','/მუსიკა','/ფაილები','/ფაილი','/ენა','/სექცია'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -384,7 +384,7 @@ var _TM_MIN_TIER = {
   'შეტყობინება': 'caretaker', // notification send — caretaker's other direct capability
   'todo':        'caretaker', // leaf-level todo/counter toggle (the exact "cat food refilled" case)
   'შესრულება':   'caretaker', // = todo, new name
-  'ფოთოლი':      'caretaker', // leaf-level item add (text/indicator/todo) — caretaker's direct write scope
+  'ტექსტი':      'caretaker', // text-leaf add — caretaker's direct write scope (mode toggle moved to /ჩატი)
   'დიალოგი':     'resident',  // dialogue DSL authoring
   'არე':         'caretaker', // create/edit/delete map areas (area_overrides) — caretaker and above
   'md':          'resident',  // create menu branch — structural, not leaf
@@ -550,7 +550,8 @@ async function _tmRun(raw) {
     'სრული':       tmToggleFull,
     'ისტორია':     _histClear,
     'ვადა':        _tmVada,
-    'ტექსტი':      tmToggleMulti,
+    'ჩატი':        tmToggleMulti,
+    'ტექსტი':      _tmTextCreate,
     'დახურვა':     closeTerm,
     'flag':        _tmFlagDelegate,
     'დროშა':       _tmFlagDelegate,
@@ -565,7 +566,8 @@ async function _tmRun(raw) {
     'წაშ':         _tmMenuRm,
     'edit':        _tmMenuEdit,
     'რედ':         _tmMenuEdit,
-    'ფოთოლი':      _tmMenuLeaf,
+    'todo':        _tmTodoCreate,
+    'შესრულება':   _tmTodoDo,
     'macro':       _tmMacro,
     'მაკრო':       _tmMacro,
     'play':        _tmPlay,
@@ -831,7 +833,7 @@ function _tmHelp() {
       ['/სრული', 'სრული ↔ ნახევარი'],
       ['/ისტორია', 'ჩატის ისტორიის წაშლა'],
       ['/ვადა [N]', 'ისტ. შენახვა N დღე'],
-      ['/ტექსტი', 'ჩატ ↔ ბრძანება mode'],
+      ['/ჩატი', 'ჩატ ↔ ბრძანება mode'],
       ['/გახსნა', 'ტერმინალის გახსნა (macro/window hook-ისთვის)'],
       ['/შეყვანა', 'Enter/Send — ღია edit-სესიის submit (macro-chain-ისთვის)'],
       ['/დახურვა', 'დახურვა  [Esc]'],
@@ -865,6 +867,7 @@ function _tmHelp() {
     ['მენიუ — ნახვა და ნავიგაცია', [
       ['/მენიუ', 'მენიუს toggle'],
       ['/მენიუ/სექცია/.../N', 'პირდაპირი ლინკი ნესტ. სექციაზე ან item-ზე'],
+      ['/შესრულება [სახელი|N|N.K] [N%]', 'todo-ების ხე (ცარიელი) ან toggle / სლაიდერის მნიშვნელობა მიმდინარე კვანძში'],
       ['/todo/სექცია/.../<N|სახელი|id>', 'todo-ის toggle ნებისმიერი branch-დან, /cd-ის გარეშე'],
       ['/გზა', 'მენიუს მიმდინარე გზა'],
       ['/ჩვ', 'მენიუს კვანძის შემცველობა'],
@@ -872,7 +875,8 @@ function _tmHelp() {
     ]],
     ['მენიუ — შექმნა და რედაქტირება', [
       ['/md <სახელი> [ემოჯი]', 'ახალი ქვე-სექცია + ავტო-cd (default 📁)'],
-      ['/ფოთოლი ტექსტი|todo [ემოჯი]', 'item-ის დამატება მიმდინარე კვანძში (todo ქვე-ჩეკების გარეშე = სლაიდერი)'],
+      ['/ტექსტი <ტექსტი> [ემოჯი]', 'ტექსტური ფოთოლი მიმდინარე კვანძში (აკრეფისას რედაქტორი იხსნება)'],
+      ['/todo <სახელი> [ემოჯი]', 'todo ფოთოლი (ქვე-ჩეკების გარეშე = სლაიდერი; რედაქტორში ქვე-ჩეკები "-"-ით)'],
       ['/წაშ <სახელი|N>', 'სექციის (სახელით) ან item-ის (ინდექსით) წაშლა'],
       ['/რედ <N>', 'item [N] — multiline რედაქტირება'],
       ['/რედ <N> <...>', 'item [N] — სწრაფი ერთხაზიანი ედიტი'],
@@ -2770,7 +2774,7 @@ function _tmFlagDelegate(args) {
 // ── menu CLI — filesystem-style navigation/editing over _CFG.menu ──
 // State lives only in the terminal session (Pure CLI State): navigating with
 // /cd never touches the burger menu's own drill-down UI/state (_gmCfg/_gmShowPanel).
-// Mutations (/md, /ფოთოლი, /rm) DO mutate _CFG.menu in place — the same object
+// Mutations (/md, /ტექსტი, /todo, /rm) DO mutate _CFG.menu in place — the same object
 // the burger menu reads from — and are pushed to Supabase via menuOverrideSave
 // (runtime.js) so every viewer sees them on next page load.
 var _tmMenuStack = []; // array of node refs, root = []
@@ -2892,63 +2896,86 @@ async function _tmMenuMd(args) {
   await _tmMenuSaveNode(node.id, { parent_id: parent ? parent.id : null, icon: node.icon, title: node.title, items_json: [] });
 }
 
-async function _tmMenuLeaf(args) {
-  var sub  = (args[0] || '').trim();
+// ── /ტექსტი <text> [emoji] — add a text leaf to the current section ──
+// The typed text is only the NAME (first line). Typed by hand (not inside a macro / chain, ka mode)
+// the item editor opens right away so the full text can be written below it; Esc keeps just the name.
+// EN mode = translation mode: a new leaf is always born in Georgian, so no editor is opened there.
+// /todo below follows the exact same creation flow.
+function _tmNameClash(node, title) {
+  var q = _tmNormName(title);
+  if (!q || !node) return false;
+  return (node.children || []).some(function (c) { return _tmNormName(_tmTodoKa(c.title)) === q; }) ||
+    (node.items || []).some(function (it) { return _tmItemTitles(it).some(function (x) { return _tmNormName(x) === q; }); });
+}
+function _tmNameClashMsg(cmdName, name) {
+  _tmL('ter', '✗ ამ სექციაში უკვე არის "' + name + '" — სხვა სახელი აირჩიე');
+  _tmL('tdm', 'მაგ.: /' + cmdName + ' ' + name + ' 2   ·   ან ძველის გადასარქმევად: /რედ ' + name);
+}
+// Shared tail: cursor on a fresh line below the typed name, ready for the rest of the text.
+function _tmEditorCursorToEnd() {
+  var nta = document.getElementById('tmTa');
+  nta.value = nta.value.replace(/\s+$/, '') + '\n';
+  _tmTaResize();
+  nta.focus();
+  nta.setSelectionRange(nta.value.length, nta.value.length);
+}
+
+async function _tmTextCreate(args) {
   var node = _tmMenuCwdNode();
   if (!node) { _tmL('ter', 'root-ში ფოთლები არ შეიძლება — /cd <სახელი> შედი სექციაში'); return; }
-
-  if (sub === 'ტექსტი') {
-    var rest = args.slice(1);
-    var emoji = '•';
-    if (rest.length > 1 && _tmIsIconToken(rest[rest.length - 1])) {
-      emoji = rest[rest.length - 1];
-      rest = rest.slice(0, -1);
-    }
-    var text = rest.join(' ').trim();
-    if (!text) { _tmL('ter', 'გამოყენება: /ფოთოლი ტექსტი <ტექსტი> [ემოჯი]'); return; }
-    if (!node.items) node.items = [];
-    var newText = { type: 'text', emoji: emoji, label: text };
-    node.items.push(newText);
-    _tmL('tok', '+ [' + (node.items.length - 1) + '] ' + emoji + ' ტექსტი დაემატა');
-    _tmDupWarn(node, _gmPlainTitle(_gmSplitFirst(text).first), newText);
-    var newIdx = node.items.length - 1;
-    await _tmMenuSaveNode(node.id, { items_json: node.items });
-    // The typed text is only the NAME (first line). Typed by hand (not inside a macro / chain, ka mode) the
-    // item editor opens right away so the full text can be written below it; Esc keeps just the name.
-    if (_tmChainDepth === 0 && _tmEditLang !== 'en') {
-      _tmMenuEditOpen(node, newIdx, newText);
-      var nta = document.getElementById('tmTa');
-      nta.value = nta.value.replace(/\s+$/, '') + '\n';
-      _tmTaResize();
-      nta.focus();
-      nta.setSelectionRange(nta.value.length, nta.value.length);
-    }
-  } else if (sub === 'todo') {
-    var todoSub = (args[1] || '').trim();
-    if (!todoSub) { _tmTodoListOpen(node, null); return; }   // bare → editor for a new nested list
-    if (todoSub === 'ls') { _tmTodoLs(node); return; }
-    if (todoSub === 'რედ') {
-      var todoEditRef = args.slice(2).join(' ').trim();
-      if (!todoEditRef) { _tmL('ter', 'გამოყენება: /ფოთოლი todo რედ <N | სახელი | id>'); return; }
-      var tr = _tmResolveItem(node, todoEditRef, 'todo');
-      if (tr.error) { _tmL('ter', tr.error); return; }
-      _tmTodoListOpen(node, tr.idx); return;
-    }
-    // N / N.K.J / a todo's name or id → toggle (lists are created in the editor: bare /ფოთოლი todo)
-    await _tmTodoToggle(node, args.slice(1).join(' ').trim());
-    return;
-  } else {
-    _tmL('tdm', _SEP);
-    _tmL('tsy', '/ფოთოლი ბრძანებები:');
-    _tmL('tnf', '  ტექსტი <ტექსტი> [ემოჯი]         — ტექსტური item (default •)');
-    _tmL('tnf', '  todo ქვე-ჩეკების გარეშე  — სლაიდერი 0–100% (მენიუში caretaker+ ცვლის)');
-    _tmL('tnf', '  todo                    — ახალი todo სია (რედაქტორი, - დონეებით)');
-    _tmL('tnf', '  todo რედ <N|სახელი|id>  — todo-ს რედაქტორი (/რედ-იც)');
-    _tmL('tnf', '  todo <N|სახელი|id>      — toggle; <N.K.J> ქვე-ჩეკი (მშობელი = ყველა ქვე-ჩეკი)');
-    _tmL('tnf', '  todo <N|სახელი|id> <%>% — სლაიდერის მნიშვნელობა (მაგ. წყალი 40%); სლაიდერის toggle = 0 ↔ 100');
-    _tmL('tnf', '  todo ls                 — todos ხე ⬜/✅');
-    _tmL('tdm', _SEP);
+  var rest = (args || []).slice();
+  var emoji = '•';
+  if (rest.length > 1 && _tmIsIconToken(rest[rest.length - 1])) {
+    emoji = rest[rest.length - 1];
+    rest = rest.slice(0, -1);
   }
+  var text = rest.join(' ').trim();
+  if (!text) { _tmL('ter', 'გამოყენება: /ტექსტი <ტექსტი> [ემოჯი]'); return; }
+  var title = _gmPlainTitle(_gmSplitFirst(text).first);
+  if (_tmNameClash(node, title)) { _tmNameClashMsg('ტექსტი', title); return; }
+  if (!node.items) node.items = [];
+  var newText = { type: 'text', emoji: emoji, label: text };
+  node.items.push(newText);
+  var newIdx = node.items.length - 1;
+  _tmL('tok', '+ [' + newIdx + '] ' + emoji + ' ტექსტი დაემატა');
+  await _tmMenuSaveNode(node.id, { items_json: node.items });
+  if (_tmChainDepth === 0 && _tmEditLang !== 'en') {
+    _tmMenuEditOpen(node, newIdx, newText);
+    _tmEditorCursorToEnd();
+  }
+}
+
+// ── /todo <name> [emoji] — create a todo leaf in the current section ──
+// Starts childless (= slider). By hand (no chain, ka mode) the list editor opens right away with the
+// cursor below the name, so sub-checks can be typed as "- text"; Esc keeps the plain slider.
+async function _tmTodoCreate(args) {
+  var node = _tmMenuCwdNode();
+  if (!node) { _tmL('ter', 'root-ში ფოთლები არ შეიძლება — /cd <სახელი> შედი სექციაში'); return; }
+  var rest = (args || []).slice(), emoji = '';
+  if (rest.length > 1 && _tmIsIconToken(rest[rest.length - 1])) { emoji = rest[rest.length - 1]; rest = rest.slice(0, -1); }
+  var name = rest.join(' ').trim();
+  if (!name) { _tmL('ter', 'გამოყენება: /todo <სახელი> [ემოჯი]'); return; }
+  if (_tmNameClash(node, name)) { _tmNameClashMsg('todo', name); return; }
+  if (!node.items) node.items = [];
+  var item = { type: 'todo', id: _tmTodoNewId(null), label: { ka: name, en: '' }, checked: false };
+  if (emoji && emoji !== '📋') item.emoji = emoji;
+  node.items.push(item);
+  var newIdx = node.items.length - 1;
+  _tmL('tok', '+ [' + newIdx + '] ' + (item.emoji || '📋') + ' todo "' + name + '" (სლაიდერი)');
+  await _tmMenuSaveNode(node.id, { items_json: node.items });
+  if (_tmChainDepth === 0 && _tmEditLang !== 'en') {
+    _tmTodoListOpen(node, newIdx);
+    _tmEditorCursorToEnd();
+  }
+}
+
+// ── /შესრულება [ref] [N%] — todos of the current section: no args = tree (⬜/✅), else toggle / slider value ──
+async function _tmTodoDo(args) {
+  var node = _tmMenuCwdNode();
+  if (!node) { _tmL('ter', 'root-ში todo არ არის — /cd <სახელი> შედი სექციაში, ან /todo/სექცია/.../N'); return; }
+  var ref = (args || []).join(' ').trim();
+  if (!ref || ref === 'ls') { _tmTodoLs(node); return; }
+  await _tmTodoToggle(node, ref);
 }
 
 // ── nested todo lists ──
@@ -3071,7 +3098,7 @@ function _tmTodoListOpen(node, idx) {
   var item = null;
   if (idx != null) {
     item = node.items && node.items[idx];
-    if (!item || typeof item !== 'object' || item.type !== 'todo') { _tmL('ter', 'todo [' + idx + '] ვერ მოიძებნა — /ფოთოლი todo ls'); return; }
+    if (!item || typeof item !== 'object' || item.type !== 'todo') { _tmL('ter', 'todo [' + idx + '] ვერ მოიძებნა — /შესრულება'); return; }
   } else if (_tmEditLang === 'en') {
     _tmL('ter', '✗ ახალი სია ქართულად იქმნება — ჯერ /ენა ka'); return;
   }
@@ -3175,13 +3202,13 @@ async function _tmTodoToggle(node, ref) {
   }
   var item = node.items && node.items[parts[0]];
   if (!item || typeof item !== 'object' || item.type !== 'todo') {
-    _tmL('ter', 'todo [' + parts[0] + '] ვერ მოიძებნა — /ფოთოლი todo ls');
+    _tmL('ter', 'todo [' + parts[0] + '] ვერ მოიძებნა — /შესრულება');
     return;
   }
   var target = item;
   for (var k = 1; k < parts.length; k++) {
     target = target.children && target.children[parts[k]];
-    if (!target) { _tmL('ter', 'todo [' + parts.slice(0, k + 1).join('.') + '] ვერ მოიძებნა — /ფოთოლი todo ls'); return; }
+    if (!target) { _tmL('ter', 'todo [' + parts.slice(0, k + 1).join('.') + '] ვერ მოიძებნა — /შესრულება'); return; }
   }
   if (parts.length === 1 && window.menuIsSlider && window.menuIsSlider(target)) {   // slider: toggle = 0 <-> 100
     if (!target.id) { _tmL('ter', '✗ id აკლია — ჯერ /რედ ' + parts[0] + ' და შეინახე'); return; }
@@ -3687,7 +3714,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 //   საერთო  — Supabase (terminal_macros table), every viewer sees it on next load
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
-var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','ფოთოლი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
+var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','todo','ჩატი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
   'დახმარება','ჰექსაგონი','ჰუდი','საერთოჰუდი','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება','პანელი'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
