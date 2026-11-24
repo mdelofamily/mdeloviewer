@@ -49,6 +49,8 @@
   var _holdT = null, _holdXY = null, _fabLong = false;
   var _baseH = 0, _baseW = 0;        // largest viewport seen (keyboard detection)
   var _centerFn = null;              // nav mode: function run by a long-tap on the centre hex (instead of _centerAction)
+  var _centerTapFn = null;           // nav mode: function run by a plain tap on the centre hex (instead of folding the ring)
+  var _navBuf = null, _navBusy = false;   // nav clipboard { mode:'copy'|'cut', node, ref, id, item } (this session only)
   var _navSel = null;                // nav mode: selected leaf { node, id, idx } (null = none)
   var _navDel = false, _navDelT = null;   // nav mode: delete waits for a second tap
 
@@ -177,6 +179,11 @@
     '<polygon points="50,13 87,34 87,66 50,87 13,66 13,34" fill="none" stroke="rgba(88,166,255,0.6)" ' +
     'stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>';
 
+  // copied leaf = dashed frame
+  var HX_SVG_COPY = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">' +
+    '<polygon points="50,0 100,25 100,75 50,100 0,75 0,25" fill="none" stroke="rgba(88,166,255,0.85)" ' +
+    'stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/></svg>';
+
   function _ensureStyle() {
     if (document.getElementById('hexStyles')) return;
     var st = document.createElement('style'); st.id = 'hexStyles';
@@ -194,6 +201,7 @@
       '#hxRoot.open .hx{transform:translate(var(--dx),var(--dy)) scale(var(--sc,1));pointer-events:auto;visibility:visible;' +
         'transition:transform 170ms ease,visibility 0s;}' +
       '#hxRoot.drag .hx{transition:none !important;}' +
+      '#hxRoot .hx.cut{opacity:.4;}' +
       '#hxRoot{touch-action:none;}' +
       '#hxRoot .hx-pad{position:absolute;right:0;bottom:0;pointer-events:none;touch-action:none;}' +
       '#hxRoot.open .hx-pad{pointer-events:auto;}' +
@@ -213,8 +221,9 @@
   // Per device (localStorage), applies to the active hexagon: its saved buttons are NOT touched, the ring is
   // just drawn from the terminal's current menu section (_tmMenuStack, terminal.js) instead.
   //   section hex (double frame): tap = enter       leaf hex: tap = select it (centre shows its emoji)
-  //   centre long-tap: up one level / leave the selection
-  //   selected leaf: ✏️ = /რედ <id>   🗑️ = /წაშ <index> (two taps)
+  //   centre: tap = up, long-tap = root; the ring never folds in nav mode
+  //   selected leaf: ✏️ = /რედ <id>  📋 copy  ✂️ cut  🗑️ = /წაშ <index> (two taps); 📥 = paste into the current section
+  //   (marks: copied = dashed frame, cut = half transparent; the clipboard lives until reload / nav off)
   // Editing/deleting go through _panelPress -> tmRun, so the terminal re-checks the tier (resident+).
   function _navKey() { return 'mdelo_hexagon_nav_' + (_uid() || 'anon') + '_' + _MAP_ID; }
   function _navOn() { try { return localStorage.getItem(_navKey()) === '1'; } catch (e) { return false; } }
@@ -240,13 +249,87 @@
     _navList(node).forEach(function (n) { s += (n.id || '') + ':' + (n.icon || '') + ';'; });
     s += '#';
     ((node && node.items) || []).forEach(function (it) { var o = _navItemObj(it); s += (o.id || '') + ':' + (o.emoji || '') + (o.type || '') + ';'; });
-    return s + '#' + _navFindSel(node) + (_navSel && _navSel.id ? _navSel.id : '') + (_navDel ? '!' : '');
+    return s + '#' + _navFindSel(node) + (_navSel && _navSel.id ? _navSel.id : '') + (_navDel ? '!' : '') +
+      (_navBuf ? '|buf:' + _navBuf.mode + (_navBuf.id || '') + (_navBuf.node === node ? 's' : '') : '');
   }
   function _navReset() { _navSel = null; _navDel = false; if (_navDelT) { clearTimeout(_navDelT); _navDelT = null; } }
   function _navUp() {
     var st = _navStack();
     if (!st.length) { _note('root'); return; }
     st.pop(); _navReset(); _refresh(false);
+  }
+  function _navRoot() {
+    var st = _navStack();
+    if (!st.length) { _note('root'); return; }
+    st.length = 0; _navReset(); _refresh(false);
+  }
+  function _navTitle(it) {
+    var t = (typeof _tmItemTitles === 'function' ? _tmItemTitles(it)[0] : '') || '';
+    return t || String(_i18n(_navItemObj(it).label) || '').slice(0, 30);
+  }
+  // index of the clipboard's source leaf in its section (identity first, then id), -1 = gone
+  function _navBufSrcIdx() {
+    if (!_navBuf || !_navBuf.node || !_navBuf.node.items) return -1;
+    var items = _navBuf.node.items, i = items.indexOf(_navBuf.ref);
+    if (i >= 0) return i;
+    if (_navBuf.id) for (i = 0; i < items.length; i++) if (items[i] && typeof items[i] === 'object' && items[i].id === _navBuf.id) return i;
+    return -1;
+  }
+  function _navBufSet(mode) {
+    if (!_tierOk()) return;
+    var node = _navNode(), i = _navFindSel(node);
+    if (i < 0) { _navReset(); _refresh(false); return; }
+    var it = node.items[i];
+    if (mode === 'copy' && it && typeof it === 'object' && it.segments && typeof _tmSegmentFileUrls === 'function' &&
+        _tmSegmentFileUrls(it.segments).length) {
+      _note('✗ მედიის მქონე ფოთლის ასლი ჯერ არ შეიძლება — გამოიყენე ✂️'); return;   // both copies would share the same files
+    }
+    _navBuf = { mode: mode, node: node, ref: it, id: (it && typeof it === 'object') ? (it.id || null) : null, item: JSON.parse(JSON.stringify(it)) };
+    _note((mode === 'copy' ? '📋 ' : '✂️ ') + _navTitle(it));
+    _navReset(); _refresh(false);
+  }
+  // a copy gets fresh ids (item + todo children), otherwise it would share its menu_todo_state rows with the original
+  function _navCloneFresh(it) {
+    if (typeof it === 'string') return it;
+    var c = JSON.parse(JSON.stringify(it)), used = {};
+    function nid(parent) { return typeof _tmTodoNewId === 'function' ? _tmTodoNewId(used) : ('todo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)); }
+    delete c.id;   // _tmMenuSaveNode -> _tmEnsureItemIds gives the item its id
+    (function walk(n) {
+      if ('checked' in n) n.checked = false;
+      (n.children || []).forEach(function (ch) { ch.id = nid(); walk(ch); });
+    })(c);
+    return c;
+  }
+  async function _navPaste() {
+    if (_navBusy || !_navBuf || !_tierOk()) return;
+    var dst = _navNode();
+    if (!dst || typeof _tmMenuSaveNode !== 'function') return;
+    var b = _navBuf, item, si = -1;
+    if (b.mode === 'cut') {
+      si = _navBufSrcIdx();
+      if (si < 0) { _note('✗ ამოჭრილი ფოთოლი ვეღარ მოიძებნა'); _navBuf = null; _refresh(false); return; }
+      if (b.node === dst) { _note('იგივე სექციაა'); _navBuf = null; _refresh(false); return; }
+      item = b.node.items[si];
+    } else {
+      item = _navCloneFresh(b.item);
+    }
+    if (typeof _tmNameClash === 'function' && typeof _tmItemTitles === 'function' &&
+        _tmItemTitles(item).some(function (t) { return _tmNameClash(dst, t); })) {
+      _note('✗ ამ სექციაში უკვე არის \"' + _navTitle(item) + '\" — ჯერ გადაარქვი (✏️)'); return;
+    }
+    _navBusy = true;
+    try {
+      if (!dst.items) dst.items = [];
+      dst.items.push(item);
+      await _tmMenuSaveNode(dst.id, { items_json: dst.items });   // 1) it lands in the destination ...
+      if (b.mode === 'cut') {                                      // 2) ... only then it leaves the source (no media delete: files move with it)
+        var j = b.node.items.indexOf(item);
+        if (j >= 0) b.node.items.splice(j, 1);
+        await _tmMenuSaveNode(b.node.id, { items_json: b.node.items });
+        _navBuf = null;
+      }
+      _note('📥 ' + _navTitle(item));
+    } finally { _navBusy = false; _navSel = null; _refresh(false); }
   }
   function _navEdit(el) {
     var node = _navNode(), i = _navFindSel(node);
@@ -278,22 +361,27 @@
       buttons: btns, config: { center: {} } };
     if (_navSel) {
       v.config.center.icon = _navItemIcon(node.items[si]);
-      v._centerFn = function () { _navReset(); _refresh(false); };
+      v._centerTapFn = v._centerFn = function () { _navReset(); _refresh(false); };   // back to the section
       btns.push({ icon: '✏️', label: 'რედაქტირება', fn: _navEdit });
+      btns.push({ icon: '📋', label: 'ასლი', fn: function () { _navBufSet('copy'); }, keepOpen: true });
+      btns.push({ icon: '✂️', label: 'ამოჭრა', fn: function () { _navBufSet('cut'); }, keepOpen: true });
       btns.push({ icon: _navDel ? '⚠️' : '🗑️', label: _navDel ? 'წაშლა — კიდევ ერთი ტაპი' : 'წაშლა', fn: _navRemove, keepOpen: true });
       return v;
     }
     v.config.center.icon = node ? (_firstGlyph(node.icon) || '📁') : '';   // root: empty = the default logo
-    v._centerFn = _navUp;
+    v._centerTapFn = _navUp;   // tap = up one level
+    v._centerFn = _navRoot;    // long-tap = root
     _navList(node).forEach(function (n) {
       btns.push({ icon: _firstGlyph(n.icon) || '📁', label: _i18n(n.title) || '', sec: true, keepOpen: true,
         fn: function () { _navStack().push(n); _navReset(); _refresh(false); } });
     });
     ((node && node.items) || []).forEach(function (it, i) {
       var o = _navItemObj(it);
-      btns.push({ icon: _navItemIcon(it), label: String(_i18n(o.label) || '').replace(/\n/g, ' ').slice(0, 40), keepOpen: true,
+      var isSrc = _navBuf && _navBuf.node === node && (_navBuf.ref === it || (_navBuf.id && o.id === _navBuf.id));
+      btns.push({ icon: _navItemIcon(it), mark: isSrc ? _navBuf.mode : undefined, label: String(_i18n(o.label) || '').replace(/\n/g, ' ').slice(0, 40), keepOpen: true,
         fn: function () { _navSel = { node: node, id: o.id || null, idx: i }; _navDel = false; _refresh(false); } });
     });
+    if (_navBuf && node) btns.push({ icon: '📥', label: 'ჩასმა: ' + _navTitle(_navBuf.item), keepOpen: true, fn: _navPaste });
     return v;
   }
 
@@ -307,6 +395,7 @@
     _fab.setAttribute('aria-label', 'ჰექსაგონი');
     _fab.onclick = function () {
       if (_fabLong) { _fabLong = false; return; }   // the click that ends a long-tap is not a toggle
+      if (_centerTapFn) { _centerTapFn(); return; }   // nav mode: the ring is always open, the centre goes up
       _setOpen(!_open);
     };
     // long-tap (no movement) on the centre hex runs the saved command, same path as a panel button
@@ -342,11 +431,12 @@
     _root.addEventListener('pointercancel', _onUp);
     // tap anywhere outside folds the ring (capture, so the map still receives the gesture)
     document.addEventListener('pointerdown', function (e) {
-      if (_open && _root && !_root.contains(e.target)) _setOpen(false);
+      if (_open && _root && !_root.contains(e.target) && !_navOn()) _setOpen(false);
     }, true);
   }
 
   function _setOpen(on) {
+    if (_navOn()) on = true;   // nav mode: the ring never folds (switch it off with /ჰექსაგონი ნავ)
     _open = !!on && !!_root;
     if (_root) _root.classList.toggle('open', _open);
   }
@@ -416,7 +506,8 @@
     _off = _clamp(Math.round(_off), 0, _maxOff);
     btns.forEach(function (btn, i) {
       var el = document.createElement('button'); el.className = 'hx'; el._i = i;
-      el.innerHTML = (btn.sec ? HX_SVG_SEC : HX_SVG) + '<span class="hx-in"></span>';
+      el.innerHTML = (btn.sec ? HX_SVG_SEC : (btn.mark === 'copy' ? HX_SVG_COPY : HX_SVG)) + '<span class="hx-in"></span>';
+      if (btn.mark === 'cut') el.classList.add('cut');
       var inner = el.querySelector('.hx-in');
       var act = (btn.action || '').trim();
       // icon (emoji) is optional; without it the hex shows the first letter of the command
@@ -435,6 +526,7 @@
     _place(_off);
     _centerAction = (h.config && h.config.center && h.config.center.action) || '';
     _centerFn = h._centerFn || null;
+    _centerTapFn = h._centerTapFn || null;
     _fab.innerHTML = HX_SVG + '<span class="hx-in"></span>';
     var holder = _fab.querySelector('.hx-in');
     var cIcon = _firstGlyph(h.config && h.config.center && h.config.center.icon);   // per-hexagon emoji
@@ -511,6 +603,7 @@
     if (!h) { if (_root) { _root.style.display = 'none'; _setOpen(false); } _sig = ''; return; }
     _build();
     var nav = _navOn();
+    if (nav && !_open) _setOpen(true);
     var sig = h.panel_id + '|' + (h.updated_at || '') + '|' + _baseW + 'x' + _baseH + (nav ? '|nav:' + _navSig() : '');
     if (sig !== _sig) { _sig = sig; _render(nav ? _navVirtual(h) : h); }
     var hide = _hiddenNow();
@@ -684,8 +777,8 @@
       var narg = (args[1] || '').trim();
       var nwant = narg === 'გამორთვა' ? false : (narg === 'ჩართვა' ? true : !_navOn());
       if (nwant && !(st.on && st.id && _active())) { _tmL('ter', '✗ ჯერ ჩართე ჰექსაგონი: /ჰექსაგონი <სახელი>'); return; }
-      _navSet(nwant); _navReset();
-      closeTerm(); _refresh(nwant);
+      _navSet(nwant); _navReset(); _navBuf = null;
+      closeTerm(); _refresh(nwant); if (!nwant) _setOpen(false);
       _tmL('tok', nwant ? '✓ ნავიგაცია ჩართულია (გასართავად: /ჰექსაგონი ნავ)' : '✓ ნავიგაცია გამორთულია');
       return;
     }
