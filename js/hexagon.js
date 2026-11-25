@@ -214,6 +214,7 @@
       '#hxFab{position:absolute;left:0;top:0;width:' + HX_CW + 'px;height:' + HX_CH + 'px;' + glass + '}' +
       '#hxFab .hx-in{font-size:17px;}' +
       '#hxFab{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}' +
+      '#hxRoot,#hxRoot *{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}' +   // long-tap must never select the emoji / open the text-selection bar
       '#hxFab img{width:110%;height:110%;object-fit:contain;pointer-events:none;-webkit-user-drag:none;}' +
       '#hxRoot.open #hxFab{background:rgba(88,166,255,0.18);}';
     document.head.appendChild(st);
@@ -527,6 +528,7 @@
     });
     ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) { _fab.addEventListener(ev, _clearHold); });
     _fab.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    _root.addEventListener('contextmenu', function (e) { e.preventDefault(); });   // every ring hex, not only those with a long-tap
     // invisible touch area = the whole radius: taps/drags inside it neither fold the ring nor reach the map
     _pad = document.createElement('div'); _pad.className = 'hx-pad';
     _root.appendChild(_pad); _root.appendChild(_ring); _root.appendChild(_fab);
