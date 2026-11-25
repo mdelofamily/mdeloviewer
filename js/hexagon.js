@@ -50,6 +50,7 @@
   var _baseH = 0, _baseW = 0;        // largest viewport seen (keyboard detection)
   var _centerFn = null;              // nav mode: function run by a long-tap on the centre hex (instead of _centerAction)
   var _centerTapFn = null;           // nav mode: function run by a plain tap on the centre hex (instead of folding the ring)
+  var _navSelSec = null;             // nav mode: selected SECTION (long-tap on its hex) -> rename / delete ring
   var _navCreate = false;            // nav mode: the ring shows the "what to create" choice (section / text / todo)
   var _navBuf = null, _navBusy = false;   // nav clipboard { mode:'copy'|'cut', node, ref, id, item } (this session only)
   var _navSel = null;                // nav mode: selected leaf { node, id, idx } (null = none)
@@ -223,6 +224,7 @@
   // just drawn from the terminal's current menu section (_tmMenuStack, terminal.js) instead.
   //   section hex (double frame): tap = enter       leaf hex: tap = select it (centre shows its emoji)
   //   centre: tap = up, long-tap = root (at root: nav mode off); the ring never folds in nav mode
+  //   long-tap on a section hex: its own ring — ✏️ title editor, 🗑️ delete (two taps; takes the whole subtree incl. media)
   //   ➕ (end of the ring): choose section / text / todo -> the terminal opens with /md, /ტექსტი or /todo typed in
   //   selected leaf: ✏️ = /რედ <id>  📋 copy  ✂️ cut  📌 pin/unpin on the active HUD (todo only, needs window.hudPinInfo from hud.js)  🗑️ = /წაშ <index> (two taps); 📥 = paste
   //   (marks: copied = dashed frame, cut = half transparent; the clipboard lives until reload / nav off)
@@ -255,11 +257,11 @@
     s += '#';
     ((node && node.items) || []).forEach(function (it) { var o = _navItemObj(it); s += (o.id || '') + ':' + (o.emoji || '') + (o.type || '') + ';'; });
     var psi = _navFindSel(node);
-    return s + '#' + psi + (_navSel && _navSel.id ? _navSel.id : '') + (_navDel ? '!' : '') + (_navCreate ? '+' : '') +
+    return s + '#' + psi + (_navSel && _navSel.id ? _navSel.id : '') + (_navDel ? '!' : '') + (_navCreate ? '+' : '') + (_navSelSec ? 'S' + (_navSelSec.id || '') : '') +
       (psi >= 0 && _navIsPin(node.items[psi]) ? 'P' : '') + (_navPinInfo() ? 'h' : '') +
       (_navBuf ? '|buf:' + _navBuf.mode + (_navBuf.id || '') + (_navBuf.node === node ? 's' : '') : '');
   }
-  function _navReset() { _navSel = null; _navDel = false; _navCreate = false; if (_navDelT) { clearTimeout(_navDelT); _navDelT = null; } }
+  function _navReset() { _navSel = null; _navSelSec = null; _navDel = false; _navCreate = false; if (_navDelT) { clearTimeout(_navDelT); _navDelT = null; } }
   function _navUp() {
     var st = _navStack();
     if (!st.length) { _note('root'); return; }
@@ -278,7 +280,43 @@
     if (!info) { _note('✗ ჯერ აირჩიე HUD: /ჰუდი <სახელი>'); return; }
     var it = node.items[i], o = _navItemObj(it);
     // same commands as by hand: /ჰუდი + <id>  /  /ჰუდი − <id>  (shared HUD: /საერთოჰუდი); the ring redraws when the HUD state changes
-    _panelPress({ action: (info.shared ? '/საერთოჰუდი' : '/ჰუდი') + (_navIsPin(it) ? ' − ' : ' + ') + (o.id || String(i)) }, el);
+    var was = _navIsPin(it);
+    _panelPress({ action: (info.shared ? '/საერთოჰუდი' : '/ჰუდი') + (was ? ' − ' : ' + ') + (o.id || String(i)) }, el);
+    setTimeout(function () {   // the command's own error text goes to the terminal log: if nothing changed, tell the user here
+      if (_navIsPin(it) === was) _note('⚠ პინი ვერ გადაირთო (ლიმიტი ან კავშირი?) — ნახე ტერმინალი');
+    }, 2000);
+  }
+  // ── section selection (long-tap): ✏️ title editor (same as /სექცია/ა/ბ), 🗑️ delete with two taps ──
+  function _navKa(t) { return typeof t === 'string' ? t : ((t && t.ka) || ''); }
+  function _navCount(n) {   // what a section delete takes with it
+    var c = { leaves: (n.items || []).length, secs: 0 };
+    (n.children || []).forEach(function (ch) { var d = _navCount(ch); c.secs += 1 + d.secs; c.leaves += d.leaves; });
+    return c;
+  }
+  function _navArm() {   // first tap of a delete: arm (⚠️), disarms itself after 3.5 s
+    _navDel = true;
+    if (_navDelT) clearTimeout(_navDelT);
+    _navDelT = setTimeout(function () { _navDelT = null; _navDel = false; _refresh(false); }, 3500);
+    _refresh(false);
+  }
+  function _navSecRename() {
+    var sec = _navSelSec;
+    if (!sec || !_tierOk() || typeof _tmMenuTitleEditOpen !== 'function') return;
+    var segs = _navStack().map(function (n) { return _navKa(n.title); }).concat([_navKa(sec.title)]);
+    if (segs.some(function (x) { return !x || x.indexOf('/') >= 0; })) { _note('✗ სახელში \"/\" არის ან ქართული სახელი არ აქვს — ბილიკით ვერ მივადგები'); return; }
+    if (typeof _tmOpen !== 'undefined' && !_tmOpen && typeof _tmOpen_ === 'function') _tmOpen_();
+    _tmMenuTitleEditOpen(segs);   // opens the title editor in the terminal (path from root, by exact title)
+    _navReset(); _refresh(false);
+  }
+  function _navSecRemove(el) {
+    var sec = _navSelSec, node = _navNode();
+    if (!sec || !_tierOk() || _navList(node).indexOf(sec) < 0) { _navReset(); _refresh(false); return; }
+    var title = _navKa(sec.title);
+    if (!title || /^\d+$/.test(title)) { _note('✗ ამ სახელით /წაშ ვერ მიაგნებს (ცარიელია ან მხოლოდ ციფრებია) — ჯერ გადაარქვი'); return; }
+    if (!_navDel) { _navArm(); return; }
+    _navReset();
+    _panelPress({ action: '/წაშ ' + title }, el);   // exact-title match in the current section; removes the whole subtree incl. its media
+    _refresh(false);
   }
   function _navRoot() {
     var st = _navStack();
@@ -413,6 +451,19 @@
       btns.push({ icon: _navDel ? '⚠️' : '🗑️', label: _navDel ? 'წაშლა — კიდევ ერთი ტაპი' : 'წაშლა', fn: _navRemove, keepOpen: true });
       return v;
     }
+    if (_navSelSec) {
+      var ssec = _navSelSec;
+      if (_navList(node).indexOf(ssec) < 0) _navReset();   // it vanished (deleted elsewhere)
+      else {
+        var cnt = _navCount(ssec);
+        v.panel_id += '|ssec';
+        v.config.center.icon = _firstGlyph(ssec.icon) || '📁';
+        v._centerTapFn = v._centerFn = function () { _navReset(); _refresh(false); };   // back to the section
+        btns.push({ icon: '✏️', label: 'სახელის შეცვლა', fn: _navSecRename });
+        btns.push({ icon: _navDel ? '⚠️' : '🗑️', label: _navDel ? ('წაშლა — ' + cnt.leaves + ' ფოთოლი, ' + cnt.secs + ' ქვე-სექცია') : 'წაშლა', fn: _navSecRemove, keepOpen: true });
+        return v;
+      }
+    }
     if (_navCreate && node) {
       v.panel_id += '|new';
       v.config.center.icon = HX_NAV_ICON.add;
@@ -428,6 +479,7 @@
     v._centerFn = _navRoot;    // long-tap = root
     _navList(node).forEach(function (n) {
       btns.push({ icon: _firstGlyph(n.icon) || '📁', label: _i18n(n.title) || '', sec: true, keepOpen: true,
+        longFn: function () { _navSel = null; _navCreate = false; _navDel = false; _navSelSec = n; _refresh(false); },
         fn: function () { _navStack().push(n); _navReset(); _refresh(false); } });
     });
     ((node && node.items) || []).forEach(function (it, i) {
@@ -571,7 +623,25 @@
       // icon (emoji) is optional; without it the hex shows the first letter of the command
       inner.textContent = (btn.icon && btn.icon.trim()) || _firstGlyph(act.replace(/^\/+/, '')) || '•';
       var tt = btn.label || act; el.title = tt; el.setAttribute('aria-label', tt);
+      if (btn.longFn) {   // long-tap on a ring hex (no movement, not a scroll) — nav mode: section -> rename / delete ring
+        var hT = null, hXY = null;
+        var hClr = function () { if (hT) { clearTimeout(hT); hT = null; } };
+        el.addEventListener('pointerdown', function (e) {
+          el._long = false; hClr(); hXY = { x: e.clientX, y: e.clientY };
+          hT = setTimeout(function () {
+            hT = null;
+            if (_drag && _drag.moved) return;
+            el._long = true;
+            try { if (navigator.vibrate) navigator.vibrate(12); } catch (x) {}
+            btn.longFn(el);
+          }, HX_HOLD_MS);
+        });
+        el.addEventListener('pointermove', function (e) { if (hT && hXY && Math.hypot(e.clientX - hXY.x, e.clientY - hXY.y) > 8) hClr(); });
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) { el.addEventListener(ev, hClr); });
+        el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+      }
       el.onclick = function () {
+        if (el._long) { el._long = false; return; }   // the click that ends a long-tap is not a press
         if (_wasDrag) { _wasDrag = false; return; }   // the click that ends a scroll is not a press
         if (btn.fn) { btn.fn(el); if (!btn.keepOpen) _setOpen(false); return; }   // nav mode: local handler (commands inside still go through _panelPress)
         // same execution path as a panel button; tier is re-checked inside tmRun/runMacro
