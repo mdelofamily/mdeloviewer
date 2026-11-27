@@ -3209,6 +3209,7 @@ function _applyDlgToTarget(tgt, row) {
 // ── menu todo checkbox state (persisted in Supabase, table: menu_todo_state) ──
 var _gmTodoState = new Map(); // todo_id -> checked (bool)
 var _gmValueState = new Map(); // slider id -> 0..100 (menu_todo_state.value; see todo-value-migration.sql)
+var _gmClaimState = new Map(); // todo_id -> { by: uuid, name, at } (menu_todo_state.claimed_*; see todo-claim-migration.sql)
 
 async function loadTodoState() {
   try {
@@ -3218,9 +3219,11 @@ async function loadTodoState() {
     );
     if (!r.ok) return;
     var rows = await r.json();
+    _gmClaimState.clear();
     rows.forEach(function(row) {
       _gmTodoState.set(row.todo_id, !!row.checked);
       if (row.value != null) _gmValueState.set(row.todo_id, row.value);
+      if (row.claimed_by) _gmClaimState.set(row.todo_id, { by: row.claimed_by, name: row.claimed_by_name || '', at: row.claimed_at || null });
     });
   } catch (e) {}
 }
@@ -3417,6 +3420,123 @@ async function _gmTodoSetMany(ids, checked) {
   return res === true ? true : queueAll();
 }
 
+// ── todo claims: "who took this row" (UI-level gating only, RLS does not check tier) ──
+// A claim covers the node and everything below it. Stored on menu_todo_state
+// (claimed_by uuid, claimed_by_name text snapshot, claimed_at). Parents get a row only when claimed.
+// root = the todo item that owns the tree (has id + children); id = the node to claim/release.
+function _gmClaimPath(root, id) {
+  var out = null;
+  (function walk(n, trail) {
+    if (out) return;
+    var t = trail.concat(n);
+    if (n.id === id) { out = t; return; }
+    (n.children || []).forEach(function (c) { walk(c, t); });
+  })(root, []);
+  return out;
+}
+function _gmClaimDescendants(n) {
+  var out = [];
+  (function walk(x) { (x.children || []).forEach(function (c) { out.push(c); walk(c); }); })(n);
+  return out;
+}
+// fresh read of all claims on this map (conflict checks must not trust a stale startup copy)
+async function _gmClaimsReload() {
+  try {
+    var r = await fetch(
+      SUPA_URL + '/rest/v1/menu_todo_state?map_id=eq.' + encodeURIComponent(_MAP_ID) +
+      '&claimed_by=not.is.null&select=todo_id,claimed_by,claimed_by_name,claimed_at',
+      { headers: _authHeaders() }
+    );
+    if (!r.ok) return false;
+    var rows = await r.json();
+    _gmClaimState.clear();
+    rows.forEach(function (row) {
+      _gmClaimState.set(row.todo_id, { by: row.claimed_by, name: row.claimed_by_name || '', at: row.claimed_at || null });
+    });
+    return true;
+  } catch (e) { return false; }
+}
+function _gmClaimPre(root, id) {   // shared login/offline/path checks -> { fail } | { path, node, labels }
+  if (typeof window.isLoggedIn !== 'function' || !window.isLoggedIn()) return { fail: { ok: false, reason: 'login' } };
+  if (!navigator.onLine) return { fail: { ok: false, reason: 'offline' } };
+  var path = id ? _gmClaimPath(root, id) : null;
+  if (!path) return { fail: { ok: false, reason: 'notfound' } };
+  return { path: path, node: path[path.length - 1], labels: path.map(function (n) { return _i18n(n.label) || ''; }) };
+}
+// -> { ok:true, labels } | { ok:false, reason, by?, at? }
+// reasons: login offline notfound network already taken ancestor_taken descendant_taken own_descendant save
+async function _gmTodoClaim(root, id) {
+  var pre = _gmClaimPre(root, id); if (pre.fail) return pre.fail;
+  if (!(await _gmClaimsReload())) return { ok: false, reason: 'network' };
+  var me = window.myUserId(), path = pre.path, last = path.length - 1;
+  for (var i = 0; i <= last; i++) {                       // the node itself + every ancestor
+    var c = _gmClaimState.get(path[i].id);
+    if (!c) continue;
+    if (c.by === me) return { ok: false, reason: 'already', by: c.name, at: pre.labels[i] };
+    return { ok: false, reason: i === last ? 'taken' : 'ancestor_taken', by: c.name, at: pre.labels[i] };
+  }
+  var desc = _gmClaimDescendants(pre.node);               // every descendant
+  for (var j = 0; j < desc.length; j++) {
+    var d = _gmClaimState.get(desc[j].id);
+    if (!d) continue;
+    return { ok: false, reason: d.by === me ? 'own_descendant' : 'descendant_taken', by: d.name, at: _i18n(desc[j].label) || '' };
+  }
+  var name = window.myDisplayName(), now = new Date().toISOString();
+  // checked is sent as the current local value so a first-time row can't violate NOT NULL
+  // and an existing leaf's checked state is not reset by the upsert.
+  var isLeaf = !(pre.node.children && pre.node.children.length);
+  try {
+    var r = await fetch(SUPA_URL + '/rest/v1/menu_todo_state?on_conflict=map_id,todo_id', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' }, _authHeaders()),
+      body: JSON.stringify({
+        map_id: _MAP_ID, todo_id: id, checked: isLeaf ? _gmTodoLeafOn(pre.node) : false,
+        claimed_by: me, claimed_by_name: name, claimed_at: now, updated_at: now
+      })
+    });
+    if (!r.ok) {
+      var eb = r.text ? await r.text().catch(function () { return ''; }) : '';
+      return { ok: false, reason: 'save', status: r.status, msg: eb.slice(0, 150) };
+    }
+  } catch (e) { return { ok: false, reason: 'save', status: 0, msg: e.message }; }
+  _gmClaimState.set(id, { by: me, name: name, at: now });
+  return { ok: true, labels: pre.labels };
+}
+// release: the claimer (any tier) or resident+. -> { ok:true, by, labels } | { ok:false, reason, by?, at? }
+// reasons: login offline notfound network not_claimed inherited forbidden save
+async function _gmTodoRelease(root, id) {
+  var pre = _gmClaimPre(root, id); if (pre.fail) return pre.fail;
+  if (!(await _gmClaimsReload())) return { ok: false, reason: 'network' };
+  var c = _gmClaimState.get(id);
+  if (!c) {
+    for (var i = pre.path.length - 2; i >= 0; i--) {
+      var a = _gmClaimState.get(pre.path[i].id);
+      if (a) return { ok: false, reason: 'inherited', by: a.name, at: pre.labels[i] };
+    }
+    return { ok: false, reason: 'not_claimed' };
+  }
+  var mine = c.by === window.myUserId();
+  if (!mine && !(typeof window._tierAtLeast === 'function' && window._tierAtLeast('resident'))) {
+    return { ok: false, reason: 'forbidden', by: c.name };
+  }
+  try {
+    var r = await fetch(
+      SUPA_URL + '/rest/v1/menu_todo_state?map_id=eq.' + encodeURIComponent(_MAP_ID) + '&todo_id=eq.' + encodeURIComponent(id),
+      {
+        method: 'PATCH',
+        headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, _authHeaders()),
+        body: JSON.stringify({ claimed_by: null, claimed_by_name: null, claimed_at: null, updated_at: new Date().toISOString() })
+      }
+    );
+    if (!r.ok) {
+      var eb = r.text ? await r.text().catch(function () { return ''; }) : '';
+      return { ok: false, reason: 'save', status: r.status, msg: eb.slice(0, 150) };
+    }
+  } catch (e) { return { ok: false, reason: 'save', status: 0, msg: e.message }; }
+  _gmClaimState.delete(id);
+  return { ok: true, by: c.name, labels: pre.labels };
+}
+
 // Tree renderer for a todo item that has children: nested containers, so CSS can
 // draw the connector lines (vertical guide + elbow into each child's checkbox).
 // Self-contained gm-tt-* classes — no dependency on the export-generated index.html CSS.
@@ -3428,6 +3548,8 @@ function _gmBuildTodoTree(root, opts) {
       const c = _gmTodoCount(r.n);
       r.el.classList.toggle('done', c.total > 0 && c.done === c.total);
       if (r.cnt) r.cnt.textContent = c.done + '/' + c.total;
+      const cl = r.n.id ? _gmClaimState.get(r.n.id) : null;
+      r.by.textContent = cl ? (cl.name || '?') : '';
     });
   }
   function toggle(n) {
@@ -3446,6 +3568,7 @@ function _gmBuildTodoTree(root, opts) {
     row.appendChild(box); row.appendChild(lbl);
     let cnt = null;
     if (hasKids) { cnt = document.createElement('span'); cnt.className = 'gm-tt-cnt'; row.appendChild(cnt); }
+    const by = document.createElement('span'); by.className = 'gm-tt-by'; row.appendChild(by);   // claimer name; hidden when empty
     row.onclick = function (e) { if (e.target.closest('a')) return; toggle(n); };
     el.appendChild(row);
     if (hasKids) {
@@ -3453,7 +3576,7 @@ function _gmBuildTodoTree(root, opts) {
       n.children.forEach(function (c) { kids.appendChild(build(c, true)); });
       el.appendChild(kids);
     }
-    nodes.push({ n: n, el: el, cnt: cnt });
+    nodes.push({ n: n, el: el, cnt: cnt, by: by });
     return el;
   }
   if (opts && opts.skipRoot) root.children.forEach(function (c) { wrap.appendChild(build(c, false)); });
@@ -3468,6 +3591,9 @@ window._gmPathEntry     = _gmPathEntry;
 window._gmOpenLeaf      = _gmOpenLeaf;
 window.menuTodoIsDone   = _gmTodoIsDone;
 window.menuTodoCount    = _gmTodoCount;
+window.menuTodoClaim    = _gmTodoClaim;     // (rootNode, id) -> Promise<{ok,...}>
+window.menuTodoRelease  = _gmTodoRelease;   // (rootNode, id) -> Promise<{ok,...}>
+window.menuTodoClaims   = function () { return new Map(_gmClaimState); };   // todo_id -> { by, name, at }
 window.menuTodoLeafIds  = function (n) { return _gmTodoLeaves(n).map(function (l) { return l.id; }); };
 
 // Styles for nested rows — injected here because index.html is regenerated by the editor export.
@@ -3485,6 +3611,8 @@ window.menuTodoLeafIds  = function (n) { return _gmTodoLeaves(n).map(function (l
     '.gm-tt-cnt{flex-shrink:0;margin:0 6px 0 6px;font-size:12px;color:rgba(180,190,200,0.6);white-space:nowrap;}' +
     '.gm-tt-n.done>.gm-tt-row .gm-tt-box{background:rgba(80,200,120,0.18);border-color:rgba(80,200,120,0.7);color:#6fdc8c;}' +
     '.gm-tt-n.done>.gm-tt-row .gm-tt-lbl{color:rgba(140,150,160,0.6);text-decoration:line-through;}' +
+    '.gm-tt-by{flex-shrink:0;align-self:center;max-width:40%;margin:0 4px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:rgba(140,150,160,0.75);}' +
+    '.gm-tt-by:empty{display:none;}' +
     '.gm-tt-kids{margin-left:9px;}' +
     '.gm-tt-sub{position:relative;padding-left:16px;}' +
     '.gm-tt-sub::before{content:\'\';position:absolute;left:0;top:0;width:14px;height:14px;border-left:1px solid rgba(180,190,200,0.28);border-bottom:1px solid rgba(180,190,200,0.28);}' +

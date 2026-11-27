@@ -25,7 +25,7 @@ var _tmFilesCache = [];    // last /ფაილები result — lets /play 
 var _tmEditMediaBuf = [];  // [{items:[{type,url,name}...]}...] — files-segments captured via /მედია
                             // during the current 'text' menuItem session; [[მედია:N]] tokens in tmTa
                             // point into this by index. Cleared on every session open/close/save/cancel.
-var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/არე','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/მარკერი','/დახურვა','/დროშა','/მეტსახელი','/მე','/ვინ','/ფერი','/help','/გზა','/ჩვ','/გად','/md','/წაშ','/რედ','/ჩატი','/todo','/მაკრო','/ლოგინი','/ლოგაუთი','/სახელი','/სესია','/სია','/იუზერი','/სურვილი','/შენახვა','/ჩატვირთვა','/სინქრონიზაცია','/შესრულება','/play','/მუსიკა','/ფაილები','/ფაილი','/ენა','/სექცია'];
+var _TMCMDS = ['/დახმარება','/გასუფთავება','/ინფო','/მასშტაბი','/ზონები','/არე','/ობიექტები','/დიალოგი','/წასვლა','/ლეგენდა','/მენიუ','/გახსნა','/შეყვანა','/სრული','/ისტორია','/ვადა','/ტექსტი','/შეტყობინება','/მარკერი','/დახურვა','/დროშა','/მეტსახელი','/მე','/ვინ','/ფერი','/help','/გზა','/ჩვ','/გად','/md','/წაშ','/რედ','/ჩატი','/todo','/მაკრო','/ლოგინი','/ლოგაუთი','/სახელი','/სესია','/სია','/იუზერი','/სურვილი','/შენახვა','/ჩატვირთვა','/სინქრონიზაცია','/შესრულება','/აღება','/play','/მუსიკა','/ფაილები','/ფაილი','/ენა','/სექცია'];
 
 function toggleTerm() { _tmOpen ? closeTerm() : _tmOpen_(); }
 function _tmOpen_() {
@@ -384,6 +384,7 @@ var _TM_MIN_TIER = {
   'შეტყობინება': 'caretaker', // notification send — caretaker's other direct capability
   'todo':        'caretaker', // leaf-level todo/counter toggle (the exact "cat food refilled" case)
   'შესრულება':   'caretaker', // = todo, new name
+  'აღება':       'caretaker', // claim a todo row (release: claimer any tier, others resident+ — checked in runtime.js)
   'ტექსტი':      'caretaker', // text-leaf add — caretaker's direct write scope (mode toggle moved to /ჩატი)
   'დიალოგი':     'resident',  // dialogue DSL authoring
   'არე':         'caretaker', // create/edit/delete map areas (area_overrides) — caretaker and above
@@ -568,6 +569,7 @@ async function _tmRun(raw) {
     'რედ':         _tmMenuEdit,
     'todo':        _tmTodoCreate,
     'შესრულება':   _tmTodoDo,
+    'აღება':       _tmClaim,
     'macro':       _tmMacro,
     'მაკრო':       _tmMacro,
     'play':        _tmPlay,
@@ -869,6 +871,9 @@ function _tmHelp() {
       ['/მენიუ/სექცია/.../N', 'პირდაპირი ლინკი ნესტ. სექციაზე ან item-ზე'],
       ['/შესრულება [სახელი|N|N.K] [N%]', 'todo-ების ხე (ცარიელი) ან toggle / სლაიდერის მნიშვნელობა მიმდინარე კვანძში'],
       ['/todo/სექცია/.../<N|სახელი|id>', 'todo-ის toggle ნებისმიერი branch-დან, /cd-ის გარეშე'],
+      ['/აღება [სექცია/.../სექცია]', 'todo-ების ხე კოდებით და ვინ რა აიღო (caretaker+)'],
+      ['/აღება [სექცია/...] N.K.J', 'todo-ს რიგის აღება (ქვედა დონეებიც შენია)'],
+      ['/აღება უარი [სექცია/...] N.K.J', 'გათავისუფლება: თვითონ აღებული ან resident+'],
       ['/გზა', 'მენიუს მიმდინარე გზა'],
       ['/ჩვ', 'მენიუს კვანძის შემცველობა'],
       ['/გად [სახელი|..|/|a/b/c]', 'ნავიგაცია — ერთი ნაბიჯი ან slash-path']
@@ -3226,6 +3231,110 @@ async function _tmTodoToggle(node, ref) {
   if (res === 'queued') _tmL('tdm', '⚠ ოფლაინ/ქსელის შეცდომა — queue-შია (' + window.pendingCount() + ')');
 }
 
+// ── /აღება [<სექციის გზა>] [N.K.J] · /აღება უარი [<გზა>] N.K.J — "who took this todo row" ──
+// Path = slash-separated section titles (same resolution as /todo/...), no path = current section (/cd).
+// Codes are the ones /შესრულება prints: N = todo index in the section, N.K.J = child path.
+// All state + conflict rules live in runtime.js (menuTodoClaim / menuTodoRelease / menuTodoClaims);
+// this only parses and prints. Chain-safe (";" in macros): nothing interactive is asked.
+function _tmClaimParse(args) {
+  var toks = (args || []).slice(), release = false;
+  if (toks[0] === 'უარი') { release = true; toks.shift(); }
+  var code = null;
+  if (toks.length && /^\d+(?:\.\d+)*$/.test(toks[toks.length - 1])) code = toks.pop();
+  return { release: release, code: code, pathStr: toks.join(' ').trim() };
+}
+
+function _tmClaimNode(pathStr) {
+  if (!pathStr) {
+    var cwd = _tmMenuCwdNode();
+    if (!cwd) _tmL('ter', 'root-ში todo არ არის — /cd <სახელი> შედი სექციაში, ან მიუთითე გზა: /აღება სექცია/.../სექცია');
+    return cwd;
+  }
+  var segs = pathStr.split('/').map(function (x) { return x.trim(); }).filter(Boolean);
+  return segs.length ? _tmFindMenuNodeByPath(segs) : null;   // logs its own error
+}
+
+function _tmClaimTarget(node, code) {
+  var parts = code.split('.').map(Number);
+  var root = node.items && node.items[parts[0]];
+  if (!root || typeof root !== 'object' || root.type !== 'todo') { _tmL('ter', 'todo [' + parts[0] + '] ვერ მოიძებნა — /აღება'); return null; }
+  var target = root;
+  for (var k = 1; k < parts.length; k++) {
+    target = target.children && target.children[parts[k]];
+    if (!target) { _tmL('ter', 'todo [' + parts.slice(0, k + 1).join('.') + '] ვერ მოიძებნა — /აღება'); return null; }
+  }
+  if (!target.id || !root.id) { _tmL('ter', '✗ id აკლია — ჯერ /რედ ' + parts[0] + ' და შეინახე'); return null; }
+  return { root: root, target: target };
+}
+
+function _tmClaimLs(node) {
+  var claims = window.menuTodoClaims ? window.menuTodoClaims() : new Map(), any = false;
+  (node.items || []).forEach(function (it, idx) {
+    if (!it || typeof it !== 'object' || it.type !== 'todo') return;
+    if (!any) { any = true; _tmL('tdm', _SEP); }
+    (function walk(n, path, depth) {
+      var c = window.menuTodoCount(n), kids = n.children && n.children.length;
+      var isSl = depth === 0 && window.menuIsSlider && window.menuIsSlider(n);
+      var st = isSl ? '📊' : (window.menuTodoIsDone(n) ? '✅' : '⬜');
+      var cl = n.id ? claims.get(n.id) : null;
+      _tmL('tnf', '  '.repeat(depth) + '[' + path + '] ' + st + ' ' + (_tmTodoKa(n.label) || '(უსახელო)') +
+        (kids ? '  (' + c.done + '/' + c.total + ')' : (isSl ? '  (' + window.menuSliderValue(n) + '%)' : '')) +
+        (cl ? '  👤 ' + (cl.name || '?') : ''));
+      (n.children || []).forEach(function (ch, k) { walk(ch, path + '.' + k, depth + 1); });
+    })(it, String(idx), 0);
+  });
+  if (!any) { _tmL('tdm', '(todos არ არსებობს)'); return; }
+  _tmL('tdm', _SEP);
+}
+
+function _tmClaimFail(res, release) {
+  var q = function (x) { return '„' + x + '“'; };
+  switch (res.reason) {
+    case 'login':           _tmL('tdm', 'ჯერ არ ხარ ავტორიზებული — /ლოგინი.'); break;
+    case 'offline':         _tmL('ter', '✗ ოფლაინ — ' + (release ? 'გათავისუფლებას' : 'აღებას') + ' ქსელი სჭირდება'); break;
+    case 'network':         _tmL('ter', '✗ ქსელის შეცდომა — ვერ გადავამოწმე, ვინ რა აიღო'); break;
+    case 'notfound':        _tmL('ter', '✗ რიგი ვერ მოიძებნა'); break;
+    case 'already':         _tmL('ter', '✗ უკვე შენზეა აღებული: ' + q(res.at)); break;
+    case 'taken':           _tmL('ter', '✗ ' + q(res.at) + ' უკვე აიღო: ' + res.by); break;
+    case 'ancestor_taken':  _tmL('ter', '✗ ზედა დონე ' + q(res.at) + ' აიღო: ' + res.by + ' — ქვედა ვერ აიღება'); break;
+    case 'descendant_taken': _tmL('ter', '✗ ქვედა დონეზე ' + q(res.at) + ' აიღო: ' + res.by + ' — ზედა ვერ აიღება'); break;
+    case 'own_descendant':  _tmL('ter', '✗ ქვედა დონეზე ' + q(res.at) + ' შენ გაქვს აღებული — ჯერ /აღება უარი'); break;
+    case 'not_claimed':     _tmL('ter', '✗ ეს რიგი აღებული არ არის'); break;
+    case 'inherited':       _tmL('ter', '✗ ცალკე არ არის აღებული — ზედა დონე ' + q(res.at) + ' აიღო: ' + res.by + ' (გაათავისუფლე ის)'); break;
+    case 'forbidden':       _tmL('ter', '✗ ' + res.by + '-ის აღებას მხოლოდ თვითონ ან resident+ ათავისუფლებს'); break;
+    case 'save':            _tmL('ter', '✗ ვერ შეინახა' + (res.status ? ' (' + res.status + ')' : '') + (res.msg ? ': ' + res.msg : '')); break;
+    default:                _tmL('ter', '✗ ვერ შესრულდა (' + (res.reason || '?') + ')');
+  }
+}
+
+async function _tmClaim(args) {
+  if (typeof window.menuTodoClaim !== 'function' || typeof window.menuTodoRelease !== 'function') {
+    _tmL('ter', '✗ menuTodoClaim ვერ მოიძებნა (runtime.js?)'); return;
+  }
+  var p = _tmClaimParse(args);
+  var node = _tmClaimNode(p.pathStr);
+  if (!node) return;
+  if (p.code == null) {
+    if (p.release) { _tmL('ter', 'გამოყენება: /აღება უარი [სექცია/...] N.K.J'); return; }
+    _tmClaimLs(node);
+    _tmL('tdm', 'აღება: /აღება ' + (p.pathStr ? p.pathStr + ' ' : '') + '<კოდი> · გათავისუფლება: /აღება უარი ' + (p.pathStr ? p.pathStr + ' ' : '') + '<კოდი>');
+    return;
+  }
+  var t = _tmClaimTarget(node, p.code);
+  if (!t) return;
+  var ref = (p.pathStr ? p.pathStr + ' ' : '') + p.code;
+  if (p.release) {
+    var rr = await window.menuTodoRelease(t.root, t.target.id);
+    if (!rr.ok) { _tmClaimFail(rr, true); return; }
+    _tmL('tok', 'გათავისუფლდა: ' + rr.labels.join(' › ') + '  (იყო: ' + rr.by + ')');
+    return;
+  }
+  var res = await window.menuTodoClaim(t.root, t.target.id);
+  if (!res.ok) { _tmClaimFail(res, false); return; }
+  _tmL('tok', 'აიღე: ' + res.labels.join(' › '));
+  _tmL('tdm', 'გაუქმება: /აღება უარი ' + ref);
+}
+
 async function _tmMenuRm(args) {
   var arg = args.join(' ').trim();
   if (!arg) { _tmL('ter', 'გამოყენება: /rm <სახელი | id | ინდექსი>'); return; }
@@ -3715,7 +3824,7 @@ async function _tmMenuSaveNode(nodeId, fields) {
 // A macro IS a brand-new command: once saved, typing its exact name (with /) runs
 // the whole stored chain. Local scope takes precedence over shared on a name clash.
 var _TM_RESERVED = ['macro','მაკრო','marker','მარკერი','cd','გად','md','rm','წაშ','ls','ჩვ','pwd','გზა','edit','რედ','todo','ჩატი','flag','დროშა','nick','მეტსახელი','me','მე','who','ვინ','color','ფერი','help','play','მუსიკა','music','ფაილები','files','ფაილი',
-  'დახმარება','ჰექსაგონი','ჰუდი','საერთოჰუდი','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება','პანელი'];
+  'დახმარება','ჰექსაგონი','ჰუდი','საერთოჰუდი','გასუფთავება','ინფო','მასშტაბი','ზონები','არე','ობიექტები','ობიექტი','სცენა','კვანძი','წერტილი','წერტილები','ნახვა','გასვლა','ტექსტი','დიალოგი','წასვლა','ლეგენდა','მენიუ','გახსნა','შეყვანა','სრული','ისტორია','ვადა','ტექსტი','შეტყობინება','დახურვა','სია','იუზერი','დაწინაურება','სურვილი','შენახვა','ჩატვირთვა','სინქრონიზაცია','sync','შესრულება','აღება','პანელი'];
 
 // Splits a chain on ";" — but only when ";" is followed by "/" (so a stray
 // ";" inside ordinary command args is left alone) — PLUS treats any [...]
