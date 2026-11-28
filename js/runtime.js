@@ -3209,7 +3209,11 @@ function _applyDlgToTarget(tgt, row) {
 // ── menu todo checkbox state (persisted in Supabase, table: menu_todo_state) ──
 var _gmTodoState = new Map(); // todo_id -> checked (bool)
 var _gmValueState = new Map(); // slider id -> 0..100 (menu_todo_state.value; see todo-value-migration.sql)
-var _gmClaimState = new Map(); // todo_id -> { by: uuid, name, at } (menu_todo_state.claimed_*; see todo-claim-migration.sql)
+var _gmClaimState = new Map(); // todo_id -> { by: uuid, name, at, linked } (menu_todo_state.claimed_*/linked_id; see todo-claim-migration.sql, todo-claim-link-migration.sql)
+// twin mirror: a claimed shared row reads its progress from the twin todo in the claimer's own branch.
+var _gmTwinMap = new Map();    // shared leaf id -> twin leaf node (same position in the copied subtree)
+var _gmTwinStat = new Map();   // claimed shared id -> 'ok' | 'orphan' (twin gone) | 'drift' (twin shape changed)
+var _gmTwinDirty = true;       // rebuilt lazily on next read
 
 async function loadTodoState() {
   try {
@@ -3223,8 +3227,9 @@ async function loadTodoState() {
     rows.forEach(function(row) {
       _gmTodoState.set(row.todo_id, !!row.checked);
       if (row.value != null) _gmValueState.set(row.todo_id, row.value);
-      if (row.claimed_by) _gmClaimState.set(row.todo_id, { by: row.claimed_by, name: row.claimed_by_name || '', at: row.claimed_at || null });
+      if (row.claimed_by) _gmClaimState.set(row.todo_id, { by: row.claimed_by, name: row.claimed_by_name || '', at: row.claimed_at || null, linked: row.linked_id || null });
     });
+    _gmTwinDirty = true;
   } catch (e) {}
 }
 
@@ -3257,6 +3262,7 @@ function _gmClampPct(x) { return Math.max(0, Math.min(100, Math.round(Number(x) 
 function _gmBarColor(v) { return v > 60 ? '#4ade80' : v > 30 ? '#facc15' : '#f87171'; }
 function _gmIsSlider(it) { return !!it && (it.type === 'todo' || it.type === 'progress') && !(it.children && it.children.length); }
 function _gmSliderValue(it) {
+  const tw = it && it.id ? _gmTwinLeafOf(it.id) : null; if (tw) it = tw;   // claimed: progress comes from the twin
   if (it && it.id && _gmValueState.has(it.id)) return _gmClampPct(_gmValueState.get(it.id));
   if (it && it.id && _gmTodoState.get(it.id)) return 100;   // an old single checkbox that was checked
   return _gmClampPct(it && it.value);
@@ -3274,6 +3280,7 @@ async function _gmSaveTodoValueSafe(id, v) {
   return res === true ? true : q();
 }
 function _gmSetSliderValue(id, value) {   // local apply + immediate save (terminal / macros)
+  if (_gmTwinLeafOf(id)) return 'locked';   // claimed: change it from the twin
   const v = _gmClampPct(value);
   _gmSliderLocal(id, v);
   return _gmSaveTodoValueSafe(id, v);
@@ -3296,7 +3303,8 @@ function _gmSliderView(itObj, opts) {
   opts = opts || {};
   _gmEnsureSliderStyles();
   const id = itObj.id;
-  const can = !!id && typeof window._tierAtLeast === 'function' && window._tierAtLeast('caretaker');
+  const locked = !!id && !!_gmTwinLeafOf(id);
+  const can = !locked && !!id && typeof window._tierAtLeast === 'function' && window._tierAtLeast('caretaker');
   let v = _gmSliderValue(itObj), timer = null;
   const root = document.createElement('div'); root.className = 'gm-slider-view';
   if (!opts.skipRoot) {
@@ -3312,7 +3320,7 @@ function _gmSliderView(itObj, opts) {
   const paint = function () { num.textContent = v + '%'; fill.style.width = v + '%'; fill.style.background = _gmBarColor(v); };
   paint();
   if (!can) {
-    note.textContent = id ? 'მნიშვნელობას caretaker+ ცვლის' : 'id აკლია — /რედ-ით ერთხელ შეინახე';
+    note.textContent = locked ? '🔒 აღებულია — პროგრესი ტყუპიდან მოდის' : (id ? 'მნიშვნელობას caretaker+ ცვლის' : 'id აკლია — /რედ-ით ერთხელ შეინახე');
     root.appendChild(note); return root;
   }
   const range = document.createElement('input');
@@ -3375,7 +3383,41 @@ function _gmTodoLeaves(n) {
   })(n);
   return out;
 }
-function _gmTodoLeafOn(n) { return _gmTodoState.has(n.id) ? _gmTodoState.get(n.id) : !!n.checked; }
+function _gmTodoLeafOn(n) {
+  const tw = n.id ? _gmTwinLeafOf(n.id) : null; if (tw) n = tw;   // claimed: read the twin's leaf
+  return _gmTodoState.has(n.id) ? _gmTodoState.get(n.id) : !!n.checked;
+}
+// ── twin mirror (stage B). A claim with linked_id points at a copy of the claimed subtree in the
+// claimer's own branch; shared leaf i reads twin leaf i (same order). Parent counts / HUD follow for free.
+function _gmTodoIndex() {   // every todo node anywhere in the menu tree: id -> node
+  var m = new Map();
+  (function walkMenu(nodes) {
+    (nodes || []).forEach(function (nd) {
+      (nd.items || []).forEach(function (it) {
+        if (it && typeof it === 'object' && it.type === 'todo') (function w(x) { if (x.id) m.set(x.id, x); (x.children || []).forEach(w); })(it);
+      });
+      walkMenu(nd.children);
+    });
+  })(_CFG.menu || []);
+  return m;
+}
+function _gmTwinEnsure() {
+  if (!_gmTwinDirty) return;
+  _gmTwinDirty = false;
+  _gmTwinMap.clear(); _gmTwinStat.clear();
+  var idx = null;
+  _gmClaimState.forEach(function (c, sharedId) {
+    if (!c.linked) return;
+    if (!idx) idx = _gmTodoIndex();
+    var sh = idx.get(sharedId), tw = idx.get(c.linked);
+    if (!sh || !tw) { _gmTwinStat.set(sharedId, 'orphan'); return; }
+    var sl = _gmTodoLeaves(sh), tl = _gmTodoLeaves(tw);
+    if (sl.length !== tl.length) { _gmTwinStat.set(sharedId, 'drift'); return; }
+    sl.forEach(function (l, i) { if (l.id) _gmTwinMap.set(l.id, tl[i]); });
+    _gmTwinStat.set(sharedId, 'ok');
+  });
+}
+function _gmTwinLeafOf(id) { _gmTwinEnsure(); return _gmTwinMap.get(id) || null; }
 function _gmTodoCount(n) {
   var leaves = _gmTodoLeaves(n), done = 0;
   leaves.forEach(function (l) { if (_gmTodoLeafOn(l)) done++; });
@@ -3407,6 +3449,9 @@ async function _gmSaveTodoStateBulk(ids, checked) {
 // same pendingAdd('todo', ...) queue as single toggles). Returns true | 'queued'.
 async function _gmTodoSetMany(ids, checked) {
   if (!ids || !ids.length) return true;
+  const before = ids.length;
+  ids = ids.filter(function (id) { return !_gmTwinLeafOf(id); });   // claimed leaves change only through the twin
+  if (!ids.length) return before ? 'locked' : true;
   ids.forEach(function (id) { _gmTodoState.set(id, checked); });
   if (window.hudRefresh) window.hudRefresh();
   function queueAll() {
@@ -3444,15 +3489,16 @@ async function _gmClaimsReload() {
   try {
     var r = await fetch(
       SUPA_URL + '/rest/v1/menu_todo_state?map_id=eq.' + encodeURIComponent(_MAP_ID) +
-      '&claimed_by=not.is.null&select=todo_id,claimed_by,claimed_by_name,claimed_at',
+      '&claimed_by=not.is.null&select=todo_id,claimed_by,claimed_by_name,claimed_at,linked_id',
       { headers: _authHeaders() }
     );
     if (!r.ok) return false;
     var rows = await r.json();
     _gmClaimState.clear();
     rows.forEach(function (row) {
-      _gmClaimState.set(row.todo_id, { by: row.claimed_by, name: row.claimed_by_name || '', at: row.claimed_at || null });
+      _gmClaimState.set(row.todo_id, { by: row.claimed_by, name: row.claimed_by_name || '', at: row.claimed_at || null, linked: row.linked_id || null });
     });
+    _gmTwinDirty = true;
     return true;
   } catch (e) { return false; }
 }
@@ -3465,7 +3511,7 @@ function _gmClaimPre(root, id) {   // shared login/offline/path checks -> { fail
 }
 // -> { ok:true, labels } | { ok:false, reason, by?, at? }
 // reasons: login offline notfound network already taken ancestor_taken descendant_taken own_descendant save
-async function _gmTodoClaim(root, id) {
+async function _gmTodoClaim(root, id, opts) {   // opts.linkedId = id of the twin todo created for this claim
   var pre = _gmClaimPre(root, id); if (pre.fail) return pre.fail;
   if (!(await _gmClaimsReload())) return { ok: false, reason: 'network' };
   var me = window.myUserId(), path = pre.path, last = path.length - 1;
@@ -3491,7 +3537,7 @@ async function _gmTodoClaim(root, id) {
       headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' }, _authHeaders()),
       body: JSON.stringify({
         map_id: _MAP_ID, todo_id: id, checked: isLeaf ? _gmTodoLeafOn(pre.node) : false,
-        claimed_by: me, claimed_by_name: name, claimed_at: now, updated_at: now
+        claimed_by: me, claimed_by_name: name, claimed_at: now, linked_id: (opts && opts.linkedId) || null, updated_at: now
       })
     });
     if (!r.ok) {
@@ -3499,7 +3545,8 @@ async function _gmTodoClaim(root, id) {
       return { ok: false, reason: 'save', status: r.status, msg: eb.slice(0, 150) };
     }
   } catch (e) { return { ok: false, reason: 'save', status: 0, msg: e.message }; }
-  _gmClaimState.set(id, { by: me, name: name, at: now });
+  _gmClaimState.set(id, { by: me, name: name, at: now, linked: (opts && opts.linkedId) || null });
+  _gmTwinDirty = true;
   return { ok: true, labels: pre.labels };
 }
 // release: the claimer (any tier) or resident+. -> { ok:true, by, labels } | { ok:false, reason, by?, at? }
@@ -3525,7 +3572,7 @@ async function _gmTodoRelease(root, id) {
       {
         method: 'PATCH',
         headers: Object.assign({ 'Content-Type': 'application/json', 'Prefer': 'return=minimal' }, _authHeaders()),
-        body: JSON.stringify({ claimed_by: null, claimed_by_name: null, claimed_at: null, updated_at: new Date().toISOString() })
+        body: JSON.stringify({ claimed_by: null, claimed_by_name: null, claimed_at: null, linked_id: null, updated_at: new Date().toISOString() })
       }
     );
     if (!r.ok) {
@@ -3534,6 +3581,7 @@ async function _gmTodoRelease(root, id) {
     }
   } catch (e) { return { ok: false, reason: 'save', status: 0, msg: e.message }; }
   _gmClaimState.delete(id);
+  _gmTwinDirty = true;
   return { ok: true, by: c.name, labels: pre.labels };
 }
 
@@ -3549,7 +3597,9 @@ function _gmBuildTodoTree(root, opts) {
       r.el.classList.toggle('done', c.total > 0 && c.done === c.total);
       if (r.cnt) r.cnt.textContent = c.done + '/' + c.total;
       const cl = r.n.id ? _gmClaimState.get(r.n.id) : null;
-      r.by.textContent = cl ? (cl.name || '?') : '';
+      _gmTwinEnsure();
+      const ts = cl && cl.linked ? _gmTwinStat.get(r.n.id) : null;
+      r.by.textContent = cl ? ((cl.name || '?') + (ts && ts !== 'ok' ? ' ⚠' : '')) : '';
     });
   }
   function toggle(n) {
@@ -3593,7 +3643,9 @@ window.menuTodoIsDone   = _gmTodoIsDone;
 window.menuTodoCount    = _gmTodoCount;
 window.menuTodoClaim    = _gmTodoClaim;     // (rootNode, id) -> Promise<{ok,...}>
 window.menuTodoRelease  = _gmTodoRelease;   // (rootNode, id) -> Promise<{ok,...}>
-window.menuTodoClaims   = function () { return new Map(_gmClaimState); };   // todo_id -> { by, name, at }
+window.menuTodoClaims   = function () { return new Map(_gmClaimState); };   // todo_id -> { by, name, at, linked }
+window.menuTwinDirty    = function () { _gmTwinDirty = true; if (window.hudRefresh) window.hudRefresh(); };   // call after the menu tree changed
+window.menuTwinStatus   = function (id) { _gmTwinEnsure(); return _gmTwinStat.get(id) || null; };   // 'ok'|'orphan'|'drift'|null
 window.menuTodoLeafIds  = function (n) { return _gmTodoLeaves(n).map(function (l) { return l.id; }); };
 
 // Styles for nested rows — injected here because index.html is regenerated by the editor export.
@@ -3752,6 +3804,7 @@ function _applyMenuOverrides(rows) {
     pending = stillPending;
   }
 
+  _gmTwinDirty = true;
   rows.forEach(function (r) {
     if (r.deleted) { _mnRemoveNodeById(r.node_id); return; }
     var node = _mnFindNode(r.node_id);

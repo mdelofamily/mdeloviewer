@@ -872,7 +872,7 @@ function _tmHelp() {
       ['/შესრულება [სახელი|N|N.K] [N%]', 'todo-ების ხე (ცარიელი) ან toggle / სლაიდერის მნიშვნელობა მიმდინარე კვანძში'],
       ['/todo/სექცია/.../<N|სახელი|id>', 'todo-ის toggle ნებისმიერი branch-დან, /cd-ის გარეშე'],
       ['/აღება [სექცია/.../სექცია]', 'todo-ების ხე კოდებით და ვინ რა აიღო (caretaker+)'],
-      ['/აღება [სექცია/...] N.K.J', 'todo-ს რიგის აღება (ქვედა დონეებიც შენია)'],
+      ['/აღება [სექცია/...] N.K.J', 'რიგის აღება: შენს /cd სექციაში იქმნება ტყუპი, პროგრესი იქიდან მოდის'],
       ['/აღება უარი [სექცია/...] N.K.J', 'გათავისუფლება: თვითონ აღებული ან resident+'],
       ['/გზა', 'მენიუს მიმდინარე გზა'],
       ['/ჩვ', 'მენიუს კვანძის შემცველობა'],
@@ -3219,6 +3219,7 @@ async function _tmTodoToggle(node, ref) {
     if (!target.id) { _tmL('ter', '✗ id აკლია — ჯერ /რედ ' + parts[0] + ' და შეინახე'); return; }
     var sNext = window.menuSliderValue(target) >= 100 ? 0 : 100;
     var sres = await window.menuSliderSet(target.id, sNext);
+    if (sres === 'locked') { _tmL('ter', '🔒 აღებულია — შეცვალე ტყუპიდან'); return; }
     _tmL('tok', '[' + parts[0] + '] ' + sNext + '% განახლდა');
     if (sres === 'queued') _tmL('tdm', '⚠ ოფლაინ/ქსელის შეცდომა — queue-შია (' + window.pendingCount() + ')');
     return;
@@ -3227,6 +3228,7 @@ async function _tmTodoToggle(node, ref) {
   var ids = window.menuTodoLeafIds(target);
   var next = !window.menuTodoIsDone(target);
   var res = await window.menuTodoSetMany(ids, next);
+  if (res === 'locked') { _tmL('ter', '🔒 აღებულია — შეცვალე ტყუპიდან'); return; }
   _tmL('tok', '[' + parts.join('.') + '] ' + (next ? '✅' : '⬜') + ' განახლდა' + (ids.length > 1 ? ' (' + ids.length + ' ჩეკი)' : ''));
   if (res === 'queued') _tmL('tdm', '⚠ ოფლაინ/ქსელის შეცდომა — queue-შია (' + window.pendingCount() + ')');
 }
@@ -3279,12 +3281,33 @@ function _tmClaimLs(node) {
       var cl = n.id ? claims.get(n.id) : null;
       _tmL('tnf', '  '.repeat(depth) + '[' + path + '] ' + st + ' ' + (_tmTodoKa(n.label) || '(უსახელო)') +
         (kids ? '  (' + c.done + '/' + c.total + ')' : (isSl ? '  (' + window.menuSliderValue(n) + '%)' : '')) +
-        (cl ? '  👤 ' + (cl.name || '?') : ''));
+        (cl ? '  👤 ' + (cl.name || '?') + _tmClaimTag(n.id, cl) : ''));
       (n.children || []).forEach(function (ch, k) { walk(ch, path + '.' + k, depth + 1); });
     })(it, String(idx), 0);
   });
   if (!any) { _tmL('tdm', '(todos არ არსებობს)'); return; }
   _tmL('tdm', _SEP);
+}
+
+function _tmClaimTag(id, cl) {   // twin status next to the claimer's name
+  var st = cl && cl.linked && window.menuTwinStatus ? window.menuTwinStatus(id) : null;
+  if (st === 'orphan') return '  ⚠ ტყუპი არ არსებობს (/აღება უარი)';
+  if (st === 'drift') return '  ⚠ ტყუპის სტრუქტურა შეიცვალა — პროგრესი არ ისახება';
+  return '';
+}
+
+// deep copy of a todo subtree with fresh ids (a lone leaf becomes a slider); root remembers the shared row it came from
+function _tmTodoLeafCount(n) { return (n.children && n.children.length) ? n.children.reduce(function (a, c) { return a + _tmTodoLeafCount(c); }, 0) : 1; }
+function _tmClaimTwinCopy(target) {
+  var used = {};
+  function cp(x, isRoot) {
+    var lab = x.label;
+    var o = { id: _tmTodoNewId(used), label: { ka: _tmTodoKa(lab), en: (lab && typeof lab === 'object' && lab.en) || '' } };
+    if (isRoot) { o.type = 'todo'; o.checked = false; o.claimOf = target.id; if (x.emoji) o.emoji = x.emoji; }
+    if (x.children && x.children.length) o.children = x.children.map(function (c) { return cp(c, false); });
+    return o;
+  }
+  return cp(target, true);
 }
 
 function _tmClaimFail(res, release) {
@@ -3329,10 +3352,20 @@ async function _tmClaim(args) {
     _tmL('tok', 'გათავისუფლდა: ' + rr.labels.join(' › ') + '  (იყო: ' + rr.by + ')');
     return;
   }
-  var res = await window.menuTodoClaim(t.root, t.target.id);
+  // the twin lands in YOUR current section (/cd), never in the section the row is taken from
+  var mine = _tmMenuCwdNode();
+  if (!mine) { _tmL('ter', '✗ ტყუპი შენს სექციაში იქმნება — /cd <შენი სექცია>, მერე /აღება ' + ref); return; }
+  if (mine === node) { _tmL('ter', '✗ ტყუპი იმავე სექციაში ვერ დაიდება, საიდანაც იღებ — /cd შენს ბრანჩში და გზა მიუთითე: /აღება ' + ref); return; }
+  var twin = _tmClaimTwinCopy(t.target);
+  var res = await window.menuTodoClaim(t.root, t.target.id, { linkedId: twin.id });
   if (!res.ok) { _tmClaimFail(res, false); return; }
+  if (!mine.items) mine.items = [];
+  mine.items.push(twin);
+  var tIdx = mine.items.length - 1;
   _tmL('tok', 'აიღე: ' + res.labels.join(' › '));
-  _tmL('tdm', 'გაუქმება: /აღება უარი ' + ref);
+  _tmL('tok', '+ ტყუპი [' + tIdx + '] ' + (twin.children ? '(' + _tmTodoLeafCount(twin) + ' ჩეკი)' : '(სლაიდერი)') + ' — შენს სექციაში');
+  _tmL('tdm', 'გაუქმება: /აღება უარი ' + ref + ' (ტყუპი შენთან დარჩება)');
+  await _tmMenuSaveNode(mine.id, { items_json: mine.items });
 }
 
 async function _tmMenuRm(args) {
@@ -3794,7 +3827,8 @@ function _tmEnsureItemIds(items) {
 }
 async function _tmMenuSaveNode(nodeId, fields) {
   if (fields && Array.isArray(fields.items_json)) _tmEnsureItemIds(fields.items_json);
-  if (window.hudRefresh) window.hudRefresh();   // HUD bars read the live menu tree, which the caller has already mutated
+  if (window.menuTwinDirty) window.menuTwinDirty();   // claimed rows mirror twin todos in the menu tree (also refreshes the HUD)
+  else if (window.hudRefresh) window.hudRefresh();   // HUD bars read the live menu tree, which the caller has already mutated
   if (typeof window.menuOverrideSave !== 'function') {
     _tmL('ter', '✗ menuOverrideSave ვერ მოიძებნა (runtime.js?)');
     return;
